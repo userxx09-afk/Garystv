@@ -18,3 +18,8 @@
 #connect .cx-f.focus { border-color: var(--red); background: #eef2fb; color: #0b1630; transform: scale(1.02); }
 #connect .cx-f.focus small { color: #44506b; }
 #connect .cx-help { color: var(--muted); font-size: 1.05rem; line-height: 1.5; margin-top: 1rem; }
+
+/* Fire TV: many TVs trim the picture's edges (overscan), so keep the screens inside a safe margin.
+   Full-screen video still fills the whole screen. */
+html.firetv #app { box-sizing: border-box; padding: 2.5vh 3vw 1.5vh; }
+html.firetv #screen .osd { padding-left: 3vw; padding-right: 3vw; padding-bottom: 3vh; }

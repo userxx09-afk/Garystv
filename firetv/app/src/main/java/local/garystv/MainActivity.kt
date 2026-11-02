@@ -4,6 +4,8 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.graphics.Color
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.KeyEvent
 import android.view.WindowManager
 import android.webkit.JavascriptInterface
@@ -53,6 +55,11 @@ class MainActivity : Activity() {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true // remembers the server's address
             settings.mediaPlaybackRequiresUserGesture = false
+            // The page says width=1920; show all of it, scaled to the screen, at the size it was designed.
+            settings.useWideViewPort = true
+            settings.loadWithOverviewMode = true
+            settings.textZoom = 100
+            settings.setSupportZoom(false)
             webChromeClient = WebChromeClient()
             addJavascriptInterface(Bridge(), "GTVAndroid")
             isFocusable = true
@@ -63,15 +70,41 @@ class MainActivity : Activity() {
         web.loadUrl("file:///android_asset/www/index.html")
     }
 
+    // OK: a press is an ordinary OK (sent when it's let go); held for a moment, it's 10001, which
+    // tv.js turns into the options menu while watching.
+    private val handler = Handler(Looper.getMainLooper())
+    private var okHeld = false
+    private var okDown: KeyEvent? = null
+    private val okHold = Runnable { okHeld = true; send(10001) }
+
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        val code = remote[event.keyCode] ?: return super.dispatchKeyEvent(event)
-        if (event.action == KeyEvent.ACTION_DOWN) {
-            // Back before the screens have loaded just leaves the app.
-            web.evaluateJavascript("window.GTV_REMOTE ? (GTV_REMOTE($code), true) : false") { handled ->
-                if (handled == "false" && code == 10009) finish()
+        if (event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER || event.keyCode == KeyEvent.KEYCODE_ENTER) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                okHeld = false
+                okDown = KeyEvent(event)
+                handler.postDelayed(okHold, 600)
+            } else if (event.action == KeyEvent.ACTION_UP) {
+                handler.removeCallbacks(okHold)
+                // A press: hand the real button press to the page (so OK on a text box still brings up the keyboard).
+                val down = okDown
+                if (!okHeld && down != null) {
+                    super.dispatchKeyEvent(down)
+                    super.dispatchKeyEvent(event)
+                }
+                okDown = null
             }
+            return true
         }
+        val code = remote[event.keyCode] ?: return super.dispatchKeyEvent(event)
+        if (event.action == KeyEvent.ACTION_DOWN) send(code)
         return true
+    }
+
+    private fun send(code: Int) {
+        // Back before the screens have loaded just leaves the app.
+        web.evaluateJavascript("window.GTV_REMOTE ? (GTV_REMOTE($code), true) : false") { handled ->
+            if (handled == "false" && code == 10009) finish()
+        }
     }
 
     // Leaving the app (Home button) stops what's playing, so the server isn't streaming to nobody.

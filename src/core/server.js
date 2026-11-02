@@ -167,8 +167,12 @@ function createServer(core) {
     ['GET', '/api/state', () => ({
       settings: core.settings, types: core.describeTypes(), sources: core.sources, guides: core.guides,
       channels: core.channels, guideChannels: core.guideData.channels.map(({ id, names, number, providerName }) => ({ id, names, number, providerName })),
-      rules: core.rules, status: core.status(),
+      rules: core.rules, status: core.status(), favLists: core.favLists,
     })],
+    ['POST', '/api/favlists', (q, b) => core.addFavList(b)],
+    ['PUT', '/api/favlists/:id', (q, b, p) => core.updateFavList(p.id, b)],
+    ['DELETE', '/api/favlists/:id', (q, b, p) => core.removeFavList(p.id)],
+    ['POST', '/api/favlists/:id/toggle', (q, b, p) => core.toggleFavChannel(p.id, String(b.channelId || ''), b.on)],
     ['GET', '/api/guide', (q) => core.getGuide(+q.from || Date.now(), +q.to || Date.now() + 3 * 3600000)],
     ['GET', '/api/schedule', () => core.getSchedule()],
     ['GET', '/api/recordings', () => core.getRecordings()],

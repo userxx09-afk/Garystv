@@ -63,6 +63,28 @@ cp -r "$REPO_DIR/src" "$REPO_DIR/headless.js" "$REPO_DIR/package.json" "$REPO_DI
 install -d -m 755 -o "$SERVICE_USER" -g "$SERVICE_USER" "$DATA_DIR"
 install -d -m 775 -o "$SERVICE_USER" -g "$SERVICE_USER" "$RECORDINGS"
 
+# IPTV logins live here, on this machine only (never in the code). Readable by root and the service.
+SECRETS=/etc/garystv/secrets.env
+if [ ! -f "$SECRETS" ]; then
+    echo "==> Creating $SECRETS (for IPTV logins)"
+    install -d -m 750 -o root -g "$SERVICE_USER" /etc/garystv
+    cat > "$SECRETS" <<'EOF'
+# GarysTV secrets: IPTV provider logins. Fill in, save, then: sudo systemctl restart garystv
+# GarysTV adds each account as a channel source (and updates it when this file changes).
+# Put several server addresses in quotes, separated by spaces; the first that answers is used.
+#
+# IPTV_NAME=My IPTV
+# IPTV_SERVERS="http://line.example.com http://backup.example.com"
+# IPTV_USERNAME=
+# IPTV_PASSWORD=
+# Optional: IPTV_GROUPS="USA, Sports"  IPTV_FIRST_NUMBER=1000  IPTV_MAX_STREAMS=2
+#
+# A second account: the same lines starting IPTV2_ (IPTV2_NAME, IPTV2_SERVERS, ...).
+EOF
+fi
+chown root:"$SERVICE_USER" "$SECRETS"
+chmod 640 "$SECRETS"
+
 echo "==> Setting up the GarysTV service"
 cat > /etc/systemd/system/garystv.service <<EOF
 [Unit]
@@ -73,6 +95,7 @@ Wants=network-online.target
 [Service]
 User=$SERVICE_USER
 WorkingDirectory=$APP_DIR
+EnvironmentFile=-$SECRETS
 ExecStart=/usr/bin/node $APP_DIR/headless.js --data=$DATA_DIR/data --recordings=$RECORDINGS --port=$PORT
 # Stopping lets recordings finish writing first.
 KillSignal=SIGTERM
@@ -109,6 +132,7 @@ if [ "$up" -eq 1 ]; then
     echo "  Browser:    http://$ip_addr:$PORT/"
     echo "  Logs:       journalctl -u garystv -f"
     echo "  Recordings: $RECORDINGS"
+    echo "  IPTV login: sudo nano $SECRETS   then   sudo systemctl restart garystv"
 else
     echo
     echo "GarysTV didn't stay up. Recent log:"

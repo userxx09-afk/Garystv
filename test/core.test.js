@@ -92,3 +92,22 @@ test('scheduler: manual repeating timer', () => {
   assert.equal(jobs.length, 5);
   assert.equal(new Date(jobs[0].start).getHours(), 18);
 });
+
+test('Favorites lists', () => {
+  const { DvrCore } = require('../src/core');
+  const dir = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'gtv-fav-'));
+  const core = new DvrCore({ dataDir: dir });
+  const gary = core.addFavList({ name: "  Gary's Favorites " });
+  core.addFavList({ name: "Barbara's Favorites" });
+  assert.equal(gary.name, "Gary's Favorites");
+  assert.deepEqual(core.toggleFavChannel(gary.id, 'src:ABC'), { on: true });
+  assert.deepEqual(core.toggleFavChannel(gary.id, 'src:ABC', true), { on: true }); // already on: stays once
+  core.toggleFavChannel(gary.id, 'src:NBC');
+  assert.deepEqual(core.favLists[0].channelIds, ['src:ABC', 'src:NBC']);
+  assert.deepEqual(core.toggleFavChannel(gary.id, 'src:ABC'), { on: false });
+  core.updateFavList(gary.id, { name: 'Dad' });
+  assert.deepEqual(core.favLists.map((l) => [l.name, l.channelIds]), [['Dad', ['src:NBC']], ["Barbara's Favorites", []]]);
+  assert.throws(() => core.addFavList({ name: '  ' }), /name/);
+  core.removeFavList(gary.id);
+  assert.deepEqual(core.favLists.map((l) => l.name), ["Barbara's Favorites"]);
+});

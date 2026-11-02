@@ -26,6 +26,10 @@ const HomeView = {
             ['timers', 'Timers', `${App.state.rules.length} set`], ['search', 'Search', 'Find a show'], ['settings', 'Settings', 'Antenna, guide, channels']]
             .map(([k, l, s]) => `<div class="tile nav" data-key="${k}" data-go="${k}">${ICONS[k]}<div>${l}</div><small>${esc(s)}</small></div>`).join('')}
         </div>
+        <div class="strip"><h2>Favorites</h2><div class="cards">${(App.state.favLists || []).map((l) => `
+          <div class="card nav" data-key="f-${esc(l.id)}" data-fav="${esc(l.id)}"><div class="t"><span class="fav">★</span>${esc(l.name)}</div>
+          <div class="s">${l.channelIds.length} channel${l.channelIds.length === 1 ? '' : 's'}</div></div>`).join('')}
+          <div class="card nav" data-key="f-new" data-favnew="1"><div class="t">＋ New favorites list</div><div class="s">For example, Gary's Favorites</div></div></div></div>
         <div class="strip"><h2>Recording now &amp; up next</h2><div class="cards">${sched.length ? sched.map((j) => `
           <div class="card nav" data-key="j-${esc(j.id)}" data-job="${esc(j.id)}"><div class="t">${j.status === 'recording' ? '<span class="dot pulse"></span>' : '<span class="dot"></span>'}${esc(j.title)}</div>
           <div class="s">${j.status === 'recording' ? 'Recording now' : fmt.when(j.start)} · ${esc(j.channelNumber)} ${esc(j.channelName)}</div></div>`).join('') : '<div class="empty">Nothing scheduled. Open the Guide and press R on a show to record it.</div>'}</div></div>
@@ -39,7 +43,24 @@ const HomeView = {
         if (k === 'live') {
           const ch = App.lastChannel || (App.guideRows && App.guideRows[0] && App.guideRows[0].id) || (App.state.channels.find((c) => !c.hidden) || {}).id;
           if (ch) Player.play('live', ch); else toast('No channels yet - add your tuner in Settings.');
-        } else App.go(k);
+        } else {
+          if (k === 'guide') GuideView.setList(null); // the Guide tile is every channel; a favorites card is one list
+          App.go(k);
+        }
+      };
+    });
+    $$('[data-fav]', root).forEach((el) => { el.onclick = () => { GuideView.setList(el.dataset.fav); App.go('guide'); }; });
+    $$('[data-favnew]', root).forEach((el) => {
+      el.onclick = async () => {
+        const name = await Modal.prompt('New favorites list', "Name (for example, Gary's Favorites)", '', 'Create');
+        if (!name) return;
+        try {
+          await api.post('/api/favlists', { name });
+          await App.loadAll();
+          GuideView.setList(null);
+          App.go('guide');
+          toast(`Made ${name}. Now ${window.GTV_SERVER ? 'hold OK' : 'press M'} on each channel you want and choose Add.`, 7000);
+        } catch (e) { toast(e.message); }
       };
     });
     $$('[data-rec]', root).forEach((el) => { el.onclick = () => DvrView.recordingMenu(App.recordings.find((r) => r.id === el.dataset.rec)); });

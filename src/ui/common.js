@@ -168,6 +168,24 @@ const Modal = {
       }
     });
   },
+  // Asks for a short piece of text (a name). -> the text, or null if cancelled.
+  prompt(title, label, value = '', ok = 'Save') {
+    return this.open((m, close) => {
+      m.innerHTML = `<div class="title">${esc(title)}</div>
+        <div class="field"><label>${esc(label)}</label><input id="p-text" class="nav" maxlength="40" value="${esc(value)}"></div>
+        <div class="actions"><div class="btn nav primary" id="p-ok">${esc(ok)}</div><div class="btn nav" id="p-cancel">Cancel</div></div>`;
+      const input = $('#p-text', m);
+      const done = () => { const v = input.value.trim(); if (v) close(v); else input.focus(); };
+      $('#p-ok', m).onclick = done;
+      $('#p-cancel', m).onclick = () => close(null);
+      // Reachable with the remote's arrows like the buttons; OK on it brings up the TV's keyboard.
+      input._onFocus = () => input.focus();
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && input.value.trim()) { e.preventDefault(); done(); }
+        if (e.key === 'ArrowDown') { e.preventDefault(); input.blur(); Nav.focus($('#p-ok', m)); }
+      });
+    });
+  },
   confirm(title, text, yes = 'Yes', no = 'Cancel') {
     return this.menu(title, `<div class="s">${esc(text)}</div>`, [{ label: yes, value: true, cls: 'danger' }, { label: no, value: false }]);
   },

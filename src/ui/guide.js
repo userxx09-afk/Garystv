@@ -6,19 +6,38 @@ const SPAN = 3 * SLOT;
 const align = (t) => Math.floor(t / SLOT) * SLOT;
 
 const GuideView = {
-  ws: align(Date.now()), row: 0, top: 0, t: Date.now(), rows: [], loaded: [0, 0], visible: 7, digits: '', digitTimer: null,
+  ws: align(Date.now()), row: 0, top: 0, t: Date.now(), rows: [], all: [], loaded: [0, 0], visible: 7, digits: '', digitTimer: null,
+  listId: (() => { try { return localStorage.getItem('gtv.favlist'); } catch (_) { return null; } })(), // favorites list shown, or all channels
 
-  title: 'Guide',
-  hints: [['↑↓←→', 'Move'], ['OK', 'Options'], ['R', 'Record', 'k-red'], ['PgUp/PgDn', 'Page'], ['[ ]', 'Day'], ['0-9', 'Channel'], ['Esc', 'Back']],
+  get list() { return ((App.state && App.state.favLists) || []).find((l) => l.id === this.listId) || null; },
+  get title() { return this.list ? `Guide › ${this.list.name}` : 'Guide'; },
+  hints: [['↑↓←→', 'Move'], ['OK', 'Options'], ['R', 'Record', 'k-red'], ['M', 'Favorites'], ['PgUp/PgDn', 'Page'], ['[ ]', 'Day'], ['0-9', 'Channel'], ['Esc', 'Back']],
+
+  // Show one favorites list (or all channels with null). Watching from it, channel up/down stays in it.
+  setList(id) {
+    this.listId = id || null;
+    try { if (this.listId) localStorage.setItem('gtv.favlist', this.listId); else localStorage.removeItem('gtv.favlist'); } catch (_) { /* private mode */ }
+    this.row = 0; this.top = 0;
+    this.applyList();
+    if (App.view === this) { $('#crumb').textContent = this.title; this.paint(); }
+  },
+
+  applyList() {
+    const l = this.list;
+    this.rows = l ? this.all.filter((r) => l.channelIds.includes(r.id)) : this.all;
+    App.guideRows = this.rows;
+  },
+
+  inAnyList(id) { return ((App.state && App.state.favLists) || []).some((l) => l.channelIds.includes(id)); },
 
   async load(force) {
     const from = align(Date.now()) - SLOT;
     const need = this.ws + SPAN;
     if (!force && this.ws >= this.loaded[0] && need <= this.loaded[1]) return;
     const to = Math.max(need, this.ws) + 12 * 3600000;
-    this.rows = await api.get(`/api/guide?from=${Math.min(from, this.ws)}&to=${to}`);
+    this.all = await api.get(`/api/guide?from=${Math.min(from, this.ws)}&to=${to}`);
     this.loaded = [Math.min(from, this.ws), to];
-    App.guideRows = this.rows;
+    this.applyList();
   },
 
   async render(root) {
@@ -56,6 +75,11 @@ const GuideView = {
     $('#gday').textContent = fmt.day(this.ws);
     $('#gtimes').innerHTML = [0, 1, 2].map((i) => `<span style="left:${(i * 100) / 3}%">${fmt.time(this.ws + i * SLOT)}</span>`).join('') +
       (now >= this.ws && now < this.ws + SPAN ? `<div class="g-now" style="left:${((now - this.ws) / SPAN) * 100}%"></div>` : '');
+    if (!this.rows.length && this.list) {
+      body.innerHTML = `<div class="g-empty">No channels in <b>${esc(this.list.name)}</b> yet. ${window.GTV_SERVER ? 'Hold OK' : 'Press M'} and choose <b>Show all channels</b>, then on each channel you want, ${window.GTV_SERVER ? 'hold OK' : 'press M'} and add it.</div>`;
+      this.paintInfo(null, null);
+      return;
+    }
     if (!this.rows.length) {
       body.innerHTML = `<div class="g-empty">No channels yet. Go to <b>Settings &gt; Antenna &amp; Providers</b> to add your tuner or IPTV provider.</div>`;
       this.paintInfo(null, null);
@@ -77,7 +101,7 @@ const GuideView = {
           ${p.subtitle ? `<div class="s">${esc(p.subtitle)}</div>` : ''}</div>`;
       }).join('');
       return `<div class="g-row ${ri === this.row ? 'sel' : ''}">
-        <div class="g-ch" data-ch="${esc(r.id)}"><span class="num">${esc(r.number)}</span>${r.logo ? `<img src="${esc(r.logo)}" alt="" referrerpolicy="no-referrer">` : ''}<span class="nm">${r.favorite ? '<span class="fav">★</span> ' : ''}${esc(r.name)}</span></div>
+        <div class="g-ch" data-ch="${esc(r.id)}"><span class="num">${esc(r.number)}</span>${r.logo ? `<img src="${esc(r.logo)}" alt="" referrerpolicy="no-referrer">` : ''}<span class="nm">${r.favorite || this.inAnyList(r.id) ? '<span class="fav">★</span> ' : ''}${esc(r.name)}</span></div>
         <div class="g-progs">${progs}</div></div>`;
     }).join('');
     $$('.g-p', body).forEach((el) => {
@@ -161,7 +185,59 @@ const GuideView = {
   async refresh() {
     if (App.view !== this) return;
     await this.load(true);
+    $('#crumb').textContent = this.title; // a list may have been renamed or deleted
     this.paint();
+  },
+
+  // Hold OK (TV) / M: favorites lists: add or remove this channel, show a list, make, rename or delete one.
+  async favMenu() {
+    const lists = App.state.favLists || [], r = this.rows[this.row], cur = this.list, keepRow = this.row;
+    const choices = [];
+    if (r) {
+      for (const l of lists) {
+        const on = l.channelIds.includes(r.id);
+        choices.push({ label: on ? `★ Take ${r.name} off ${l.name}` : `☆ Add ${r.name} to ${l.name}`, value: { act: 'toggle', id: l.id }, cls: on ? '' : 'primary' });
+      }
+    }
+    for (const l of lists) if (!cur || l.id !== cur.id) choices.push({ label: `▦ Show ${l.name} (${l.channelIds.length} channel${l.channelIds.length === 1 ? '' : 's'})`, value: { act: 'show', id: l.id } });
+    if (cur) choices.push({ label: '▦ Show all channels', value: { act: 'show', id: null } });
+    choices.push({ label: '＋ New favorites list...', value: { act: 'new' } });
+    if (cur) {
+      choices.push({ label: `✎ Rename ${cur.name}...`, value: { act: 'rename' } });
+      choices.push({ label: `✕ Delete ${cur.name}`, value: { act: 'delete' }, cls: 'danger' });
+    }
+    choices.push({ label: 'Close', value: null });
+    const v = await Modal.menu('Favorites', r ? `<div class="s">${esc(r.number)} ${esc(r.name)}</div>` : '', choices);
+    if (!v) return;
+    try {
+      if (v.act === 'toggle') {
+        const l = lists.find((x) => x.id === v.id);
+        const res = await api.post(`/api/favlists/${v.id}/toggle`, { channelId: r.id });
+        toast(res.on ? `★ Added ${r.name} to ${l.name}` : `Took ${r.name} off ${l.name}`);
+      } else if (v.act === 'show') {
+        this.setList(v.id);
+        return;
+      } else if (v.act === 'new') {
+        const name = await Modal.prompt('New favorites list', "Name (for example, Gary's Favorites)", '', 'Create');
+        if (!name) return;
+        const l = await api.post('/api/favlists', { name });
+        if (r) await api.post(`/api/favlists/${l.id}/toggle`, { channelId: r.id, on: true });
+        toast(r ? `Made ${l.name} with ${r.name} in it. Add more the same way.` : `Made ${l.name}.`, 5000);
+      } else if (v.act === 'rename') {
+        const name = await Modal.prompt(`Rename ${cur.name}`, 'New name', cur.name);
+        if (!name) return;
+        await api.put(`/api/favlists/${cur.id}`, { name });
+      } else if (v.act === 'delete') {
+        if (!await Modal.confirm(`Delete ${cur.name}?`, 'The channels stay in the guide; only this list goes.', 'Delete list')) return;
+        await api.del(`/api/favlists/${cur.id}`);
+        this.listId = null;
+      }
+      await App.loadAll();
+      this.setList(this.listId);
+      const at = r ? this.rows.findIndex((x) => x.id === r.id) : -1; // stay on the same channel (or where it was)
+      this.row = Math.min(at >= 0 ? at : keepRow, Math.max(0, this.rows.length - 1));
+      this.paint();
+    } catch (e) { toast(e.message); }
   },
 
   jumpToChannel(num) {
@@ -181,6 +257,7 @@ const GuideView = {
     else if (k === ']') this.shift(24 * 3600000);
     else if (k === '[') this.shift(-24 * 3600000);
     else if (k === 'Enter') this.open();
+    else if (k === 'ContextMenu' || k === 'm' || k === 'M') this.favMenu();
     else if (k === 'r' || k === 'R') App.quickRecord(this.rows[this.row], this.focused()).then(() => this.refresh());
     else if (/^[0-9.]$/.test(k)) {
       this.digits += k;

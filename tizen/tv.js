@@ -25,7 +25,7 @@
 
   // ---------- remote buttons ----------
   const REGISTER = ['ColorF0Red', 'ColorF1Green', 'ColorF2Yellow', 'ColorF3Blue', 'ChannelUp', 'ChannelDown',
-    'MediaPlayPause', 'MediaPlay', 'MediaPause', 'MediaStop', 'MediaFastForward', 'MediaRewind', 'Info', 'Guide',
+    'MediaPlayPause', 'MediaPlay', 'MediaPause', 'MediaStop', 'MediaFastForward', 'MediaRewind', 'Info', 'Guide', 'Tools',
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
   if (isTizen) {
     try { tizen.tvinputdevice.registerKeyBatch(REGISTER); } catch (_) {
@@ -44,6 +44,7 @@
     406: 's', // blue: Search
     458: 'g', // Guide
     457: 'i', // Info
+    10135: 'm', // Tools: favorites in the Guide
     10252: ' ', 415: ' ', 19: ' ', // play/pause
     413: 'Escape', // stop
     417: () => (watching() ? 'ArrowRight' : ']'), // fast-forward: skip 30s, or next day in the guide
@@ -52,6 +53,8 @@
     428: () => (watching() ? 'ChannelDown' : 'PageDown'), // CH ▼
   };
   for (let d = 0; d <= 9; d++) KEYS[48 + d] = String(d);
+  // Fire TV: OK held down (the Android side tells a hold from a press). Watching: the options menu; Guide: favorites.
+  KEYS[10001] = () => (watching() || (typeof App !== 'undefined' && App.view === GuideView) ? 'ContextMenu' : 'Enter'); // Guide: favorites
 
   function onRemote(e) {
     if (!e.isTrusted && !e.gtvRemote) return; // our own re-sent key (gtvRemote: a simulated remote press, for testing)
@@ -76,8 +79,8 @@
   // Show remote buttons in the hint bar instead of keyboard keys.
   const HINT = isAndroid
     // Fire TV remotes: no colored or guide buttons (Home has My Recordings, Timers, Search and the Guide); ≡ records.
-    ? { R: ['≡'], D: null, T: null, S: null, G: null, Esc: ['BACK'], 'PgUp/PgDn': ['CH ▲▼'], '[ ]': ['⏪ ⏩'], Tab: null, Del: null, Type: ['OK', '', 'Type'] }
-    : { R: ['●', 'k-red'], D: ['●', 'k-green'], T: ['●', 'k-yellow'], S: ['●', 'k-blue'], G: ['GUIDE'], Esc: ['BACK'],
+    ? { R: ['≡'], M: ['HOLD OK'], D: null, T: null, S: null, G: null, Esc: ['BACK'], 'PgUp/PgDn': ['CH ▲▼'], '[ ]': ['⏪ ⏩'], Tab: null, Del: null, Type: ['OK', '', 'Type'] }
+    : { R: ['●', 'k-red'], D: ['●', 'k-green'], T: ['●', 'k-yellow'], S: ['●', 'k-blue'], G: ['GUIDE'], M: ['TOOLS'], Esc: ['BACK'],
       'PgUp/PgDn': ['CH ▲▼'], '[ ]': ['⏪ ⏩'], Tab: null, Del: null, Type: ['OK', '', 'Type'] };
   function tvHints(list) {
     return list.flatMap(([k, label, cls]) => {
@@ -280,6 +283,7 @@
 
   document.addEventListener('DOMContentLoaded', async () => {
     document.documentElement.classList.add('tv');
+    if (isAndroid) document.documentElement.classList.add('firetv');
     const saved = store.get();
     if (saved && await ping(saved, 3000)) return start(saved);
     connect.show(saved ? `Can't reach GarysTV at ${saved.replace(/^https?:\/\//, '')}. Is it turned on?` : null);

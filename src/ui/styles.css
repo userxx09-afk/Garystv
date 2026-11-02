@@ -87,7 +87,7 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0
 .g-ch .num { font-size: 1.35rem; font-weight: 700; min-width: 3.6rem; font-variant-numeric: tabular-nums; }
 .g-ch .nm { font-size: .95rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
 .g-ch img { max-width: 3.2rem; max-height: 2.2rem; object-fit: contain; }
-.g-ch .fav { color: var(--yellow); }
+.g-ch .fav, .card .fav { color: var(--yellow); }
 .g-row.sel .g-ch { background: var(--panel2); box-shadow: inset 4px 0 0 var(--red2); }
 .g-progs { position: relative; }
 .g-p { position: absolute; top: 0; bottom: 0; padding: .45rem .7rem; background: var(--cell); border-left: 2px solid var(--bg); overflow: hidden; cursor: pointer; display: flex; flex-direction: column; justify-content: center; gap: .1rem; transition: background .08s; }
@@ -101,7 +101,7 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0
 .g-empty { padding: 3rem; text-align: center; color: var(--muted); font-size: 1.2rem; }
 
 /* ---------- home ---------- */
-.home { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: center; gap: clamp(1rem, 4vh, 2.4rem); padding-bottom: 4vh; }
+.home { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: center; justify-content: safe center; gap: clamp(1rem, 4vh, 2.4rem); padding-bottom: 4vh; }
 .home h1 { margin: 0; font-size: 2.4rem; font-weight: 300; }
 .home h1 b { font-weight: 700; }
 .tiles { display: grid; grid-template-columns: repeat(6, 1fr); gap: 1.2rem; }

@@ -205,7 +205,7 @@ const Player = {
       title = p ? p.title : this.channel.name;
       sub = `${this.channel.number} ${this.channel.name}${p && p.subtitle ? `  ·  ${p.subtitle}` : ''}`;
     }
-    const keys = this.rec ? '← back 10s · → skip 30s · Space pause · Esc stop' : '← back 10s · → ahead 30s · L live · ↑↓ channel · G guide · R record · Esc stop';
+    const keys = this.rec ? '← back 10s · → skip 30s · Space pause · Esc stop' : (window.GTV_SERVER ? '← back 10s · → ahead 30s · ↑↓ channel · hold OK for options · BACK stop' : '← back 10s · → ahead 30s · L live · ↑↓ channel · G guide · R record · Esc stop');
     const btns = this.rec
       ? [['back', '⏪ 10s'], ['pause', '⏯'], ['fwd', '30s ⏩'], ...(this.breakNow() ? [['skip', 'Skip commercial ⏭']] : [])]
       : [['back', '⏪ 10s'], ['pause', '⏯'], ['fwd', '30s ⏩'], ['live', 'Go Live ⏭']];
@@ -290,6 +290,38 @@ const Player = {
     } catch (e) { toast(e.message); }
   },
 
+  // Hold OK (TV remote) / menu key while watching live: what you can do from here. Record now is
+  // first, so hold OK then OK starts recording straight away: the rest of this show when the guide
+  // knows it, else until stopped.
+  async optionsMenu() {
+    const ch = this.channel, p = this.currentProgram(), active = this.recording();
+    const choices = [];
+    if (active) choices.push({ label: `■ Stop recording "${active.title}"`, value: 'stop', cls: 'danger' });
+    else choices.push({ label: p && !p.filler ? `● Record now: ${p.title} (until ${fmt.time(p.end)})` : '● Record now (until I stop it)', value: 'record' });
+    choices.push({ label: '● More ways to record...', value: 'recordMenu' });
+    if (this.behind() >= LIVE_S) choices.push({ label: '⏩ Back to live', value: 'live' });
+    choices.push({ label: $('#video').paused ? '▶ Play' : '❚❚ Pause', value: 'pause' });
+    choices.push({ label: '▦ Guide', value: 'guide' });
+    choices.push({ label: '■ Stop watching', value: 'stopWatching' });
+    choices.push({ label: 'Cancel', value: null });
+    const v = await Modal.menu(`${ch.number} ${ch.name}`, p && !p.filler ? `<div class="s">${esc(p.title)} · until ${fmt.time(p.end)}</div>` : '', choices);
+    try {
+      if (v === 'record') {
+        if (p && !p.filler) { await App.recordOnce(ch, p); this.showOsd(`Recording ${p.title}`); }
+        else {
+          const now = Date.now();
+          await api.post('/api/rules', { type: 'once', channelId: ch.id, start: now, end: now + 240 * 60000, title: ch.name, prePad: 0, postPad: 0, categories: [] });
+          await App.loadAll();
+          this.showOsd('Recording until you stop it. Hold OK to stop.');
+        }
+      } else if (v === 'stop' || v === 'recordMenu') this.recordMenu();
+      else if (v === 'live') this.goLive();
+      else if (v === 'pause') this.togglePause();
+      else if (v === 'guide') { this.setMode('pip'); App.go('guide'); }
+      else if (v === 'stopWatching') { this.stop(); App.render(); }
+    } catch (e) { toast(e.message); }
+  },
+
   surf(delta) {
     const rows = App.guideRows || [];
     if (!rows.length || !this.channel) return;
@@ -312,6 +344,7 @@ const Player = {
     if (this.channel && k === 'ArrowDown') { this.surf(1); return true; }
     if (this.channel && (k === 'g' || k === 'G')) { this.setMode('pip'); App.go('guide'); return true; }
     if (this.channel && (k === 'r' || k === 'R')) { this.recordMenu(); return true; }
+    if (this.channel && k === 'ContextMenu') { this.optionsMenu(); return true; }
     this.showOsd();
     return ['Enter', 'i', 'I'].includes(k);
   },

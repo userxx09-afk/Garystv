@@ -52,6 +52,7 @@ class DvrCore extends EventEmitter {
   get recordings() { return this.store.read('recordings', []); }
   get guideData() { return this.store.read('guidedata', { channels: [], programs: {} }); }
   get skipped() { return this.store.read('skipped', []); }
+  get favLists() { return this.store.read('favlists', []); } // [{ id, name, channelIds }], e.g. "Gary's Favorites"
 
   changed(what) {
     this.schedule = null;
@@ -188,6 +189,42 @@ class DvrCore extends EventEmitter {
     this.store.write('channels', this.channels.map((c) => (c.id === id ? { ...c, ...clean } : c)));
     if (clean.mapMode === 'auto') this.reconcileChannels();
     this.changed('channels');
+  }
+
+  // ---------- favorites lists ----------
+  // Named lists of channels (one per person, say); the Guide can show just one list.
+  addFavList({ name }) {
+    const clean = String(name || '').trim().slice(0, 40);
+    if (!clean) throw new Error('Give the list a name.');
+    const list = { id: newId(), name: clean, channelIds: [] };
+    this.store.write('favlists', [...this.favLists, list]);
+    this.changed('favlists');
+    return list;
+  }
+
+  updateFavList(id, { name, channelIds }) {
+    if (!this.favLists.some((l) => l.id === id)) throw new Error('List not found');
+    this.store.write('favlists', this.favLists.map((l) => (l.id !== id ? l : {
+      ...l,
+      ...(name != null && String(name).trim() ? { name: String(name).trim().slice(0, 40) } : {}),
+      ...(Array.isArray(channelIds) ? { channelIds: [...new Set(channelIds.map(String))] } : {}),
+    })));
+    this.changed('favlists');
+  }
+
+  // Add or take one channel off a list; returns whether it's on the list now.
+  toggleFavChannel(id, channelId, on) {
+    const list = this.favLists.find((l) => l.id === id);
+    if (!list) throw new Error('List not found');
+    const has = list.channelIds.includes(channelId);
+    const want = on == null ? !has : !!on;
+    if (want !== has) this.updateFavList(id, { channelIds: want ? [...list.channelIds, channelId] : list.channelIds.filter((c) => c !== channelId) });
+    return { on: want };
+  }
+
+  removeFavList(id) {
+    this.store.write('favlists', this.favLists.filter((l) => l.id !== id));
+    this.changed('favlists');
   }
 
   // ---------- guide ----------
