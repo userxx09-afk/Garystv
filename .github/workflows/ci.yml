@@ -43,12 +43,43 @@ jobs:
           java-version: 17
       # ubuntu-latest ships the Android SDK with ANDROID_HOME set.
       - uses: gradle/actions/setup-gradle@v4
+      # The same key every build, so a new APK installs over the old one.
+      - name: Signing key
+        env:
+          KEY_B64: ${{ secrets.GTV_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$KEY_B64" ]; then
+            echo "::warning::No GTV_KEYSTORE_B64 secret: this APK won't install over the last one (uninstall first)."
+          else
+            echo "$KEY_B64" | base64 -d > "$RUNNER_TEMP/garystv.keystore"
+            echo "GTV_KEYSTORE=$RUNNER_TEMP/garystv.keystore" >> "$GITHUB_ENV"
+          fi
       - name: Build APK
         working-directory: firetv
         env:
           GTV_VERSION_CODE: ${{ github.run_number }}
+          GTV_KEYSTORE_PASSWORD: ${{ secrets.GTV_KEYSTORE_PASSWORD }}
         run: ./gradlew :app:assembleRelease :app:lintRelease
       - uses: actions/upload-artifact@v4
         with:
           name: GarysTV-FireTV-apk
           path: firetv/app/build/outputs/apk/release/*.apk
+
+  windows:
+    name: Windows app (installer)
+    runs-on: windows-latest
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Build installer
+        run: npx electron-builder --win --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GarysTV-Windows-installer
+          path: dist/GarysTV-Setup-*.exe

@@ -19,11 +19,23 @@ android {
         versionName = System.getenv("GTV_VERSION_NAME") ?: "0.1.0"
     }
 
+    // Android only installs an update over the old app when both are signed with the same key,
+    // so CI signs with GarysTV's own key (GTV_KEYSTORE, from the repo's secrets). Without it the
+    // build falls back to this machine's debug key, and that APK won't update a CI-built one.
+    val keystore = System.getenv("GTV_KEYSTORE")?.let { file(it) }?.takeIf { it.exists() }
+    signingConfigs {
+        if (keystore != null) create("garystv") {
+            storeFile = keystore
+            storePassword = System.getenv("GTV_KEYSTORE_PASSWORD")
+            keyAlias = "garystv"
+            keyPassword = System.getenv("GTV_KEYSTORE_PASSWORD")
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
-            // Sideloaded onto the family's own TVs, so the debug key is fine for the release build.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("garystv") ?: signingConfigs.getByName("debug")
         }
     }
 
