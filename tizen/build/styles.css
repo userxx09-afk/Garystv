@@ -276,3 +276,12 @@ html.tv .osd-btns { display: none; } /* the remote's buttons do these on the TV 
 .item.more .t { color: var(--muted); }
 #skinds:empty { display: none; }
 .home-head .on-pc { margin-left: auto; text-align: right; color: var(--muted); font-size: .95rem; line-height: 1.4; }
+
+/* the on-screen number pad (type a channel) */
+.pad-modal { width: min(24rem, 92vw); }
+.pad-show { text-align: center; background: #0006; border: 1px solid var(--line); border-radius: .6rem; padding: .6rem; }
+.pad-num { font-size: 2.6rem; font-weight: 800; letter-spacing: .1em; font-variant-numeric: tabular-nums; }
+.pad-ch { color: var(--muted); min-height: 1.4em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: .5rem; }
+.pad-key { justify-content: center; font-size: 1.6rem; font-weight: 700; padding: .7rem 0; }
+.pad-modal .actions .btn { flex: 1; justify-content: center; }

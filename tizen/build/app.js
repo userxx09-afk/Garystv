@@ -120,6 +120,41 @@ const App = {
     return items;
   },
 
+  // The on-screen number pad: type a channel number with the arrows and OK (a Fire TV remote
+  // has no number buttons), the mouse, a finger, or the number keys. Shows the channel as you
+  // type. -> the channel picked, or null. first: a digit already pressed.
+  channelPad(first = '', title = 'Go to channel') {
+    const all = GuideView.all.length ? GuideView.all : this.guideRows.length ? this.guideRows : this.state.channels.filter((c) => !c.hidden);
+    const find = (n) => n && (all.find((c) => String(c.number) === n) || all.find((c) => String(c.number).startsWith(n)));
+    let typed = String(first);
+    return Modal.open((m, close) => {
+      const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', '⌫'];
+      m.classList.add('pad-modal');
+      m.innerHTML = `<div class="title">${esc(title)}</div>
+        <div class="pad-show"><div class="pad-num" id="padNum"></div><div class="pad-ch" id="padCh"></div></div>
+        <div class="pad">${keys.map((k) => `<div class="btn nav pad-key" data-k="${k}" data-key="pk-${k}">${k}</div>`).join('')}</div>
+        <div class="actions"><div class="btn nav primary" id="padGo" data-key="pk-go">Go</div><div class="btn nav" id="padCancel">Cancel</div></div>`;
+      const paint = () => {
+        const c = find(typed);
+        $('#padNum', m).textContent = typed || '–';
+        $('#padCh', m).innerHTML = !typed ? 'Type a channel number' : c ? `${esc(c.number)} ${esc(c.name)}` : '<span style="color:var(--yellow)">No channel with that number</span>';
+      };
+      const press = (k) => {
+        if (k === '⌫') typed = typed.slice(0, -1);
+        else if (typed.length < 7) typed += k;
+        paint();
+      };
+      const go = () => { const c = find(typed); if (c) close(c); else toast(typed ? `No channel ${typed}` : 'Type a channel number first'); };
+      $$('.pad-key', m).forEach((b) => { b.onclick = () => press(b.dataset.k); });
+      $('#padGo', m).onclick = go;
+      $('#padCancel', m).onclick = () => close(null);
+      // Number keys (keyboard, Samsung remote) type straight in; Backspace deletes.
+      m.addEventListener('pad-key', (e) => { if (e.detail === 'go') go(); else press(e.detail); });
+      paint();
+      setTimeout(() => Nav.focus(typed ? $('#padGo', m) : $('[data-k="1"]', m)), 0);
+    });
+  },
+
   // Starts now and ends exactly when chosen: no early/late padding.
   async recordNowMenu(row, p) {
     const choices = [[30, '30 minutes'], [60, '1 hour'], [120, '2 hours'], [180, '3 hours'], [240, 'Until I stop it (up to 4 hours)']]
@@ -260,6 +295,8 @@ document.addEventListener('keydown', (e) => {
   }
   if (Player.onKey(e)) { e.preventDefault(); return; }
   if (Modal.top()) {
+    const pad = $('.modal-bg:last-of-type .pad-modal');
+    if (pad && /^[0-9.]$|^Backspace$/.test(e.key)) { pad.dispatchEvent(new CustomEvent('pad-key', { detail: e.key === 'Backspace' ? '⌫' : e.key })); e.preventDefault(); return; }
     if (e.key === 'Escape' || e.key === 'Backspace') { Modal.closeTop(); e.preventDefault(); return; }
     if (Nav.handle(e)) e.preventDefault();
     return;

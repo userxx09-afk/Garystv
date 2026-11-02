@@ -204,7 +204,7 @@ function optionRow(label, values, index, onChange) {
 
 // The hint bar along the bottom. Each hint can be clicked (or tapped) to do the same as its key.
 // list: [key, label, class, key it stands for (when the TV shows its own button name instead)]
-const HINT_KEYS = { OK: 'Enter', Esc: 'Escape', Del: 'Delete', Space: ' ', Home: 'Home' };
+const HINT_KEYS = { OK: 'Enter', Esc: 'Escape', Del: 'Delete', Space: ' ', Home: 'Home', '#': '#' };
 function hintKey(k) { return HINT_KEYS[k] || (/^[A-Za-z]$/.test(k) ? k.toLowerCase() : null); }
 function setHints(list) {
   $('#hints').innerHTML = list.map(([k, label, cls, orig]) => {

@@ -6,14 +6,14 @@ const SPAN = 3 * SLOT;
 const align = (t) => Math.floor(t / SLOT) * SLOT;
 
 const GuideView = {
-  ws: align(Date.now()), row: 0, top: 0, t: Date.now(), rows: [], all: [], loaded: [0, 0], visible: 7, digits: '', digitTimer: null,
+  ws: align(Date.now()), row: 0, top: 0, t: Date.now(), rows: [], all: [], loaded: [0, 0], visible: 7,
   listId: (() => { try { return localStorage.getItem('gtv.favlist'); } catch (_) { return null; } })(), // favorites list shown, or all channels
   filter: (() => { try { return localStorage.getItem('gtv.filter'); } catch (_) { return null; } })(), // one channel group, or all
   inBar: false, // the remote is on the bar above the guide
 
   get list() { return ((App.state && App.state.favLists) || []).find((l) => l.id === this.listId) || null; },
   get title() { return ['Guide', this.list && this.list.name, this.filter].filter(Boolean).join(' › '); },
-  hints: [['↑↓←→', 'Move'], ['OK', 'Options'], ['R', 'Record', 'k-red'], ['M', 'Menu'], ['PgUp/PgDn', 'Page'], ['[ ]', 'Day'], ['0-9', 'Channel'], ['Esc', 'Back']],
+  hints: [['↑↓←→', 'Move'], ['OK', 'Options'], ['R', 'Record', 'k-red'], ['M', 'Menu'], ['PgUp/PgDn', 'Page'], ['[ ]', 'Day'], ['#', 'Channel #'], ['Esc', 'Back']],
 
   // Show one favorites list (or all channels with null). Watching from it, channel up/down stays in it.
   // keepId: stay on that channel if it's still shown.
@@ -67,10 +67,12 @@ const GuideView = {
     bar.innerHTML = chip('gb-all', !this.list, 'All channels', 'data-list=""')
       + lists.map((l) => chip(`gb-${esc(l.id)}`, this.listId === l.id, `★ ${esc(l.name)}`, `data-list="${esc(l.id)}"`)).join('')
       + '<span class="spacer"></span>'
+      + chip('gb-pad', false, '🔢 Channel #', 'id="gpad"')
       + chip('gb-filter', !!this.filter, `⏷ ${this.filter ? esc(this.filter) : 'Filter'}`, 'id="gfilter"')
       + (this.filter ? chip('gb-clear', false, '✕ Clear', 'id="gclear"') : '');
     $$('[data-list]', bar).forEach((el) => { el.onclick = () => { this.setList(el.dataset.list || null); this.refocusBar(); }; });
     $('#gfilter', bar).onclick = () => this.filterMenu().then(() => this.refocusBar());
+    $('#gpad', bar).onclick = () => this.pad();
     const clr = $('#gclear', bar);
     if (clr) clr.onclick = () => { this.setFilter(null); this.refocusBar(); };
   },
@@ -260,6 +262,7 @@ const GuideView = {
     const items = [];
     const after = async () => { await App.loadAll(); this.setList(this.listId, r && r.id); };
     if (r) items.push({ label: `▶ Watch ${r.number} ${r.name}`, run: () => Player.play('live', r.id), cls: 'primary' });
+    items.push({ label: '🔢 Go to a channel number...', run: () => this.pad() });
     if (r) items.push(...App.recordItems(r, p).map((c) => ({ ...c, run: () => Promise.resolve(c.run()).then(() => this.refresh()) })));
     if (r) {
       for (const l of lists) {
@@ -311,9 +314,17 @@ const GuideView = {
     return { title: this.title, body: r ? `<div class="s">${esc(r.number)} ${esc(r.name)}${p && !p.filler ? ` · ${esc(p.title)}` : ''}</div>` : '', items };
   },
 
-  jumpToChannel(num) {
-    const i = this.rows.findIndex((r) => r.number === num) >= 0 ? this.rows.findIndex((r) => r.number === num) : this.rows.findIndex((r) => String(r.number).startsWith(num));
-    if (i >= 0) { this.row = i; this.top = i; this.paint(); } else toast(`No channel ${num}`);
+  // The on-screen number pad: jump the guide to a channel (it's added to the view if a list or
+  // filter was hiding it).
+  async pad(first) {
+    const c = await App.channelPad(first);
+    if (!c) return;
+    if (!this.rows.some((r) => r.id === c.id)) { this.filter = null; try { localStorage.removeItem('gtv.filter'); } catch (_) { /* private mode */ } this.setList(null, c.id); }
+    this.inBar = false;
+    Nav.focus(null);
+    this.row = this.rows.findIndex((r) => r.id === c.id);
+    this.top = this.row;
+    this.paint();
   },
 
   // Synchronous so the key handler knows right away whether the key was used.
@@ -343,12 +354,8 @@ const GuideView = {
     else if (k === '[') this.shift(-24 * 3600000);
     else if (k === 'Enter') this.open();
     else if (k === 'r' || k === 'R') App.quickRecord(this.rows[this.row], this.focused()).then(() => this.refresh());
-    else if (/^[0-9.]$/.test(k)) {
-      this.digits += k;
-      toast(`Channel ${this.digits}`, 1200);
-      clearTimeout(this.digitTimer);
-      this.digitTimer = setTimeout(() => { this.jumpToChannel(this.digits); this.digits = ''; }, 1300);
-    } else return false;
+    else if (/^[0-9.]$/.test(k) || k === '#') this.pad(k === '#' ? '' : k);
+    else return false;
     return true;
   },
 

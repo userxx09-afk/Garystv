@@ -215,10 +215,10 @@ const Player = {
       title = p ? p.title : this.channel.name;
       sub = `${this.channel.number} ${this.channel.name}${p && p.subtitle ? `  ·  ${p.subtitle}` : ''}`;
     }
-    const keys = this.rec ? '← back 10s · → skip 30s · Space pause · Esc stop' : (window.GTV_SERVER ? '← back 10s · → ahead 30s · ↑↓ channel · hold OK for options · BACK stop' : '← back 10s · → ahead 30s · L live · ↑↓ channel · G guide · R record · Esc stop');
+    const keys = this.rec ? '← back 10s · → skip 30s · Space pause · Esc stop' : (window.GTV_SERVER ? '← back 10s · → ahead 30s · ↑↓ channel · OK channel # · hold OK for options · BACK stop' : '← back 10s · → ahead 30s · L live · ↑↓ channel · G guide · R record · Esc stop');
     const btns = this.rec
       ? [['back', '⏪ 10s'], ['pause', '⏯'], ['fwd', '30s ⏩'], ...(this.breakNow() ? [['skip', 'Skip commercial ⏭']] : [])]
-      : [['back', '⏪ 10s'], ['pause', '⏯'], ['fwd', '30s ⏩'], ['live', 'Go Live ⏭']];
+      : [['back', '⏪ 10s'], ['pause', '⏯'], ['fwd', '30s ⏩'], ['live', 'Go Live ⏭'], ['pad', '🔢 Channel #']];
     const rec = this.recording() ? '<span class="rec-badge">● REC</span>' : '';
     osd.innerHTML = `<div class="t">${rec}<span id="osdTag"></span>${esc(title)}</div><div class="s">${esc(sub)}</div>
       <div class="bar" id="osdBar"></div><div class="row"><span id="osdL"></span><span>${keys}</span><span id="osdR"></span></div>
@@ -261,6 +261,7 @@ const Player = {
     else if (a === 'back') { if (this.rec) this.seek(-10); else this.seekLive(-10); }
     else if (a === 'fwd') { if (this.rec) this.seek(30); else this.seekLive(30); }
     else if (a === 'live') this.goLive();
+    else if (a === 'pad') this.pad();
     else if (a === 'skip') { const b = this.breakNow(); if (b) this.skipBreak(b); }
   },
 
@@ -314,6 +315,7 @@ const Player = {
     choices.push({ label: '● More ways to record...', value: 'recordMenu' });
     if (this.behind() >= LIVE_S) choices.push({ label: '⏩ Back to live', value: 'live' });
     choices.push({ label: $('#video').paused ? '▶ Play' : '❚❚ Pause', value: 'pause' });
+    choices.push({ label: '🔢 Go to a channel number', value: 'pad' });
     choices.push({ label: '▦ Guide', value: 'guide' });
     choices.push({ label: '■ Stop watching', value: 'stopWatching' });
     if (this.canVlc()) choices.push({ label: '▶ Play in VLC instead', value: 'vlc' });
@@ -336,8 +338,15 @@ const Player = {
       else if (v === 'guide') { this.setMode('pip'); App.go('guide'); }
       else if (v === 'stopWatching') { this.stop(); App.render(); }
       else if (v === 'home') App.home();
+      else if (v === 'pad') this.pad();
       else if (v === 'vlc') this.openVlc('live', ch.id);
     } catch (e) { toast(e.message); }
+  },
+
+  // Type a channel number to change to it (OK while watching live brings this up).
+  async pad(first) {
+    const c = await App.channelPad(first, 'Change channel');
+    if (c && (!this.channel || c.id !== this.channel.id)) this.play('live', c.id);
   },
 
   // VLC as the backup player: the VLC app on a Fire TV or Android phone (the video comes from
@@ -396,6 +405,7 @@ const Player = {
     if (this.rec && k === 'Enter' && this.breakNow()) { this.act('skip'); return true; }
     if (this.channel && k === 'ArrowUp') { this.surf(-1); return true; }
     if (this.channel && k === 'ArrowDown') { this.surf(1); return true; }
+    if (this.channel && (k === 'Enter' || /^[0-9.]$/.test(k) || k === '#')) { this.pad(/^[0-9.]$/.test(k) ? k : ''); return true; }
     if (this.channel && (k === 'g' || k === 'G')) { this.setMode('pip'); App.go('guide'); return true; }
     if (this.channel && (k === 'r' || k === 'R')) { this.recordMenu(); return true; }
     if (k === 'ContextMenu' || k === 'm' || k === 'M') { if (this.channel) this.optionsMenu(); else this.playbackMenu(); return true; }
