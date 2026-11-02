@@ -11,6 +11,7 @@ const { Timeshift } = require('./timeshift');
 const hdhomerun = require('./sources/hdhomerun');
 const sourceTypes = require('./sources');
 const { Vod } = require('./vod');
+const { Tmdb } = require('./tmdb');
 
 const UI_DIR = path.join(__dirname, '..', 'ui');
 const MPEGTS = require.resolve('mpegts.js/dist/mpegts.js');
@@ -163,12 +164,14 @@ function createServer(core) {
   });
   core.on('changed', (what) => { for (const c of clients) c.write(`data: ${JSON.stringify({ what })}\n\n`); });
   const vod = core.vod = new Vod(core);
+  const tmdb = core.tmdb = new Tmdb(core);
   core.on('changed', (what) => { if (what === 'sources') vod.cache.clear(); }); // new login or server: read the library again
 
   const routes = [
     ['GET', '/api/ping', () => ({ app: 'GarysTV', name: require('os').hostname(), addresses: lanAddresses() })], // TV app looks for this when searching the network
     ['GET', '/api/state', () => ({
-      settings: core.settings, types: core.describeTypes(), sources: core.sources, guides: core.guides,
+      // The TMDb key itself stays on the server; screens only learn whether there is one.
+      settings: { ...core.settings, tmdbKey: undefined, tmdbKeyFrom: tmdb.keySource() }, types: core.describeTypes(), sources: core.sources, guides: core.guides,
       channels: core.channels, guideChannels: core.guideData.channels.map(({ id, names, number, providerName }) => ({ id, names, number, providerName })),
       rules: core.rules, status: core.status(), favLists: core.favLists,
     })],
@@ -180,6 +183,8 @@ function createServer(core) {
     ['GET', '/api/vod', () => ({ providers: vod.providers().length, continue: vod.continueList() })],
     ['GET', '/api/vod/movie/:id', (q, b, p) => vod.movie(decodeURIComponent(p.id))],
     ['GET', '/api/vod/show/:id', (q, b, p) => vod.show(decodeURIComponent(p.id))],
+    ['GET', '/api/tmdb', (q) => tmdb.lookup(q.kind, q.name, q.year)],
+    ['POST', '/api/tmdb/clear', () => tmdb.clearCache()],
     ['PUT', '/api/vod/progress/:id', (q, b, p) => vod.saveProgress(decodeURIComponent(p.id), b)],
     ['GET', '/api/vod/:kind/categories', (q, b, p) => vod.categories(p.kind)],
     ['GET', '/api/vod/:kind/category/:id', (q, b, p) => vod.items(p.kind, decodeURIComponent(p.id))],

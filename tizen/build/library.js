@@ -1,6 +1,8 @@
 // Movies and Shows: the on-demand library of the IPTV provider (core/vod.js).
 // Categories down the left, posters on the right; a show opens its seasons and
 // episodes. Where you stopped is remembered, so "Continue watching" picks up there.
+// The panel on the right shows TMDb's poster, rating and synopsis for the
+// highlighted title (core/tmdb.js), or says why it can't.
 /* global App, Player */
 const PAGE = 60; // posters drawn at a time; "More" adds the next lot (TVs slow down with thousands)
 
@@ -9,7 +11,43 @@ function libraryView(kind) {
   const view = {
     title: movies ? 'Movies' : 'Shows',
     hints: [['←→↑↓', 'Move'], ['OK', movies ? 'Watch' : 'Open'], ['Esc', 'Back']],
-    cats: null, catId: null, items: {}, shown: PAGE, info: null, show: null, season: null, loadTimer: null,
+    cats: null, catId: null, items: {}, shown: PAGE, info: null, show: null, season: null, loadTimer: null, infoTimer: null, looked: new Map(),
+
+    // TMDb's answer for a title -> { status: found | none | nokey | error, ... }. Kept for this visit.
+    tmdb(name, year) {
+      const k = `${name}|${year || ''}`;
+      if (!this.looked.has(k)) {
+        const p = api.get(`/api/tmdb?kind=${kind}&name=${encodeURIComponent(name)}&year=${encodeURIComponent(year || '')}`).catch((e) => ({ status: 'error', error: e.message }));
+        this.looked.set(k, p);
+        p.then((r) => { if (r.status === 'error' || r.status === 'nokey') this.looked.delete(k); }); // try again next time
+      }
+      return this.looked.get(k);
+    },
+
+    // The info panel follows the highlighted poster (after a moment, so scrolling stays quick).
+    showInfo(v) {
+      const box = $('#vodInfo');
+      if (!box || !v) return;
+      clearTimeout(this.infoTimer);
+      const head = `<div class="it">${esc(v.name)}</div><div class="im">${esc([v.year, v.rating ? `★ ${v.rating}` : ''].filter(Boolean).join(' · '))}</div>`;
+      box.innerHTML = `${head}<div class="is">Looking up info...</div>`;
+      this.infoTimer = setTimeout(async () => {
+        const t = await this.tmdb(v.lookup || v.name, v.year);
+        if ($('#vodInfo') !== box || box.dataset.for !== v.id) return; // moved on
+        if (t.status !== 'found') {
+          const why = { nokey: 'Add a TMDb key (Settings &gt; Movies &amp; Shows, on the PC or server screen) for posters, ratings and synopses.', none: 'TMDb has nothing for this title.' }[t.status] || `Couldn't get info: ${esc(t.error || 'TMDb did not answer')}`;
+          box.innerHTML = `${head}${v.plot ? `<div class="ip">${esc(v.plot)}</div>` : ''}<div class="is">${why}</div>`;
+          return;
+        }
+        box.innerHTML = `${t.poster ? `<img src="${esc(t.poster)}" alt="" onerror="this.remove()">` : ''}<div class="it">${esc(t.title)}</div>
+          <div class="im">${esc([t.year, t.rating ? `★ ${t.rating} on TMDb` : ''].filter(Boolean).join(' · '))}</div>
+          <div class="ip">${esc(t.overview || v.plot || 'No synopsis.')}</div>`;
+        // A poster the provider didn't have
+        const card = $(`[data-item="${CSS.escape(v.id)}"] .pimg.none, [data-cont="${CSS.escape(v.id)}"] .pimg.none`);
+        if (card && t.poster) { card.classList.remove('none'); card.insertAdjacentHTML('afterbegin', `<img src="${esc(t.poster)}" alt="">`); }
+      }, 300);
+      box.dataset.for = v.id;
+    },
 
     // What's saved for this screen: a movie (m~) or an episode (e~).
     continueItems() { return (this.info ? this.info.continue : []).filter((c) => c.id.startsWith(movies ? 'm~' : 'e~')); },
@@ -33,6 +71,7 @@ function libraryView(kind) {
         <div class="library">
           <div class="list cats">${cats.map((c) => `<div class="item nav${c.id === this.catId ? ' picked' : ''}" data-key="c-${esc(c.id)}" data-cat="${esc(c.id)}"><div class="main"><div class="t">${esc(c.name)}</div></div></div>`).join('')}</div>
           <div class="posters" id="posters"></div>
+          <div class="vod-panel" id="vodInfo"><div class="is">Highlight a title to see what it's about.</div></div>
         </div>`;
       $$('[data-cat]', root).forEach((el) => {
         el.onclick = () => this.pick(el.dataset.cat, true);
@@ -61,7 +100,11 @@ function libraryView(kind) {
         box.innerHTML = this.continueItems().map((c) => `<div class="poster nav" data-key="p-${esc(c.id)}" data-cont="${esc(c.id)}">${img(c.poster, c.title)}
           <div class="pt">${esc(c.title)}</div><div class="ps">${esc(c.subtitle || '')}${c.subtitle ? ' · ' : ''}${fmt.clock(c.position)}</div>
           ${c.duration ? `<div class="pbar"><i style="width:${Math.min(100, (c.position / c.duration) * 100)}%"></i></div>` : ''}</div>`).join('');
-        $$('[data-cont]', box).forEach((el) => { el.onclick = () => this.resumeMenu(this.continueItems().find((c) => c.id === el.dataset.cont)); });
+        $$('[data-cont]', box).forEach((el) => {
+          const c = () => this.continueItems().find((x) => x.id === el.dataset.cont);
+          el.onclick = () => this.resumeMenu(c());
+          el._onFocus = () => { const x = c(); if (x) this.showInfo({ id: x.id, name: x.title, year: movies ? x.subtitle : '' }); };
+        });
         return;
       }
       const all = this.items[this.catId];
@@ -70,7 +113,11 @@ function libraryView(kind) {
       box.innerHTML = all.slice(0, this.shown).map((v) => `<div class="poster nav" data-key="p-${esc(v.id)}" data-item="${esc(v.id)}">${img(v.poster, v.name)}
           <div class="pt">${esc(v.name)}</div><div class="ps">${[v.year, v.rating ? `★ ${v.rating}` : ''].filter(Boolean).join(' · ')}</div></div>`).join('')
         + (all.length > this.shown ? `<div class="poster more nav" data-key="more" id="more"><div class="pt">More (${all.length - this.shown} left)</div></div>` : '');
-      $$('[data-item]', box).forEach((el) => { el.onclick = () => this.open(all.find((v) => v.id === el.dataset.item)); });
+      $$('[data-item]', box).forEach((el) => {
+        const v = () => all.find((x) => x.id === el.dataset.item);
+        el.onclick = () => this.open(v());
+        el._onFocus = () => this.showInfo(v());
+      });
       const more = $('#more', box);
       if (more) {
         more.onclick = () => {
@@ -85,8 +132,10 @@ function libraryView(kind) {
     async open(v) {
       if (!v) return;
       if (!movies) { // a show: its seasons and episodes
-        try { this.show = await api.get(`/api/vod/show/${encodeURIComponent(v.id)}`); } catch (e) { toast(e.message); return; }
-        this.show.poster ||= v.poster;
+        let t;
+        try { [this.show, t] = await Promise.all([api.get(`/api/vod/show/${encodeURIComponent(v.id)}`), this.tmdb(v.name || '', v.year)]); } catch (e) { toast(e.message); return; }
+        this.show.poster ||= v.poster || (t.status === 'found' && t.poster) || '';
+        if (t.status === 'found') { this.show.plot ||= t.overview; this.show.rating ||= t.rating; this.show.year ||= t.year; }
         const first = this.show.seasons[0];
         this.season = first && first.season;
         App.render(first && first.episodes[0] ? `e-${first.episodes[0].id}` : null);
@@ -94,6 +143,8 @@ function libraryView(kind) {
       }
       let m = v;
       try { m = { ...v, ...(await api.get(`/api/vod/movie/${encodeURIComponent(v.id)}`)) }; } catch (_) { /* play anyway */ }
+      const t = await this.tmdb(v.name, v.year);
+      if (t.status === 'found') { m.plot ||= t.overview; m.rating ||= t.rating; m.poster ||= t.poster; m.year ||= t.year; }
       const saved = this.continueItems().find((c) => c.id === v.id);
       const choices = saved
         ? [{ label: `▶  Resume from ${fmt.clock(saved.position)}`, value: 'resume', cls: 'primary' }, { label: '⟲  Start over', value: 'play' }]
@@ -117,7 +168,7 @@ function libraryView(kind) {
         ...(c.showId ? [{ label: 'All episodes', value: 'show' }] : []), { label: 'Close', value: null }]);
       if (v === 'resume') Player.play('vod', c.id, { offset: c.position, item });
       if (v === 'play') Player.play('vod', c.id, { item });
-      if (v === 'show') this.open({ id: c.showId, poster: c.poster });
+      if (v === 'show') this.open({ id: c.showId, name: c.title, poster: c.poster });
     },
 
     // ---------- one show ----------

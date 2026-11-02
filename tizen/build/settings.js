@@ -6,7 +6,7 @@ const SettingsView = {
   section: 'sources',
   chFilter: '',
   hints: [['↑↓←→', 'Move'], ['OK', 'Select'], ['Tab', 'Next field'], ['Esc', 'Back']],
-  sections: [['sources', 'Antenna & Providers'], ['guide', 'Guide data'], ['channels', 'Channels & matching'], ['recording', 'Recording'], ['status', 'Status']],
+  sections: [['sources', 'Antenna & Providers'], ['guide', 'Guide data'], ['channels', 'Channels & matching'], ['recording', 'Recording'], ['media', 'Movies & Shows'], ['status', 'Status']],
 
   render(root) {
     root.innerHTML = `<div class="settings">
@@ -261,6 +261,31 @@ const SettingsView = {
       await api.put('/api/settings', patch);
       toast('Settings saved');
     };
+  },
+
+  // ---------- movies & shows ----------
+  media(pane) {
+    const from = App.state.settings.tmdbKeyFrom;
+    pane.innerHTML = `
+      <div class="box"><h3>Movie &amp; show info (TMDb)</h3>
+        <div class="s">Movies and Shows can show a poster, rating and synopsis from The Movie Database. It needs a free TMDb key: make an account at themoviedb.org, then Settings &gt; API. Either the short "API Key" or the long "Read Access Token" works.</div>
+        <div>${from === 'settings' ? '✅ A key is saved.' : from === 'secrets' ? "✅ Using the key from the server's secrets file." : '⚠️ No key yet, so Movies and Shows only show what your IPTV provider lists.'}</div>
+        <div class="field"><label>${from ? 'Replace the key' : 'TMDb key'}</label><input id="tmdbKey" type="password" autocomplete="off" class="nav" placeholder="Paste the key here"></div>
+        <div class="actions"><div class="btn nav primary" id="tmdbSave">Save key</div>${from === 'settings' ? '<div class="btn nav danger" id="tmdbDel">Remove key</div>' : ''}<div class="btn nav" id="tmdbClear">Clear saved info</div></div>
+        <div class="s" style="font-size:.85rem">This product uses the TMDb API but is not endorsed or certified by TMDb. Free for personal, non-commercial use.</div></div>`;
+    const input = $('#tmdbKey', pane);
+    input._onFocus = () => input.focus();
+    $('#tmdbSave', pane).onclick = async () => {
+      const key = input.value.trim();
+      if (!key) { input.focus(); return; }
+      await api.put('/api/settings', { tmdbKey: key });
+      await api.post('/api/tmdb/clear'); // answers looked up without a key (or with the old one) start over
+      const test = await api.get('/api/tmdb?kind=movies&name=The%20Matrix&year=1999');
+      toast(test.status === 'found' ? 'Key saved. TMDb answered.' : `Key saved, but: ${test.error || 'TMDb found nothing for a test title.'}`, 6000);
+    };
+    const del = $('#tmdbDel', pane);
+    if (del) del.onclick = async () => { await api.put('/api/settings', { tmdbKey: '' }); toast('Key removed'); };
+    $('#tmdbClear', pane).onclick = async () => { await api.post('/api/tmdb/clear'); toast('Saved movie & show info cleared. It is looked up again as you browse.'); };
   },
 
   // ---------- status ----------

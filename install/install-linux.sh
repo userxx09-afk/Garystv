@@ -82,6 +82,15 @@ if [ ! -f "$SECRETS" ]; then
 # A second account: the same lines starting IPTV2_ (IPTV2_NAME, IPTV2_SERVERS, ...).
 EOF
 fi
+# Files made by older installers don't mention the TMDb key yet.
+if ! grep -q TMDB_KEY "$SECRETS"; then
+    cat >> "$SECRETS" <<'EOF'
+
+# Posters, ratings and synopses for Movies and Shows: a free key from themoviedb.org
+# (Settings > API; the short "API Key" or the long "Read Access Token").
+# TMDB_KEY=
+EOF
+fi
 chown root:"$SERVICE_USER" "$SECRETS"
 chmod 640 "$SECRETS"
 

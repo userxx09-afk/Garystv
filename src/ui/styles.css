@@ -219,7 +219,13 @@ pre.log { margin: 0; font-size: .8rem; color: var(--muted); white-space: pre-wra
 html.tv .osd-btns { display: none; } /* the remote's buttons do these on the TV */
 
 /* Movies & Shows: categories on the left, posters on the right */
-.library { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(14rem, 22rem) minmax(0, 1fr); gap: 1.4rem; }
+.library { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(12rem, 18rem) minmax(0, 1fr) minmax(16rem, 24rem); gap: 1.2rem; }
+.vod-panel { min-height: 0; overflow: hidden; background: var(--panel); border: 1px solid var(--line); border-radius: .8rem; padding: 1rem 1.1rem; display: flex; flex-direction: column; gap: .5rem; }
+.vod-panel img { width: 55%; align-self: center; border-radius: .4rem; aspect-ratio: 2 / 3; object-fit: cover; }
+.vod-panel .it { font-size: 1.35rem; font-weight: 700; line-height: 1.2; }
+.vod-panel .im { color: var(--muted); }
+.vod-panel .ip { color: #c4d1e6; line-height: 1.45; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 9; -webkit-box-orient: vertical; }
+.vod-panel .is { color: var(--muted); font-size: .92rem; }
 .library .cats .item { padding: .6rem .9rem; }
 .library .cats .item.picked:not(.focus) { border-color: var(--line); background: var(--panel2); }
 .posters { min-height: 0; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr)); gap: 1rem; align-content: start; padding: .3rem; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
