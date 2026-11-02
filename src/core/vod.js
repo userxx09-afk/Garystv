@@ -10,7 +10,9 @@
 const xtream = require('./sources/xtream');
 
 const KEEP_MS = 6 * 3600000;
-const ENGLISH = /(^|[^a-z])(en|eng|english|us|usa|uk|american?)([^a-z]|$)/i;
+const ADULT = /adult|xxx|porn|18\s*\+/i;
+const ADULT_NAME = /^\s*\[x\]|\bxxx\b/i;
+const ENGLISH =/(^|[^a-z])(en|eng|english|us|usa|uk|american?)([^a-z]|$)/i;
 const enc = encodeURIComponent;
 
 class Vod {
@@ -61,16 +63,23 @@ class Vod {
     return toItems(kind, src, list).sort((a, b) => b.added - a.added);
   }
 
-  // Titles anywhere in the library whose name has every word typed, best match first.
+  // Titles anywhere in the library with a word starting with each word typed, best match first.
   // The whole list is read once (it can be tens of thousands) and kept like a category.
+  // Adult titles are left out (they're still in their own category).
   async search(kind, q) {
     const want = wordsOf(q).join(' ');
     if (!want) return [];
-    const lists = await Promise.all(this.providers().map((src) => this.cached(`${kind}:all:${src.id}`,
-      () => this.call(src, listAction(kind)).then((list) => toItems(kind, src, list).map((v) => ({ v, words: wordsOf(v.name).join(' ') }))))
+    const catAction = kind === 'shows' ? 'get_series_categories' : 'get_vod_categories';
+    const load = async (src) => {
+      const [cats, list] = await Promise.all([this.call(src, catAction), this.call(src, listAction(kind))]);
+      const adult = new Set((Array.isArray(cats) ? cats : []).filter((c) => ADULT.test(c.category_name || '')).map((c) => String(c.category_id)));
+      return toItems(kind, src, (Array.isArray(list) ? list : []).filter((v) => !adult.has(String(v.category_id)) && !ADULT_NAME.test(v.name || '')))
+        .map((v) => ({ v, words: ` ${wordsOf(v.name).join(' ')}` }));
+    };
+    const lists = await Promise.all(this.providers().map((src) => this.cached(`${kind}:all:${src.id}`, () => load(src))
       .catch((e) => { this.core.note(`${src.name}: ${kind}: ${e.message}`); return []; })));
-    const each = want.split(' ');
-    const score = (w) => (w === want ? 0 : w.startsWith(want) ? 1 : 2);
+    const each = want.split(' ').map((w) => ` ${w}`);
+    const score = (w) => (w === ` ${want}` ? 0 : w.startsWith(` ${want}`) ? 1 : 2);
     return lists.flat().filter((x) => each.every((w) => x.words.includes(w)))
       .sort((a, b) => score(a.words) - score(b.words) || b.v.added - a.v.added)
       .slice(0, 60).map((x) => x.v);

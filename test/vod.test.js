@@ -27,6 +27,8 @@ function fakePanel() {
         { stream_id: 3, name: 'EN - Spider-Man (2002)', added: '50' },
         { stream_id: 4, name: 'The Amazing Spider-Man', added: '300' },
         { stream_id: 5, name: 'Cars', added: '10' },
+        { stream_id: 6, name: '[X][Studio] Spider Man Night', added: '900' },
+        { stream_id: 7, name: 'Batman', added: '20' },
       ]);
     }
     if (a === 'get_vod_info') return send({ info: { plot: 'Things happen.', duration_secs: 5400, genre: 'Action' }, movie_data: { name: 'New Movie' } });
@@ -72,6 +74,7 @@ test('Movies and shows from an IPTV provider', async () => {
     assert.deepEqual((await vod.search('movies', 'spider man')).map((m) => m.name), ['Spider-Man (2002)', 'The Amazing Spider-Man']);
     assert.deepEqual((await vod.search('movies', 'amazing spider')).map((m) => m.id), ['m~src1~4~mp4']);
     assert.deepEqual(await vod.search('movies', '  '), []);
+    assert.deepEqual((await vod.search('movies', 'man')).map((m) => m.name), ['The Amazing Spider-Man', 'Spider-Man (2002)']); // not Batman, no adult titles
     assert.deepEqual((await vod.search('shows', 'show')).map((s) => s.name), ['A Show']);
 
     // Where you stopped: kept part way through, dropped near the end.
