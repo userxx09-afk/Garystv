@@ -29,8 +29,19 @@ async function bestVariant(url, maxHeight = 1080) {
 }
 
 // ffmpeg input options for HLS: free services (Xumo, etc.) serve video pieces from
-// addresses that don't end in .ts, which newer ffmpeg refuses unless told otherwise.
-const HLS_INPUT = ['-extension_picky', '0', '-user_agent', 'Mozilla/5.0'];
+// addresses that don't end in .ts, which newer ffmpeg (7+) refuses unless told otherwise.
+// Older ffmpeg (6.x, as on Ubuntu 24.04) doesn't check, and stops at the unknown option.
+function pickyOption() {
+  const ffmpeg = require('./tools').findFfmpeg();
+  if (!ffmpeg) return [];
+  try {
+    const help = require('child_process').execFileSync(ffmpeg, ['-hide_banner', '-h', 'demuxer=hls'], { encoding: 'utf8', timeout: 5000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    return help.includes('extension_picky') ? ['-extension_picky', '0'] : [];
+  } catch (_) {
+    return ['-extension_picky', '0'];
+  }
+}
+const HLS_INPUT = [...pickyOption(), '-user_agent', 'Mozilla/5.0'];
 
 // For any internet stream: when a download drops mid-stream, reconnect (for up to
 // a few seconds) instead of ending, so a network blip doesn't stop the picture.
