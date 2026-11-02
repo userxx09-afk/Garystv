@@ -93,4 +93,10 @@ The screens talk to the engine only over HTTP (port 5480). A TV or tablet on the
 
 **Samsung TV app:** `tizen/` packages the same screens as a Tizen app that connects to this PC (`npm run tizen`). See [tizen/README.md](tizen/README.md) for installing it on the TV.
 
+**Fire TV app:** `firetv/` is a small Android app that shows the same screens full screen and finds GarysTV on the home network. Build it with `npm run firetv`, then `cd firetv && ./gradlew assembleRelease` (needs JDK 17 and the Android SDK); the APK is `firetv/app/build/outputs/apk/release/app-release.apk`. Install it with the Downloader app or `adb install`. On the Fire TV remote, ≡ records, and play/pause, rewind and fast-forward work as you'd expect; My Recordings, Timers and Search are on Home.
+
+**Home server (always on):** on an Ubuntu/Debian machine, `sudo ./install/install-linux.sh` runs the engine without a window as the `garystv` service (port 5480, recordings in `/var/lib/garystv/recordings`, starts on boot). The TV apps find it like they find the PC, and any browser on the home network can open `http://<server>:5480/`. Needs ffmpeg; the installer adds it.
+
+**IPTV subscriptions:** Settings > Sources > *IPTV provider (server, username & password)* takes the login most providers send (an "Xtream Codes" panel). List every server address they gave; GarysTV uses the first that answers. It keeps the US groups unless you list others, numbers the channels from 1000, adds the provider's guide, and records up to the account's stream limit. Providers that send a playlist link instead use *IPTV provider (M3U playlist)*.
+
 **Adding a provider type:** write `src/core/sources/<name>.js` exporting `{ type, label, fields, scan(config) }`, where `scan` returns `{ channels: [{ key, number, name, streamUrl, ... }], tunerCount, info }`, and register it in `sources/index.js`.
