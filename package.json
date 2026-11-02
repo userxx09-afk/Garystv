@@ -1,0 +1,43 @@
+{
+  "name": "garystv",
+  "version": "0.1.0",
+  "description": "Home DVR for over-the-air antenna tuners and IPTV",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "demo": "electron . --demo",
+    "test": "node --test test/*.test.js",
+    "dist": "electron-builder --win",
+    "tizen": "node tizen/build.js",
+    "free-channels": "node scripts/free-channels.js"
+  },
+  "build": {
+    "appId": "local.garystv",
+    "productName": "GarysTV",
+    "files": [
+      "main.js",
+      "src/**/*",
+      "node_modules/**/*"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "src/ui/icon.png"
+    },
+    "nsis": {
+      "artifactName": "GarysTV-Setup-${version}.${ext}",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "GarysTV"
+    }
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.11.2",
+    "hls.js": "^1.5.17",
+    "mpegts.js": "^1.8.2"
+  },
+  "devDependencies": {
+    "electron": "^45.1.0",
+    "electron-builder": "^26.18.0"
+  }
+}

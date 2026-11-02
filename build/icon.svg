@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="red" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff3355"/>
+      <stop offset="1" stop-color="#c8001f"/>
+    </linearGradient>
+  </defs>
+  <!-- rabbit-ear antenna -->
+  <path d="M128 66 L84 14 M128 66 L172 14" stroke="#e4002b" stroke-width="12" stroke-linecap="round"/>
+  <circle cx="84" cy="14" r="10" fill="#ff3355"/>
+  <circle cx="172" cy="14" r="10" fill="#ff3355"/>
+  <!-- TV body -->
+  <rect x="6" y="58" width="244" height="180" rx="40" fill="url(#red)"/>
+  <rect x="22" y="74" width="212" height="148" rx="28" fill="#0b1630"/>
+  <text x="128" y="174" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-weight="900" font-size="86" letter-spacing="-2" fill="#fff">GTV</text>
+</svg>

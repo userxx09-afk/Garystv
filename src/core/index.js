@@ -1,0 +1,487 @@
+// The DVR engine: owns sources, channels, guide, timers and the recording
+// library. Everything the screens do goes through these methods (via server.js),
+// so the same engine can serve this Windows app and, later, a TV app.
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const crypto = require('crypto');
+const { EventEmitter } = require('events');
+const { Store } = require('./store');
+const sources = require('./sources');
+const { reconcile } = require('./guide/reconcile');
+const { buildSchedule, episodeKey, normTitle } = require('./scheduler');
+const { startRecording, recordingPath } = require('./recorder');
+const { findFfmpeg, findVlc } = require('./tools');
+const commercials = require('./commercials');
+
+const GUIDES = [require('./guide/xmltv'), require('./guide/hdhomerun-guide'), require('./guide/demo-guide')];
+const guideType = (t) => GUIDES.find((g) => g.type === t) || (() => { throw new Error(`Unknown guide type ${t}`); })();
+const newId = () => crypto.randomBytes(5).toString('hex');
+
+const DEFAULT_SETTINGS = {
+  recordingsDir: path.join(os.homedir(), 'Videos', 'GarysTV'),
+  prePadMin: 1,
+  postPadMin: 2,
+  guideHours: 72,
+  guideRefreshHours: 12,
+  port: 5480,
+  allowNetwork: true, // the TV app finds this PC on the home network; outside callers are still refused (server.js)
+  ffmpegPath: '',
+  vlcPath: '',
+  player: 'auto',
+  closeAction: 'ask', // closing the window: ask | tray | exit
+  timeshiftMinutes: 30, // live TV pause/rewind buffer
+  commercialSkip: 'auto', // auto | button | off
+};
+
+class DvrCore extends EventEmitter {
+  constructor({ dataDir, demo = false }) {
+    super();
+    this.store = new Store(dataDir);
+    this.demo = demo;
+    this.active = new Map(); // jobId -> { handle, recId }
+    this.log = [];
+  }
+
+  // ---------- persistence helpers ----------
+  get settings() { return { ...DEFAULT_SETTINGS, ...this.store.read('settings', {}) }; }
+  get sources() { return this.store.read('sources', []); }
+  get guides() { return this.store.read('guides', []); }
+  get channels() { return this.store.read('channels', []); }
+  get rules() { return this.store.read('rules', []); }
+  get recordings() { return this.store.read('recordings', []); }
+  get guideData() { return this.store.read('guidedata', { channels: [], programs: {} }); }
+  get skipped() { return this.store.read('skipped', []); }
+
+  changed(what) {
+    this.schedule = null;
+    // A new or changed timer takes effect now (Record Now starts within a moment, not at the next 5s tick).
+    if (what === 'rules' && this.tickTimer) setImmediate(() => this.tick());
+    this.emit('changed', what);
+  }
+
+  note(msg) {
+    const line = `${new Date().toLocaleString()}  ${msg}`;
+    this.log.unshift(line);
+    this.log.length = Math.min(this.log.length, 200);
+    console.log(line);
+  }
+
+  async init() {
+    if (this.demo && !this.sources.some((s) => s.type === 'demo')) {
+      await this.addSource({ type: 'demo', name: 'Practice channels', config: {} });
+      this.addGuide({ type: 'demo', name: 'Practice guide', config: {} });
+    }
+    // Free channels come on by default, once: if they're removed later they stay removed.
+    if (!this.store.read('freeTvAdded', false)) {
+      if (!this.sources.some((s) => s.type === 'free')) await this.addSource({ type: 'free', name: 'Free TV', config: {} }).catch((e) => this.note(`free channels: ${e.message}`));
+      this.store.write('freeTvAdded', true);
+    }
+    // Earlier versions had home-network access off by default; switch it on once so the TV can find this PC.
+    if (!this.store.read('networkDefaultOn', false)) {
+      const saved = this.store.read('settings', {});
+      delete saved.allowNetwork;
+      this.store.write('settings', saved);
+      this.store.write('networkDefaultOn', true);
+    }
+    this.store.write('initialized', true);
+    // Anything that was "recording" when the app last closed did not finish cleanly.
+    const recs = this.recordings.map((r) => (r.status === 'recording' ? { ...r, status: 'partial', error: 'App was closed during recording' } : r));
+    this.store.write('recordings', recs);
+    // Recordings not yet checked for commercials (older ones, or the app closed mid-check).
+    for (const r of recs) if (r.commercials == null && !r.simulated && ['complete', 'partial'].includes(r.status)) this.queueCommercials(r.id);
+    this.refreshGuides().catch((e) => this.note(`guide refresh failed: ${e.message}`));
+    this.tickTimer = setInterval(() => this.tick(), 5000);
+    this.guideTimer = setInterval(() => this.refreshGuides().catch(() => {}), this.settings.guideRefreshHours * 3600000);
+    // Re-check the free channels at startup (picks up a new lineup after an app update) and
+    // daily, so ones that went off the air drop out of the guide and ones that came back return.
+    const recheckFree = () => this.sources.filter((s) => s.type === 'free' && s.enabled && Date.now() - (s.scannedAt || 0) > 60000).forEach((s) => this.scanSource(s.id).catch(() => {}));
+    recheckFree();
+    this.freeTimer = setInterval(recheckFree, 24 * 3600000);
+    this.tick();
+  }
+
+  // Stops everything; resolves once recordings have finished writing (or after 5s).
+  async shutdown() {
+    clearInterval(this.tickTimer);
+    this.tickTimer = null;
+    clearInterval(this.guideTimer);
+    clearInterval(this.freeTimer);
+    const writing = [...this.active.values()].map((a) => a.handle.done);
+    for (const a of this.active.values()) a.handle.stop();
+    if (this.timeshift) this.timeshift.stopAll();
+    this.comQueue = [];
+    if (this.comProc) this.comProc.kill();
+    await Promise.race([Promise.all(writing), new Promise((r) => setTimeout(r, 5000))]);
+  }
+
+  updateSettings(patch) {
+    this.store.write('settings', { ...this.store.read('settings', {}), ...patch });
+    this.changed('settings');
+  }
+
+  // ---------- sources & channels ----------
+  async addSource({ type, name, config }) {
+    const def = sources.get(type);
+    const src = { id: newId(), type, name: name || def.label, enabled: true, config: config || {}, tunerCount: 1, info: '' };
+    this.store.write('sources', [...this.sources, src]);
+    await this.scanSource(src.id);
+    return src;
+  }
+
+  async updateSource(id, patch) {
+    this.store.write('sources', this.sources.map((s) => (s.id === id ? { ...s, ...patch, config: { ...s.config, ...(patch.config || {}) } } : s)));
+    if (patch.config) await this.scanSource(id);
+    this.changed('sources');
+  }
+
+  removeSource(id) {
+    this.store.write('sources', this.sources.filter((s) => s.id !== id));
+    this.store.write('channels', this.channels.filter((c) => c.sourceId !== id));
+    this.store.write('guides', this.guides.filter((g) => g.sourceId !== id));
+    this.changed('sources');
+  }
+
+  async scanSource(id) {
+    const src = this.sources.find((s) => s.id === id);
+    if (!src) throw new Error('Source not found');
+    let result;
+    try {
+      result = await sources.get(src.type).scan(src.config);
+    } catch (e) {
+      this.store.write('sources', this.sources.map((s) => (s.id === id ? { ...s, info: `Problem: ${e.message}` } : s)));
+      this.changed('sources');
+      throw e;
+    }
+    this.store.write('sources', this.sources.map((s) => (s.id === id ? { ...s, config: result.config, tunerCount: result.tunerCount, info: result.info, scannedAt: Date.now() } : s)));
+    // Keep the user's choices (hidden, favorite, manual guide match) across rescans.
+    const old = new Map(this.channels.filter((c) => c.sourceId === id).map((c) => [c.id, c]));
+    const fresh = result.channels.map((c) => {
+      const cid = `${id}:${c.key}`;
+      const prev = old.get(cid) || {};
+      return {
+        id: cid, sourceId: id, number: c.number || '', name: c.name, callsign: c.callsign || '', tvgId: c.tvgId || '',
+        logo: c.logo || prev.logo || '', group: c.group || '', city: c.city || '', hd: !!c.hd, streamUrl: c.streamUrl,
+        hidden: prev.hidden || false, favorite: prev.favorite || false,
+        mapMode: prev.mapMode || 'auto', guideId: prev.guideId || null, matchScore: prev.matchScore || 0, matchReason: prev.matchReason || '',
+      };
+    });
+    this.store.write('channels', [...this.channels.filter((c) => c.sourceId !== id), ...fresh]);
+    // IPTV playlists often name their own guide; and HDHomeRun has a built-in one.
+    if (result.epgUrl && !this.guides.some((g) => g.config.url === result.epgUrl)) {
+      this.addGuide({ type: 'xmltv', name: `${src.name} guide`, config: { url: result.epgUrl }, sourceId: id });
+    }
+    if (src.type === 'hdhomerun' && !this.guides.some((g) => g.type === 'hdhomerun' && g.sourceId === id)) {
+      this.addGuide({ type: 'hdhomerun', name: `${src.name} guide`, config: {}, sourceId: id });
+    }
+    this.note(`scanned ${src.name}: ${result.info}`);
+    this.reconcileChannels();
+    return result;
+  }
+
+  updateChannel(id, patch) {
+    const allowed = ['hidden', 'favorite', 'guideId', 'mapMode', 'number', 'name'];
+    const clean = Object.fromEntries(Object.entries(patch).filter(([k]) => allowed.includes(k)));
+    if ('guideId' in clean && !('mapMode' in clean)) clean.mapMode = clean.guideId ? 'manual' : 'none';
+    this.store.write('channels', this.channels.map((c) => (c.id === id ? { ...c, ...clean } : c)));
+    if (clean.mapMode === 'auto') this.reconcileChannels();
+    this.changed('channels');
+  }
+
+  // ---------- guide ----------
+  addGuide({ type, name, config, sourceId = null }) {
+    const g = { id: newId(), type, name: name || guideType(type).label, config: config || {}, sourceId, lastRefresh: null, info: '' };
+    this.store.write('guides', [...this.guides, g]);
+    this.changed('guides');
+    return g;
+  }
+
+  updateGuide(id, patch) {
+    this.store.write('guides', this.guides.map((g) => (g.id === id ? { ...g, ...patch, config: { ...g.config, ...(patch.config || {}) } } : g)));
+    this.changed('guides');
+  }
+
+  removeGuide(id) {
+    this.store.write('guides', this.guides.filter((g) => g.id !== id));
+    const data = this.guideData;
+    this.store.write('guidedata', {
+      channels: data.channels.filter((c) => c.providerId !== id),
+      programs: Object.fromEntries(Object.entries(data.programs).filter(([k]) => !k.startsWith(`${id}|`))),
+    });
+    this.reconcileChannels();
+  }
+
+  async refreshGuides() {
+    if (this.refreshing) return this.refreshing;
+    this.refreshing = (async () => {
+      const allChannels = [];
+      const allPrograms = {};
+      const keepBefore = Date.now() - 6 * 3600000;
+      const previous = this.guideData;
+      for (const g of this.guides) {
+        const source = g.sourceId ? this.sources.find((s) => s.id === g.sourceId) : null;
+        try {
+          const data = await guideType(g.type).fetch(g.config, { source, hours: this.settings.guideHours });
+          for (const c of data.channels) allChannels.push({ ...c, id: `${g.id}|${c.id}`, rawId: c.id, providerId: g.id, providerName: g.name });
+          for (const [cid, list] of Object.entries(data.programs)) allPrograms[`${g.id}|${cid}`] = list.filter((p) => p.end > keepBefore);
+          this.updateGuide(g.id, { lastRefresh: Date.now(), info: `${data.channels.length} channels` });
+        } catch (e) {
+          // Keep the last good listings for this provider rather than blanking the guide.
+          for (const c of previous.channels.filter((c) => c.providerId === g.id)) allChannels.push(c);
+          for (const [k, v] of Object.entries(previous.programs)) if (k.startsWith(`${g.id}|`)) allPrograms[k] = v;
+          this.updateGuide(g.id, { info: `Problem: ${e.message}` });
+          this.note(`guide ${g.name} failed: ${e.message}`);
+        }
+      }
+      this.store.write('guidedata', { channels: allChannels, programs: allPrograms });
+      this.reconcileChannels();
+    })().finally(() => { this.refreshing = null; });
+    return this.refreshing;
+  }
+
+  reconcileChannels() {
+    const auto = this.channels.filter((c) => c.mapMode === 'auto');
+    const matches = reconcile(auto, this.guideData.channels);
+    this.store.write('channels', this.channels.map((c) => {
+      const m = matches.get(c.id);
+      return m ? { ...c, guideId: m.guideId, matchScore: m.score, matchReason: m.reason } : c;
+    }));
+    this.changed('channels');
+  }
+
+  programsFor(channel) {
+    return (channel.guideId && this.guideData.programs[channel.guideId]) || [];
+  }
+
+  visibleChannels() {
+    const enabled = new Set(this.sources.filter((s) => s.enabled).map((s) => s.id));
+    const num = (c) => (c.number ? parseFloat(c.number) : 1e9);
+    return this.channels
+      .filter((c) => !c.hidden && enabled.has(c.sourceId))
+      .sort((a, b) => (b.favorite - a.favorite) || num(a) - num(b) || a.name.localeCompare(b.name));
+  }
+
+  getGuide(from, to) {
+    const jobs = new Map(this.getSchedule().map((j) => [j.id, j]));
+    const seriesTitles = new Set(this.rules.filter((r) => r.type === 'series').map((r) => normTitle(r.title)));
+    return this.visibleChannels().map((c) => {
+      const logo = c.logo || (this.guideData.channels.find((g) => g.id === c.guideId) || {}).logo || '';
+      let programs = this.programsFor(c).filter((p) => p.end > from && p.start < to);
+      if (!programs.length) {
+        programs = [c.guideId ? { start: from, end: to, title: 'No information', filler: true }
+          : { start: from, end: to, title: c.city ? `${c.name} - ${c.city}` : c.name, subtitle: c.group ? `${c.group} · Live` : 'No guide data', desc: c.group ? 'Live channel. No schedule listing is available for it.' : '', filler: true }];
+      }
+      return {
+        id: c.id, number: c.number, name: c.name, logo, favorite: c.favorite, sourceId: c.sourceId,
+        programs: programs.map((p) => {
+          const job = jobs.get(`${c.id}@${p.start}`);
+          return { ...p, timer: job ? (job.ruleType === 'series' ? 'series' : 'once') : null, timerStatus: job ? job.status : null, seriesTimer: seriesTitles.has(normTitle(p.title)) };
+        }),
+      };
+    });
+  }
+
+  search(q) {
+    const want = String(q || '').toLowerCase().trim();
+    if (want.length < 2) return [];
+    const now = Date.now();
+    const out = [];
+    for (const c of this.visibleChannels()) {
+      for (const p of this.programsFor(c)) {
+        if (p.end > now && (p.title.toLowerCase().includes(want) || (p.subtitle || '').toLowerCase().includes(want))) {
+          out.push({ channelId: c.id, number: c.number, channelName: c.name, ...p });
+        }
+      }
+    }
+    return out.sort((a, b) => a.start - b.start).slice(0, 200);
+  }
+
+  // ---------- timers ----------
+  addRule(rule) {
+    const r = { id: newId(), enabled: true, created: Date.now(), ...rule };
+    if (r.type === 'series' && this.rules.some((x) => x.type === 'series' && normTitle(x.title) === normTitle(r.title) && (x.channelId || null) === (r.channelId || null))) {
+      throw new Error(`There is already a series timer for "${r.title}".`);
+    }
+    // Single-show timers go to the top; they're usually the one you care about most right now.
+    this.store.write('rules', r.type === 'once' ? [r, ...this.rules] : [...this.rules, r]);
+    this.note(`timer added: ${r.title}`);
+    this.changed('rules');
+    return r;
+  }
+
+  updateRule(id, patch) {
+    this.store.write('rules', this.rules.map((r) => (r.id === id ? { ...r, ...patch, id } : r)));
+    this.changed('rules');
+  }
+
+  removeRule(id) {
+    this.store.write('rules', this.rules.filter((r) => r.id !== id));
+    for (const [jobId, a] of this.active) if (a.ruleId === id) this.stopJob(jobId);
+    this.changed('rules');
+  }
+
+  moveRule(id, delta) {
+    const list = [...this.rules];
+    const i = list.findIndex((r) => r.id === id);
+    const j = Math.max(0, Math.min(list.length - 1, i + delta));
+    if (i < 0 || i === j) return;
+    const [r] = list.splice(i, 1);
+    list.splice(j, 0, r);
+    this.store.write('rules', list);
+    this.changed('rules');
+  }
+
+  skipJob(jobId, skip = true) {
+    const set = new Set(this.skipped);
+    skip ? set.add(jobId) : set.delete(jobId);
+    this.store.write('skipped', [...set]);
+    if (skip && this.active.has(jobId)) this.stopJob(jobId);
+    this.changed('rules');
+  }
+
+  getSchedule() {
+    if (this.schedule && Date.now() - this.scheduleAt < 30000) return this.schedule;
+    const tuners = new Map(this.sources.map((s) => [s.id, s.tunerCount || 1]));
+    this.schedule = buildSchedule({
+      rules: this.rules,
+      channels: this.visibleChannels(),
+      programsFor: (c) => this.programsFor(c),
+      tunerCount: (sid) => tuners.get(sid) || 1,
+      recordedKeys: new Set(this.recordings.filter((r) => r.status !== 'failed' && r.episodeKey).map((r) => r.episodeKey)),
+      skipped: new Set(this.skipped),
+      active: new Set(this.active.keys()),
+      settings: this.settings,
+      now: Date.now(),
+    });
+    for (const j of this.schedule) if (this.active.has(j.id)) j.status = 'recording';
+    this.scheduleAt = Date.now();
+    return this.schedule;
+  }
+
+  // ---------- recording ----------
+  tick() {
+    const now = Date.now();
+    const jobs = this.getSchedule();
+    for (const job of jobs) {
+      if (job.status === 'scheduled' && !this.active.has(job.id) && job.recStart <= now && now < job.recEnd) this.startJob(job);
+    }
+    // Stop recordings whose timer was removed or that lost their tuner to a higher-priority timer.
+    const wanted = new Set(jobs.filter((j) => j.status === 'scheduled' || j.status === 'recording').map((j) => j.id));
+    for (const jobId of this.active.keys()) if (!wanted.has(jobId)) this.stopJob(jobId);
+    // One-time timers are done once their show is over.
+    const activeRules = new Set([...this.active.values()].map((a) => a.ruleId));
+    const expired = this.rules.filter((r) => r.type === 'once' && r.end + 30 * 60000 < now && !activeRules.has(r.id));
+    if (expired.length) this.store.write('rules', this.rules.filter((r) => !expired.includes(r)));
+  }
+
+  startJob(job) {
+    const channel = this.channels.find((c) => c.id === job.channelId);
+    const src = this.sources.find((s) => s.id === job.sourceId);
+    if (!channel || !src) return;
+    const file = recordingPath(this.settings.recordingsDir, job);
+    const rec = {
+      id: newId(), jobId: job.id, ruleId: job.ruleId, channelId: job.channelId, channelNumber: channel.number, channelName: channel.name,
+      title: job.title, subtitle: job.subtitle, desc: job.desc, season: job.season, episode: job.episode, categories: job.categories,
+      episodeKey: job.episodeKey, start: job.start, end: job.end, recordedAt: Date.now(), file, size: 0, status: 'recording', error: null,
+      position: 0, watched: false, simulated: src.type === 'demo',
+    };
+    this.store.write('recordings', [rec, ...this.recordings]);
+    const handle = startRecording({
+      url: channel.streamUrl, file, until: job.recEnd, simulated: rec.simulated, ffmpeg: findFfmpeg(this.settings),
+      log: (m) => this.note(`${job.title}: ${m}`),
+    });
+    this.active.set(job.id, { handle, recId: rec.id, ruleId: job.ruleId });
+    this.note(`recording started: ${job.title} on ${channel.number} ${channel.name}`);
+    this.changed('recordings');
+    handle.done.then((result) => {
+      this.active.delete(job.id);
+      let size = 0;
+      try { size = fs.statSync(file).size; } catch (_) {}
+      this.patchRecording(rec.id, { status: result.status, error: result.error, size, finishedAt: Date.now() });
+      this.note(`recording ${result.status}: ${job.title}${result.error ? ` (${result.error})` : ''}`);
+      this.applyKeepLimit(job.ruleId);
+      this.changed('recordings');
+      if (size && !rec.simulated) this.queueCommercials(rec.id);
+    });
+  }
+
+  // ---------- commercials ----------
+  // Recordings are checked one at a time, at low priority, after they finish.
+  queueCommercials(recId) {
+    if (this.settings.commercialSkip === 'off') return;
+    (this.comQueue ||= []).push(recId);
+    if (!this.comBusy) this.nextCommercials();
+  }
+
+  async nextCommercials() {
+    const id = (this.comQueue || []).shift();
+    this.comBusy = !!id;
+    if (!id) return;
+    const rec = this.recordings.find((r) => r.id === id);
+    const ffmpeg = findFfmpeg(this.settings);
+    if (rec && ffmpeg && fs.existsSync(rec.file)) {
+      try {
+        const breaks = await commercials.analyze(rec.file, ffmpeg, (proc) => { this.comProc = proc; });
+        if (this.recordings.some((r) => r.id === id)) this.patchRecording(id, { commercials: breaks });
+        this.note(`commercials: ${breaks.length} break(s) found in ${rec.title}`);
+      } catch (e) {
+        this.note(`commercials: couldn't check ${rec.title}: ${e.message}`);
+        if (this.recordings.some((r) => r.id === id)) this.patchRecording(id, { commercials: [] });
+      }
+    }
+    this.nextCommercials();
+  }
+
+  stopJob(jobId) {
+    const a = this.active.get(jobId);
+    if (a) a.handle.stop();
+  }
+
+  // A rule with keep: N deletes the oldest recordings of that series beyond N.
+  applyKeepLimit(ruleId) {
+    const rule = this.rules.find((r) => r.id === ruleId);
+    if (!rule || !rule.keep) return;
+    const mine = this.recordings.filter((r) => r.ruleId === ruleId && r.status !== 'recording').sort((a, b) => b.start - a.start);
+    for (const old of mine.slice(rule.keep)) this.deleteRecording(old.id);
+  }
+
+  patchRecording(id, patch) {
+    this.store.write('recordings', this.recordings.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+    this.changed('recordings');
+  }
+
+  async deleteRecording(id) {
+    const rec = this.recordings.find((r) => r.id === id);
+    if (!rec) return;
+    // Deleting a show that is still recording stops it (and keeps it from restarting).
+    for (const [jobId, a] of this.active) {
+      if (a.recId === id) { this.skipJob(jobId); await a.handle.done; }
+    }
+    try { fs.unlinkSync(rec.file); } catch (_) {}
+    try { fs.rmdirSync(path.dirname(rec.file)); } catch (_) { /* folder not empty */ }
+    this.store.write('recordings', this.recordings.filter((r) => r.id !== id));
+    this.changed('recordings');
+  }
+
+  getRecordings() {
+    const live = new Map([...this.active.values()].map((a) => [a.recId, a.handle.bytes]));
+    return this.recordings.map((r) => (live.has(r.id) ? { ...r, size: live.get(r.id) } : r));
+  }
+
+  status() {
+    const ff = findFfmpeg(this.settings);
+    const vlc = findVlc(this.settings);
+    return {
+      recordingNow: [...this.active.keys()].length,
+      ffmpeg: ff, vlc,
+      diskFree: (() => { try { const s = fs.statfsSync(fs.existsSync(this.settings.recordingsDir) ? this.settings.recordingsDir : os.homedir()); return s.bavail * s.bsize; } catch (_) { return null; } })(),
+      log: this.log.slice(0, 50),
+    };
+  }
+
+  describeTypes() {
+    return { sources: sources.describe(), guides: GUIDES.map(({ type, label, fields, needsSource }) => ({ type, label, fields, needsSource })) };
+  }
+}
+
+module.exports = { DvrCore, episodeKey };
