@@ -1,15 +1,22 @@
-// Samsung TV (Tizen) side of GarysTV. Loaded before the shared screens.
-//  1. Finds the GarysTV PC on the home network (or asks for its address) and sets
-//     window.GTV_SERVER; the screens wait on window.GTV_READY before starting.
+// TV side of GarysTV (Samsung/Tizen and Fire TV). Loaded before the shared screens.
+//  1. Finds the GarysTV PC or home server on the home network (or asks for its address)
+//     and sets window.GTV_SERVER; the screens wait on window.GTV_READY before starting.
 //  2. Turns the TV remote's buttons into the keys the screens already understand.
-/* global tizen, Player, GuideView, App, setHints:writable */
+//     The Fire TV app (firetv/) passes its remote buttons in as Samsung codes via GTV_REMOTE.
+/* global tizen, GTVAndroid, Player, GuideView, App, setHints:writable */
 (function () {
   const PORT = 5480;
   const SAVED = 'gtv.server';
   const isTizen = typeof tizen !== 'undefined';
+  const isAndroid = typeof GTVAndroid !== 'undefined';
   let resolveReady;
   window.GTV_READY = new Promise((r) => { resolveReady = r; });
-  window.GTV_EXIT = () => { try { tizen.application.getCurrentApplication().exit(); } catch (_) { /* not on a TV */ } };
+  window.GTV_EXIT = () => {
+    try {
+      if (isAndroid) GTVAndroid.exit();
+      else tizen.application.getCurrentApplication().exit();
+    } catch (_) { /* not on a TV */ }
+  };
 
   const store = {
     get() { try { return localStorage.getItem(SAVED); } catch (_) { return null; } },
@@ -46,7 +53,7 @@
   };
   for (let d = 0; d <= 9; d++) KEYS[48 + d] = String(d);
 
-  window.addEventListener('keydown', (e) => {
+  function onRemote(e) {
     if (!e.isTrusted && !e.gtvRemote) return; // our own re-sent key (gtvRemote: a simulated remote press, for testing)
     if (connect.open) {
       e.stopImmediatePropagation(); // the screens aren't running yet
@@ -61,11 +68,17 @@
     if (key === 'ChannelUp' || key === 'ChannelDown') { Player.surf(key === 'ChannelUp' ? 1 : -1); return; }
     const target = document.activeElement || document.body;
     target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
-  }, true);
+  }
+  window.addEventListener('keydown', onRemote, true);
+  // Fire TV: buttons the Android side catches (Back, ≡, play/pause, rewind...), as Samsung codes.
+  window.GTV_REMOTE = (keyCode) => onRemote({ keyCode, key: '', gtvRemote: true, preventDefault() {}, stopImmediatePropagation() {} });
 
   // Show remote buttons in the hint bar instead of keyboard keys.
-  const HINT = { R: ['●', 'k-red'], D: ['●', 'k-green'], T: ['●', 'k-yellow'], S: ['●', 'k-blue'], G: ['GUIDE'], Esc: ['BACK'],
-    'PgUp/PgDn': ['CH ▲▼'], '[ ]': ['⏪ ⏩'], Tab: null, Del: null, Type: ['OK', '', 'Type'] };
+  const HINT = isAndroid
+    // Fire TV remotes: no colored or guide buttons (Home has My Recordings, Timers, Search and the Guide); ≡ records.
+    ? { R: ['≡'], D: null, T: null, S: null, G: null, Esc: ['BACK'], 'PgUp/PgDn': ['CH ▲▼'], '[ ]': ['⏪ ⏩'], Tab: null, Del: null, Type: ['OK', '', 'Type'] }
+    : { R: ['●', 'k-red'], D: ['●', 'k-green'], T: ['●', 'k-yellow'], S: ['●', 'k-blue'], G: ['GUIDE'], Esc: ['BACK'],
+      'PgUp/PgDn': ['CH ▲▼'], '[ ]': ['⏪ ⏩'], Tab: null, Del: null, Type: ['OK', '', 'Type'] };
   function tvHints(list) {
     return list.flatMap(([k, label, cls]) => {
       if (!(k in HINT)) return [[k, label, cls]];
@@ -75,7 +88,7 @@
     });
   }
 
-  // ---------- finding the PC ----------
+  // ---------- finding the GarysTV server ----------
   async function ping(base, ms = 1500) {
     const ac = new AbortController();
     const t = setTimeout(() => ac.abort(), ms);
@@ -92,6 +105,9 @@
 
   function myAddress() {
     return new Promise((resolve) => {
+      if (isAndroid) {
+        try { return resolve(GTVAndroid.ipAddress() || null); } catch (_) { return resolve(null); }
+      }
       if (!isTizen) {
         // Testing in a normal browser: use the address this page came from.
         const h = location.hostname;
@@ -107,7 +123,7 @@
     });
   }
 
-  // Ask every address on the TV's network (x.x.x.1-254) whether it is a GarysTV PC.
+  // Ask every address on the TV's network (x.x.x.1-254) whether it is running GarysTV.
   async function scan(onFound) {
     const ip = await myAddress();
     if (!ip) return [];
@@ -146,14 +162,14 @@
         <div class="cx">
           <img src="logo.jpg" alt="" class="cx-logo">
           <h1>Garys<span>TV</span></h1>
-          <p class="cx-msg">${message || 'Looking for the GarysTV PC on your home network...'}</p>
+          <p class="cx-msg">${message || 'Looking for GarysTV on your home network...'}</p>
           <div class="cx-list" id="cxList"></div>
           <div class="cx-row">
-            <input id="cxAddr" class="cx-f" placeholder="PC address, e.g. 192.168.1.20" value="${saved ? saved.replace(/^https?:\/\//, '').replace(`:${PORT}`, '') : ''}">
+            <input id="cxAddr" class="cx-f" placeholder="GarysTV address, e.g. 192.168.1.20" value="${saved ? saved.replace(/^https?:\/\//, '').replace(`:${PORT}`, '') : ''}">
             <button class="cx-f" id="cxGo">Connect</button>
           </div>
           <button class="cx-f" id="cxScan">Search again</button>
-          <p class="cx-help">Make sure GarysTV is running on the PC and the PC and TV are on the same home network. When Windows asks whether GarysTV may use the network, choose <b>Allow</b>. The PC's address is shown in GarysTV &gt; Settings &gt; Recording.</p>
+          <p class="cx-help">Make sure the computer running GarysTV (the home server or the PC) is on, and on the same home network as this TV. On a Windows PC, when Windows asks whether GarysTV may use the network, choose <b>Allow</b>. The address is shown in GarysTV &gt; Settings &gt; Recording.</p>
         </div>`;
       document.body.appendChild(this.el);
       this.el.querySelector('#cxGo').onclick = () => this.tryAddress(this.el.querySelector('#cxAddr').value);
@@ -188,7 +204,7 @@
     async search() {
       const msg = this.el.querySelector('.cx-msg');
       const list = this.el.querySelector('#cxList');
-      msg.textContent = 'Looking for the GarysTV PC on your home network...';
+      msg.textContent = 'Looking for GarysTV on your home network...';
       list.innerHTML = '';
       this.found = [];
       const found = await scan((hit) => {
@@ -203,7 +219,7 @@
       });
       if (!this.open) return;
       if (found.length === 1) { msg.textContent = `Found ${found[0].name}. Connecting...`; return this.done(found[0].base); } // the usual home: one PC, no question to ask
-      msg.textContent = found.length ? 'Pick your GarysTV PC:' : 'No GarysTV PC found. Type its address below, or check the steps at the bottom.';
+      msg.textContent = found.length ? 'Pick your GarysTV:' : "GarysTV wasn't found. Type its address below, or check the steps at the bottom.";
       if (!found.length) this.setFocus(0);
     },
 
@@ -238,6 +254,6 @@
     document.documentElement.classList.add('tv');
     const saved = store.get();
     if (saved && await ping(saved, 3000)) return start(saved);
-    connect.show(saved ? `Can't reach the GarysTV PC at ${saved.replace(/^https?:\/\//, '')}. Is it turned on?` : null);
+    connect.show(saved ? `Can't reach GarysTV at ${saved.replace(/^https?:\/\//, '')}. Is it turned on?` : null);
   });
 })();

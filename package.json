@@ -10,6 +10,7 @@
     "test": "node --test test/*.test.js",
     "dist": "electron-builder --win",
     "tizen": "node tizen/build.js",
+    "firetv": "node firetv/build.js",
     "free-channels": "node scripts/free-channels.js"
   },
   "build": {

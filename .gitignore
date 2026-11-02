@@ -1,3 +1,8 @@
 node_modules/
 dist/
 *.log
+firetv/app/src/main/assets/
+firetv/app/build/
+firetv/build/
+firetv/.gradle/
+firetv/local.properties
