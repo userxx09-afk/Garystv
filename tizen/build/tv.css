@@ -23,3 +23,8 @@
    Full-screen video still fills the whole screen. */
 html.firetv #app { box-sizing: border-box; padding: 2.5vh 3vw 1.5vh; }
 html.firetv #screen .osd { padding-left: 3vw; padding-right: 3vw; padding-bottom: 3vh; }
+
+/* TVs: shorter Home tiles, so the Favorites, Up next and Recently recorded rows all fit. */
+html.tv .tile { height: clamp(7rem, 22vh, 13rem); }
+html.tv .home { gap: clamp(.8rem, 2.5vh, 1.6rem); }
+html.tv .strip .empty { padding: .7rem 1rem; }

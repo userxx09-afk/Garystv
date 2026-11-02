@@ -271,13 +271,8 @@ const Player = {
     choices.push({ label: 'Cancel', value: null });
     const v = await Modal.menu(`Record ${ch.number} ${ch.name}`, active ? `<div class="s">Recording now: ${esc(active.title)}</div>` : '', choices);
     try {
-      if (v === 'stop') {
-        const rule = App.state.rules.find((r) => r.id === active.ruleId);
-        if (rule && rule.type === 'once') await api.del(`/api/rules/${rule.id}`);
-        else await api.post('/api/jobs/skip', { id: active.jobId });
-        await App.loadAll();
-        this.showOsd('Recording stopped. It is saved in My Recordings.');
-      } else if (v === 'show') {
+      if (v === 'stop') await this.stopRecording(active);
+      else if (v === 'show') {
         await App.recordOnce(ch, p);
         this.showOsd(`Recording ${p.title}`);
       } else if (typeof v === 'number') {
@@ -288,6 +283,14 @@ const Player = {
         this.showOsd(v === 240 ? 'Recording until you stop it. Press R again to stop.' : `Recording for the next ${v < 60 ? `${v} minutes` : `${v / 60} hour${v > 60 ? 's' : ''}`}`);
       }
     } catch (e) { toast(e.message); }
+  },
+
+  async stopRecording(active) {
+    const rule = App.state.rules.find((r) => r.id === active.ruleId);
+    if (rule && rule.type === 'once') await api.del(`/api/rules/${rule.id}`);
+    else await api.post('/api/jobs/skip', { id: active.jobId });
+    await App.loadAll();
+    this.showOsd('Recording stopped. It is saved in My Recordings.');
   },
 
   // Hold OK (TV remote) / menu key while watching live: what you can do from here. Record now is
@@ -314,7 +317,8 @@ const Player = {
           await App.loadAll();
           this.showOsd('Recording until you stop it. Hold OK to stop.');
         }
-      } else if (v === 'stop' || v === 'recordMenu') this.recordMenu();
+      } else if (v === 'stop') await this.stopRecording(active);
+      else if (v === 'recordMenu') this.recordMenu();
       else if (v === 'live') this.goLive();
       else if (v === 'pause') this.togglePause();
       else if (v === 'guide') { this.setMode('pip'); App.go('guide'); }
