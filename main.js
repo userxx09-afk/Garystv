@@ -100,6 +100,7 @@ app.whenReady().then(async () => {
   core = new DvrCore({ dataDir: flag('data') || path.join(app.getPath('userData'), 'data'), demo: !!flag('demo') });
   await core.init();
   port = await listen(createServer(core), core.settings.port);
+  core.tools.autoInstall(); // ffmpeg and VLC, if this PC doesn't have them yet
 
   app.setLoginItemSettings({ openAtLogin: !!core.settings.startWithWindows, args: ['--hidden'] });
   core.on('changed', () => {

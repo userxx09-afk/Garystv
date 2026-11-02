@@ -2,7 +2,11 @@ package local.garystv
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Color
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -155,5 +159,35 @@ class MainActivity : Activity() {
 
         @JavascriptInterface
         fun exit() = runOnUiThread { finish() }
+
+        // VLC, the backup player. url is GarysTV's /direct/ address for the video.
+        @JavascriptInterface
+        fun hasVlc(): Boolean = try {
+            packageManager.getPackageInfo(VLC, 0)
+            true
+        } catch (_: PackageManager.NameNotFoundException) {
+            false
+        }
+
+        @JavascriptInterface
+        fun openVlc(url: String, title: String) = runOnUiThread {
+            val play = Intent(Intent.ACTION_VIEW).setPackage(VLC)
+                .setDataAndTypeAndNormalize(Uri.parse(url), "video/*")
+                .putExtra("title", title)
+            try {
+                startActivity(play)
+            } catch (_: ActivityNotFoundException) {
+                // Not installed: its page in the app store (Amazon's on a Fire TV, else Google Play).
+                val amazon = Intent(Intent.ACTION_VIEW, Uri.parse("amzn://apps/android?p=$VLC"))
+                val google = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$VLC"))
+                try { startActivity(amazon) } catch (_: ActivityNotFoundException) {
+                    try { startActivity(google) } catch (_: ActivityNotFoundException) { }
+                }
+            }
+        }
+    }
+
+    private companion object {
+        const val VLC = "org.videolan.vlc"
     }
 }

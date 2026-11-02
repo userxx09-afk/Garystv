@@ -26,7 +26,7 @@ Closing the window asks whether to exit GarysTV or keep it running in the system
 |---|---|---|
 | Antenna tuner | **HDHomeRun** (Flex 4K, Connect Duo/Quatro) | A network tuner; Windows needs no drivers. GarysTV finds it automatically. |
 | Recording storage | Any internal or USB drive | Settings > Recording > folder. About 3–7 GB per hour of HD over-the-air TV. |
-| Watching on this PC | **ffmpeg** (built-in player) or **VLC** | OTA TV is MPEG-2, which needs converting to play in-app. Recording does not need either. Install with `winget install Gyan.FFmpeg`; GarysTV finds it automatically. |
+| Watching | **ffmpeg** (built-in player), **VLC** (backup player) | OTA TV is MPEG-2, which needs converting to play in-app. On Windows, GarysTV installs both when they are missing (VLC asks Windows for permission once), or use Settings > Status. The home-server installer adds ffmpeg. On a Fire TV or Android phone, the VLC app is the backup player (hold OK while watching > Play in VLC). |
 
 USB stick tuners (Hauppauge etc.) aren't supported yet. They need a different, driver-based capture path.
 

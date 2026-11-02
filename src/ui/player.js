@@ -21,12 +21,14 @@ const Player = {
   // subtitle, duration, poster, showId } from the Movies / Shows screens)
   async play(kind, id, { offset = 0, item = null } = {}) {
     const st = App.state.status;
-    if (!st.ffmpeg) {
-      if (st.vlc && !window.GTV_SERVER) { // VLC opens on the PC, so not from the TV app
-        try { await api.post('/api/external-play', { kind, id }); toast('Opening in VLC...'); } catch (e) { toast(e.message); }
-        return;
-      }
-      Modal.menu('Video player needed', `<div class="s">To watch on this PC, install <b>ffmpeg</b> (for the built-in player) or <b>VLC</b>. Recording works without either.<br><br>See Settings &gt; Status for where GarysTV looks for them.</div>`, [{ label: 'OK', value: true }]);
+    if (!st.ffmpeg) { // the built-in player needs ffmpeg where GarysTV runs; VLC is the backup
+      if (this.canVlc()) { this.openVlc(kind, id, item); return; }
+      const tools = st.tools || {};
+      const choices = tools.canInstall ? [{ label: tools.ffmpeg && tools.ffmpeg.busy ? 'Installing ffmpeg...' : 'Install ffmpeg now', value: 'install', cls: 'primary' }] : [];
+      const where = window.GTV_SERVER ? 'on the computer running GarysTV' : 'on this PC';
+      const how = tools.canInstall ? '' : st.platform === 'linux' ? '<br><br>On the home server: <b>sudo apt install ffmpeg</b>' : '';
+      const v = await Modal.menu('ffmpeg needed', `<div class="s">The built-in player needs <b>ffmpeg</b> ${where}.${how}</div>`, [...choices, { label: 'OK', value: null }]);
+      if (v === 'install') { try { await api.post('/api/tools/ffmpeg/install'); toast('Installing ffmpeg. It takes a minute or two.', 6000); } catch (e) { toast(e.message); } }
       return;
     }
     if (kind === 'live' || id !== this.id) { this.passed = new Set(); this.prompted = null; } // a seek within the same recording keeps these
@@ -314,6 +316,7 @@ const Player = {
     choices.push({ label: $('#video').paused ? '▶ Play' : '❚❚ Pause', value: 'pause' });
     choices.push({ label: '▦ Guide', value: 'guide' });
     choices.push({ label: '■ Stop watching', value: 'stopWatching' });
+    if (this.canVlc()) choices.push({ label: '▶ Play in VLC instead', value: 'vlc' });
     choices.push({ label: '⌂ Home', value: 'home' });
     choices.push({ label: 'Cancel', value: null });
     const v = await Modal.menu(`${ch.number} ${ch.name}`, p && !p.filler ? `<div class="s">${esc(p.title)} · until ${fmt.time(p.end)}</div>` : '', choices);
@@ -333,6 +336,26 @@ const Player = {
       else if (v === 'guide') { this.setMode('pip'); App.go('guide'); }
       else if (v === 'stopWatching') { this.stop(); App.render(); }
       else if (v === 'home') App.home();
+      else if (v === 'vlc') this.openVlc('live', ch.id);
+    } catch (e) { toast(e.message); }
+  },
+
+  // VLC as the backup player: the VLC app on a Fire TV or Android phone (the video comes from
+  // GarysTV's /direct/ address), or VLC on the PC that runs GarysTV.
+  canVlc() {
+    if (window.GTVAndroid && GTVAndroid.openVlc) return true;
+    return !window.GTV_SERVER && !!App.state.status.vlc;
+  },
+  async openVlc(kind, id, item) {
+    const title = (item && item.title) || (kind === 'live' && (App.state.channels.find((c) => c.id === id) || {}).name) || (App.recordings.find((r) => r.id === id) || {}).title || 'GarysTV';
+    if (this.mode !== 'off') this.stop();
+    try {
+      if (window.GTVAndroid && GTVAndroid.openVlc) {
+        GTVAndroid.openVlc(server(`/direct/${kind}/${encodeURIComponent(id)}`), title);
+      } else {
+        await api.post('/api/external-play', { kind, id });
+        toast('Opening in VLC...');
+      }
     } catch (e) { toast(e.message); }
   },
 
@@ -341,13 +364,16 @@ const Player = {
     const r = this.rec || {};
     const choices = [{ label: $('#video').paused ? '▶ Play' : '❚❚ Pause', value: 'pause', cls: 'primary' }];
     if (this.position() > 30) choices.push({ label: '⟲ Start over', value: 'over' });
-    choices.push({ label: '↺ Back 5 minutes', value: 'back5' }, { label: '■ Stop watching', value: 'stop' }, { label: '⌂ Home', value: 'home' }, { label: 'Cancel', value: null });
+    choices.push({ label: '↺ Back 5 minutes', value: 'back5' });
+    if (this.canVlc()) choices.push({ label: '▶ Play in VLC instead', value: 'vlc' });
+    choices.push({ label: '■ Stop watching', value: 'stop' }, { label: '⌂ Home', value: 'home' }, { label: 'Cancel', value: null });
     const v = await Modal.menu(r.title || 'Playing', r.subtitle ? `<div class="s">${esc(r.subtitle)}</div>` : '', choices);
     if (v === 'pause') this.togglePause();
     if (v === 'over') this.seekTo(0);
     if (v === 'back5') this.seek(-300);
     if (v === 'stop') { this.stop(); App.render(); }
     if (v === 'home') App.home();
+    if (v === 'vlc') this.openVlc(this.kind, this.id, this.rec);
   },
 
   surf(delta) {

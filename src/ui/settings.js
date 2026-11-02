@@ -291,12 +291,35 @@ const SettingsView = {
   // ---------- status ----------
   status(pane) {
     const st = App.state.status;
+    const here = window.GTV_SERVER ? `<div class="box"><h3>Connected to</h3><div id="whichPc">${esc(window.GTV_SERVER.replace(/^https?:\/\//, ''))}</div>
+      <div class="s">If your channels or movies are missing, this TV may be on a different GarysTV (the PC instead of the home server).</div>
+      <span class="btn nav" id="switchPc" data-key="switch">Connect to a different GarysTV</span></div>` : '';
+    const tools = st.tools || {};
+    const where = window.GTV_SERVER ? ' on the computer running GarysTV' : '';
+    // An Install button (Windows: winget), what's happening, or how to get it on the home server.
+    const tool = (name) => {
+      const t = tools[name] || {};
+      if (t.busy) return '<br><span class="s">Installing... (VLC asks for permission on the PC)</span>';
+      const err = t.error ? `<br><span class="s" style="color:var(--yellow)">${esc(t.error)}</span>` : '';
+      if (tools.canInstall) return `${err}<br><span class="btn nav" data-install="${name}" data-key="inst-${name}">Install ${name === 'vlc' ? 'VLC' : 'ffmpeg'}</span>`;
+      return st.platform === 'linux' ? `<br><span class="s">On the home server: sudo apt install ${name}</span>` : err;
+    };
     pane.innerHTML = `
       <div class="box"><h3>Helpers</h3>
-        <div>${st.ffmpeg ? `✅ ffmpeg found: <span class="s">${esc(st.ffmpeg)}</span>` : '⚠️ ffmpeg not found. The built-in player and HLS-type IPTV recording need it. Antenna recording works without it.'}</div>
-        <div>${st.vlc ? `✅ VLC found: <span class="s">${esc(st.vlc)}</span>` : 'VLC not found (optional, used as a backup player).'}</div>
+        <div>${st.ffmpeg ? `✅ ffmpeg found: <span class="s">${esc(st.ffmpeg)}</span>` : `⚠️ ffmpeg not found${where}. The built-in player and some IPTV recordings need it. Antenna recording works without it.${tool('ffmpeg')}`}</div>
+        <div>${st.vlc ? `✅ VLC found: <span class="s">${esc(st.vlc)}</span>` : st.platform === 'linux' ? 'VLC: not needed on the home server.' : `VLC not found${where} (a backup player).${tool('vlc')}`}</div>
+        ${window.GTVAndroid ? `<div>${GTVAndroid.hasVlc && GTVAndroid.hasVlc() ? '✅ The VLC app is on this TV, for when the built-in player has trouble.' : 'The VLC app is not on this TV. It is a backup player: get it from the app store, or choose Play in VLC (hold OK while watching) to be taken there.'}</div>` : ''}
         <div>💾 ${st.diskFree != null ? `${fmt.size(st.diskFree)} free in the recordings folder` : 'Disk space unknown'}</div>
         <div>⏺ ${st.recordingNow} recording right now</div></div>
-      <div class="box"><h3>Activity log</h3><pre class="log">${esc(st.log.join('\n')) || 'Nothing yet.'}</pre></div>`;
+      ${here}<div class="box"><h3>Activity log</h3><pre class="log">${esc(st.log.join('\n')) || 'Nothing yet.'}</pre></div>`;
+    if (here) {
+      $('#switchPc', pane).onclick = () => window.GTV_SWITCH();
+      api.get('/api/ping').then((p) => { const el = $('#whichPc'); if (el) el.innerHTML = `<b>${esc(p.name)}</b> at ${esc(window.GTV_SERVER.replace(/^https?:\/\//, ''))} · ${st.platform === 'linux' ? 'home server' : 'Windows PC'}`; }).catch(() => {});
+    }
+    $$('[data-install]', pane).forEach((el) => {
+      el.onclick = async () => {
+        try { await api.post(`/api/tools/${el.dataset.install}/install`); toast('Installing. This screen updates when it is done.', 5000); } catch (e) { toast(e.message); }
+      };
+    });
   },
 };

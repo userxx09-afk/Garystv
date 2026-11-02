@@ -12,6 +12,7 @@ const hdhomerun = require('./sources/hdhomerun');
 const sourceTypes = require('./sources');
 const { Vod } = require('./vod');
 const { Tmdb } = require('./tmdb');
+const { ToolInstaller } = require('./installer');
 
 const UI_DIR = path.join(__dirname, '..', 'ui');
 const MPEGTS = require.resolve('mpegts.js/dist/mpegts.js');
@@ -146,8 +147,39 @@ function playerInput(core, kind, id) {
   return { url: rec.file, title: rec.title };
 }
 
+// The video as it comes, without ffmpeg, for VLC on a TV (the backup player). A recording is
+// the file itself (VLC can skip around in it); a channel or movie is passed through from the
+// provider, so its address (with the IPTV login in it) stays on this machine. HLS streams are
+// lists of pieces at other addresses, so VLC is sent to the real one instead.
+function relay(req, res, url, hops = 0) {
+  const lib = url.startsWith('https:') ? require('https') : http;
+  const up = lib.get(url, { headers: { 'User-Agent': 'VLC/3.0' } }, (r) => {
+    if (r.statusCode >= 300 && r.statusCode < 400 && r.headers.location && hops < 5) {
+      r.resume();
+      return relay(req, res, new URL(r.headers.location, url).href, hops + 1);
+    }
+    res.writeHead(r.statusCode, { 'Content-Type': r.headers['content-type'] || 'video/mp2t', 'Cache-Control': 'no-store' });
+    r.pipe(res);
+  });
+  up.on('error', (e) => send(res, 502, { error: e.message }));
+  req.on('close', () => up.destroy());
+}
+
+function sendFile(req, res, file) {
+  fs.stat(file, (err, st) => {
+    if (err) return send(res, 404, { error: 'Not found' });
+    const m = /bytes=(\d*)-(\d*)/.exec(req.headers.range || '');
+    const start = m && m[1] ? +m[1] : 0;
+    const end = m && m[2] ? Math.min(+m[2], st.size - 1) : st.size - 1;
+    if (start > end) { res.writeHead(416, { 'Content-Range': `bytes */${st.size}` }); return res.end(); }
+    res.writeHead(m ? 206 : 200, { 'Content-Type': 'video/mp2t', 'Accept-Ranges': 'bytes', 'Content-Length': end - start + 1, ...(m ? { 'Content-Range': `bytes ${start}-${end}/${st.size}` } : {}) });
+    fs.createReadStream(file, { start, end }).pipe(res);
+  });
+}
+
 function createServer(core) {
   const clients = new Set();
+  const tools = core.tools = new ToolInstaller(core);
   const timeshift = core.timeshift = new Timeshift({
     ffmpeg: () => findFfmpeg(core.settings),
     dir: () => path.join(core.settings.recordingsDir, '.live-buffer'),
@@ -168,12 +200,12 @@ function createServer(core) {
   core.on('changed', (what) => { if (what === 'sources') vod.cache.clear(); }); // new login or server: read the library again
 
   const routes = [
-    ['GET', '/api/ping', () => ({ app: 'GarysTV', name: require('os').hostname(), addresses: lanAddresses() })], // TV app looks for this when searching the network
+    ['GET', '/api/ping', () => ({ app: 'GarysTV', name: require('os').hostname(), platform: process.platform, addresses: lanAddresses() })], // TV app looks for this when searching the network
     ['GET', '/api/state', () => ({
       // The TMDb key itself stays on the server; screens only learn whether there is one.
       settings: { ...core.settings, tmdbKey: undefined, tmdbKeyFrom: tmdb.keySource() }, types: core.describeTypes(), sources: core.sources, guides: core.guides,
       channels: core.channels, guideChannels: core.guideData.channels.map(({ id, names, number, providerName }) => ({ id, names, number, providerName })),
-      rules: core.rules, status: core.status(), favLists: core.favLists,
+      rules: core.rules, status: { ...core.status(), tools: tools.status(), platform: process.platform }, favLists: core.favLists,
     })],
     ['POST', '/api/favlists', (q, b) => core.addFavList(b)],
     ['PUT', '/api/favlists/:id', (q, b, p) => core.updateFavList(p.id, b)],
@@ -214,10 +246,11 @@ function createServer(core) {
     ['PUT', '/api/recordings/:id', (q, b, p) => core.patchRecording(p.id, { position: b.position, watched: b.watched })],
     ['POST', '/api/timeshift/release', (q, b) => timeshift.release(b.channelId, b.viewer)],
     ['DELETE', '/api/recordings/:id', (q, b, p) => core.deleteRecording(p.id)],
-    ['POST', '/api/external-play', (q, b) => {
+    ['POST', '/api/tools/:name/install', (q, b, p) => tools.install(p.name)],
+    ['POST', '/api/external-play', async (q, b) => {
       const vlc = findVlc(core.settings);
       if (!vlc) throw new Error('VLC is not installed.');
-      const input = playerInput(core, b.kind, b.id);
+      const input = b.kind === 'vod' ? await vod.input(b.id) : playerInput(core, b.kind, b.id);
       if (!input.url) throw new Error('Practice channels have no real video.');
       spawn(vlc, [input.url, '--fullscreen', `--meta-title=${input.title}`], { detached: true, stdio: 'ignore' }).unref();
     }],
@@ -264,6 +297,14 @@ function createServer(core) {
             : { 'Content-Type': 'video/mp2t', 'Cache-Control': 'max-age=3600' });
           res.end(data);
         });
+      }
+      const d = /^\/direct\/(live|rec|vod)\/([^/]+)$/.exec(url.pathname);
+      if (d) {
+        const input = d[1] === 'vod' ? await vod.input(decodeURIComponent(d[2])) : playerInput(core, d[1], decodeURIComponent(d[2]));
+        if (!input.url) return send(res, 404, { error: 'Practice channels have no real video.' });
+        if (d[1] === 'rec') return sendFile(req, res, input.url);
+        if (/\.m3u8(\?|$)/i.test(input.url)) { res.writeHead(302, { Location: input.url }); return res.end(); }
+        return relay(req, res, input.url);
       }
       const m = /^\/stream\/(live|rec|vod)\/([^/]+)$/.exec(url.pathname);
       if (m) {

@@ -275,3 +275,4 @@ html.tv .osd-btns { display: none; } /* the remote's buttons do these on the TV 
 .item .sposter { width: 2.6rem; height: 3.9rem; object-fit: cover; border-radius: .3rem; flex: none; }
 .item.more .t { color: var(--muted); }
 #skinds:empty { display: none; }
+.home-head .on-pc { margin-left: auto; text-align: right; color: var(--muted); font-size: .95rem; line-height: 1.4; }

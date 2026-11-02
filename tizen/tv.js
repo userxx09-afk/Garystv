@@ -126,7 +126,7 @@
     try {
       const res = await fetch(`${base}/api/ping`, { signal: ac.signal, cache: 'no-store' });
       const j = await res.json();
-      return j && j.app === 'GarysTV' ? { base, name: j.name } : null;
+      return j && j.app === 'GarysTV' ? { base, name: j.name, server: j.platform === 'linux' } : null;
     } catch (_) {
       return null;
     } finally {
@@ -271,9 +271,9 @@
         this.found.push(hit);
         const b = document.createElement('button');
         b.className = 'cx-f cx-pc';
-        b.innerHTML = `<b>${hit.name.replace(/[<>&]/g, '')}</b><small>${hit.base.replace(/^https?:\/\//, '')}</small>`;
+        b.innerHTML = `<b>${hit.name.replace(/[<>&]/g, '')}</b><small>${hit.server ? 'Home server (always on)' : 'Windows PC'} · ${hit.base.replace(/^https?:\/\//, '')}</small>`;
         b.onclick = () => this.done(hit.base);
-        list.appendChild(b);
+        if (hit.server) list.prepend(b); else list.appendChild(b); // the always-on server first
         if (this.found.length === 1) this.setFocus(0);
       });
       if (!this.open) return;
@@ -299,6 +299,9 @@
       start(base);
     },
   };
+
+  // Forget this GarysTV and look again (a home with both the PC and the home server running).
+  window.GTV_SWITCH = () => { store.set(''); location.reload(); };
 
   function start(base) {
     window.GTV_SERVER = base;

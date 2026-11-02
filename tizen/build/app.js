@@ -44,6 +44,7 @@ const App = {
     const places = [['home', '⌂ Home'], ['guide', '▦ Guide'], ['movies', '🎬 Movies'], ['shows', '📺 Shows'], ['dvr', '● My Recordings'], ['search', '⌕ Search'], ['settings', '⚙ Settings']]
       .filter(([k]) => k !== this.viewName || (view.show || view.folder));
     places.forEach(([k, label], i) => items.push({ label, value: () => (k === 'home' ? this.home() : this.go(k)), cls: i === 0 ? 'gap' : '' }));
+    if (window.GTV_SWITCH) items.push({ label: '⇄ Connect to a different GarysTV...', value: () => window.GTV_SWITCH() });
     items.push({ label: 'Close', value: null });
     const run = await Modal.menu(own.title || view.title || 'Menu', own.body || '', items);
     if (typeof run === 'function') {

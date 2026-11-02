@@ -7,6 +7,11 @@
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <uses-feature android:name="android.software.leanback" android:required="false" />
 
+    <!-- Android 11+: lets the app see whether the VLC app (the backup player) is installed -->
+    <queries>
+        <package android:name="org.videolan.vlc" />
+    </queries>
+
     <!-- The GarysTV server speaks plain HTTP on the home network. -->
     <application
         android:allowBackup="true"
