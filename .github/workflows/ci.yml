@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # The Windows app's Electron isn't needed to test the engine or build the TV apps.
+  ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+jobs:
+  engine:
+    name: Engine tests + Linux installer check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: npm ci
+      - run: npm test
+      - name: Check the Linux installer script
+        run: bash -n install/install-linux.sh && shellcheck install/install-linux.sh
+
+  firetv:
+    name: Fire TV app (APK)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Copy the screens into the app
+        run: npm run firetv
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      # ubuntu-latest ships the Android SDK with ANDROID_HOME set.
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build APK
+        working-directory: firetv
+        env:
+          GTV_VERSION_CODE: ${{ github.run_number }}
+        run: ./gradlew :app:assembleRelease :app:lintRelease
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GarysTV-FireTV-apk
+          path: firetv/app/build/outputs/apk/release/*.apk
