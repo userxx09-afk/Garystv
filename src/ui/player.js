@@ -17,7 +17,9 @@ const Player = {
   kind: null, id: null, offset: 0, duration: 0, rec: null, channel: null, mp: null, hls: null,
   osdTimer: null, tickTimer: null, saveTimer: null, session: 0, retries: 0, passed: new Set(), prompted: null,
 
-  async play(kind, id, { offset = 0 } = {}) {
+  // kind: live | rec (a recording) | vod (a movie or episode from the IPTV provider; item = { title,
+  // subtitle, duration, poster, showId } from the Movies / Shows screens)
+  async play(kind, id, { offset = 0, item = null } = {}) {
     const st = App.state.status;
     if (!st.ffmpeg) {
       if (st.vlc && !window.GTV_SERVER) { // VLC opens on the PC, so not from the TV app
@@ -27,15 +29,16 @@ const Player = {
       Modal.menu('Video player needed', `<div class="s">To watch on this PC, install <b>ffmpeg</b> (for the built-in player) or <b>VLC</b>. Recording works without either.<br><br>See Settings &gt; Status for where GarysTV looks for them.</div>`, [{ label: 'OK', value: true }]);
       return;
     }
-    if (kind !== 'rec' || id !== this.id) { this.passed = new Set(); this.prompted = null; } // a seek within the same recording keeps these
+    if (kind === 'live' || id !== this.id) { this.passed = new Set(); this.prompted = null; } // a seek within the same recording keeps these
     this.stopStream();
     this.kind = kind; this.id = id; this.offset = offset; this.retries = 0;
-    this.rec = kind === 'rec' ? App.recordings.find((r) => r.id === id) : null;
+    this.rec = kind === 'rec' ? App.recordings.find((r) => r.id === id) : kind === 'vod' ? { ...item, id } : null;
     this.channel = kind === 'live' ? App.state.channels.find((c) => c.id === id) : null;
-    if (this.rec) this.duration = ((this.rec.finishedAt || Date.now()) - this.rec.recordedAt) / 1000;
+    if (kind === 'rec' && this.rec) this.duration = ((this.rec.finishedAt || Date.now()) - this.rec.recordedAt) / 1000;
+    if (kind === 'vod') this.duration = this.rec.duration || 0; // 0: the provider didn't say
     if (this.channel) App.lastChannel = id;
     if (kind === 'live') this.playLive(id);
-    else this.playRec(id, offset);
+    else this.playRec(kind, id, offset);
     this.setMode('full');
     this.showOsd();
     clearInterval(this.tickTimer);
@@ -64,12 +67,12 @@ const Player = {
     video.play().catch(() => {});
   },
 
-  playRec(id, offset) {
+  playRec(kind, id, offset) {
     const video = $('#video'), session = this.session;
     // Absolute URL: mpegts.js fetches from a worker, which can't resolve relative paths.
-    this.mp = mpegts.createPlayer({ type: 'mpegts', isLive: true, url: `${serverBase()}/stream/rec/${encodeURIComponent(id)}?t=${Math.floor(offset)}` },
+    this.mp = mpegts.createPlayer({ type: 'mpegts', isLive: true, url: `${serverBase()}/stream/${kind}/${encodeURIComponent(id)}?t=${Math.floor(offset)}` },
       { enableWorker: true, liveBufferLatencyChasing: false, lazyLoad: false });
-    this.mp.on(mpegts.Events.ERROR, () => { if (session === this.session) this.showOsd('Could not play this recording.'); });
+    this.mp.on(mpegts.Events.ERROR, () => { if (session === this.session) this.showOsd(kind === 'vod' ? 'Could not play this. The provider may be busy; try again in a moment.' : 'Could not play this recording.'); });
     this.mp.attachMediaElement(video);
     this.mp.load();
     video.play().catch(() => {});
@@ -137,12 +140,17 @@ const Player = {
   savePosition() {
     if (!this.rec) return;
     const pos = this.position();
+    if (this.kind === 'vod') {
+      const r = this.rec;
+      api.put(`/api/vod/progress/${encodeURIComponent(r.id)}`, { position: pos, duration: this.duration, title: r.title, subtitle: r.subtitle, poster: r.poster, showId: r.showId }).catch(() => {});
+      return;
+    }
     const watched = this.duration > 0 && pos / this.duration > 0.9;
     api.put(`/api/recordings/${this.rec.id}`, { position: pos, watched: watched || this.rec.watched }).catch(() => {});
   },
 
   seek(delta) { if (this.rec) this.seekTo(this.position() + delta); },
-  seekTo(to) { this.play('rec', this.rec.id, { offset: Math.max(0, Math.min(this.duration - 5, to)) }); },
+  seekTo(to) { this.play(this.kind, this.rec.id, { offset: Math.max(0, this.duration ? Math.min(this.duration - 5, to) : to), item: this.rec }); },
 
   // The commercial break playback is in, if any.
   breakNow() {
@@ -233,7 +241,7 @@ const Player = {
       const rec = App.recordings.find((r) => r.id === this.rec.id) || this.rec;
       const ads = (rec.commercials || []).map((b) => `<b class="ad" style="left:${(b.start / d) * 100}%;width:${((b.end - b.start) / d) * 100}%"></b>`).join('');
       bar.innerHTML = `<i style="width:${Math.min(100, (pos / d) * 100)}%"></i>${ads}`;
-      L.textContent = fmt.clock(pos); R.textContent = fmt.clock(this.duration);
+      L.textContent = fmt.clock(pos); R.textContent = this.duration ? fmt.clock(this.duration) : '';
       return;
     }
     const r = this.liveRange();

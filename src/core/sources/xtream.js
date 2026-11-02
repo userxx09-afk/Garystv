@@ -12,9 +12,10 @@ function servers(config) {
     .map((s) => (/^https?:\/\//i.test(s) ? s : `http://${s}`));
 }
 
-async function api(base, config, action) {
+async function api(base, config, action, params = {}) {
   const q = new URLSearchParams({ username: config.username, password: config.password });
   if (action) q.set('action', action);
+  for (const [k, v] of Object.entries(params)) q.set(k, v);
   const res = await fetch(`${base}/player_api.php?${q}`, { signal: AbortSignal.timeout(30000), headers: { 'User-Agent': 'Mozilla/5.0' } });
   if (!res.ok) throw new Error(`${new URL(base).host} answered ${res.status}`);
   return res.json();
@@ -51,6 +52,8 @@ module.exports = {
     { key: 'maxStreams', label: 'Streams allowed at once (blank = what the account allows)', placeholder: '' },
   ],
   servers,
+  login,
+  api,
 
   async scan(config) {
     const { base, account } = await login(config);

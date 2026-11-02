@@ -1,7 +1,7 @@
 // App shell: screen switching, remote-style keys, live updates from the
 // engine, and the record / series-timer dialogs shared by several screens.
-/* global HomeView, GuideView, DvrView, TimersView, SearchView, SettingsView, Player */
-const VIEWS = { home: HomeView, guide: GuideView, dvr: DvrView, timers: TimersView, search: SearchView, settings: SettingsView };
+/* global HomeView, GuideView, DvrView, TimersView, SearchView, SettingsView, MoviesView, ShowsView, Player */
+const VIEWS = { home: HomeView, guide: GuideView, movies: MoviesView, shows: ShowsView, dvr: DvrView, timers: TimersView, search: SearchView, settings: SettingsView };
 
 const App = {
   state: null, recordings: [], schedule: [], guideRows: [], view: null, viewName: 'home', history: [], lastChannel: null,

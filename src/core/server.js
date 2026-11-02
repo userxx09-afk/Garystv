@@ -10,6 +10,7 @@ const { bestVariant, HLS_INPUT, RECONNECT } = require('./hls');
 const { Timeshift } = require('./timeshift');
 const hdhomerun = require('./sources/hdhomerun');
 const sourceTypes = require('./sources');
+const { Vod } = require('./vod');
 
 const UI_DIR = path.join(__dirname, '..', 'ui');
 const MPEGTS = require.resolve('mpegts.js/dist/mpegts.js');
@@ -161,6 +162,8 @@ function createServer(core) {
     },
   });
   core.on('changed', (what) => { for (const c of clients) c.write(`data: ${JSON.stringify({ what })}\n\n`); });
+  const vod = core.vod = new Vod(core);
+  core.on('changed', (what) => { if (what === 'sources') vod.cache.clear(); }); // new login or server: read the library again
 
   const routes = [
     ['GET', '/api/ping', () => ({ app: 'GarysTV', name: require('os').hostname(), addresses: lanAddresses() })], // TV app looks for this when searching the network
@@ -173,6 +176,13 @@ function createServer(core) {
     ['PUT', '/api/favlists/:id', (q, b, p) => core.updateFavList(p.id, b)],
     ['DELETE', '/api/favlists/:id', (q, b, p) => core.removeFavList(p.id)],
     ['POST', '/api/favlists/:id/toggle', (q, b, p) => core.toggleFavChannel(p.id, String(b.channelId || ''), b.on)],
+    // Movies and shows from IPTV providers (core/vod.js). kind: movies | shows
+    ['GET', '/api/vod', () => ({ providers: vod.providers().length, continue: vod.continueList() })],
+    ['GET', '/api/vod/movie/:id', (q, b, p) => vod.movie(decodeURIComponent(p.id))],
+    ['GET', '/api/vod/show/:id', (q, b, p) => vod.show(decodeURIComponent(p.id))],
+    ['PUT', '/api/vod/progress/:id', (q, b, p) => vod.saveProgress(decodeURIComponent(p.id), b)],
+    ['GET', '/api/vod/:kind/categories', (q, b, p) => vod.categories(p.kind)],
+    ['GET', '/api/vod/:kind/category/:id', (q, b, p) => vod.items(p.kind, decodeURIComponent(p.id))],
     ['GET', '/api/guide', (q) => core.getGuide(+q.from || Date.now(), +q.to || Date.now() + 3 * 3600000)],
     ['GET', '/api/schedule', () => core.getSchedule()],
     ['GET', '/api/recordings', () => core.getRecordings()],
@@ -249,9 +259,9 @@ function createServer(core) {
           res.end(data);
         });
       }
-      const m = /^\/stream\/(live|rec)\/([^/]+)$/.exec(url.pathname);
+      const m = /^\/stream\/(live|rec|vod)\/([^/]+)$/.exec(url.pathname);
       if (m) {
-        const input = playerInput(core, m[1], decodeURIComponent(m[2]));
+        const input = m[1] === 'vod' ? await vod.input(decodeURIComponent(m[2])) : playerInput(core, m[1], decodeURIComponent(m[2]));
         const key = input.url;
         if (input.url && /\.m3u8(\?|$)/i.test(input.url)) Object.assign(input, { url: await bestVariant(input.url), hls: true });
         return streamVideo(core, req, res, input, { live: m[1] === 'live', seek: +q.t || 0, key });
