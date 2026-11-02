@@ -1,6 +1,6 @@
 // Registry of channel sources. To add a new kind of provider, write a module
 // with { type, label, fields, scan(config) } and list it here.
-const SOURCES = [require('./hdhomerun'), require('./free'), require('./m3u'), require('./demo')];
+const SOURCES = [require('./hdhomerun'), require('./free'), require('./xtream'), require('./m3u'), require('./demo')];
 
 const byType = Object.fromEntries(SOURCES.map((s) => [s.type, s]));
 

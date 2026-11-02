@@ -60,7 +60,7 @@ const SettingsView = {
     return Modal.open((m, close) => {
       m.innerHTML = `<div class="title">${existing ? 'Edit' : 'Add'} ${esc(def.label)}</div>
         <div class="field"><label>Name</label><input id="f-name" value="${esc(existing ? existing.name : def.label)}"></div>
-        ${def.fields.map((f) => `<div class="field"><label>${esc(f.label)}</label><input data-field="${f.key}" placeholder="${esc(f.placeholder || '')}" value="${esc(existing ? existing.config[f.key] || '' : '')}"></div>`).join('')}
+        ${def.fields.map((f) => `<div class="field"><label>${esc(f.label)}</label><input data-field="${f.key}"${f.secret ? ' type="password" autocomplete="off"' : ''} placeholder="${esc(f.placeholder || '')}" value="${esc(existing ? existing.config[f.key] || '' : '')}"></div>`).join('')}
         ${type === 'hdhomerun' ? '<div class="btn nav" id="findBtn">🔍 Find tuners on my network</div><div class="s" id="findOut"></div>' : ''}
         <div class="actions"><div class="btn nav primary" id="saveBtn">${existing ? 'Save' : 'Add and scan channels'}</div><div class="btn nav" id="cancelBtn">Cancel</div></div>`;
       const find = $('#findBtn', m);

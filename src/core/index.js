@@ -61,7 +61,9 @@ class DvrCore extends EventEmitter {
   }
 
   note(msg) {
-    const line = `${new Date().toLocaleString()}  ${msg}`;
+    // ffmpeg and download errors quote the stream address, which for IPTV logins holds the username and password.
+    const safe = String(msg).replace(/(\/(?:live|movie|series)\/)[^/\s]+\/[^/\s]+\//g, '$1***/***/').replace(/((?:username|password)=)[^&\s]+/gi, '$1***');
+    const line = `${new Date().toLocaleString()}  ${safe}`;
     this.log.unshift(line);
     this.log.length = Math.min(this.log.length, 200);
     console.log(line);
