@@ -103,41 +103,69 @@
     }
   }
 
+  const toInt = (ip) => ip.split('.').reduce((n, o) => n * 256 + +o, 0);
+  const toIp = (n) => [24, 16, 8, 0].map((s) => Math.floor(n / 2 ** s) % 256).join('.');
+  const maskBits = (mask) => (/^\d+\.\d+\.\d+\.\d+$/.test(mask || '') ? toInt(mask).toString(2).replace(/0+$/, '').length : 24);
+
+  // -> { ip, bits } (bits: the network's size, e.g. 24 for 255.255.255.0), or null.
   function myAddress() {
     return new Promise((resolve) => {
       if (isAndroid) {
-        try { return resolve(GTVAndroid.ipAddress() || null); } catch (_) { return resolve(null); }
+        try {
+          const [ip, bits] = String(GTVAndroid.ipAddress() || '').split('/'); // "192.168.5.40/22"
+          return resolve(ip ? { ip, bits: +bits || 24 } : null);
+        } catch (_) { return resolve(null); }
       }
       if (!isTizen) {
         // Testing in a normal browser: use the address this page came from.
         const h = location.hostname;
-        return resolve(/^\d+\.\d+\.\d+\.\d+$/.test(h) ? h : null);
+        return resolve(/^\d+\.\d+\.\d+\.\d+$/.test(h) ? { ip: h, bits: 24 } : null);
       }
       const tryProp = (props) => {
         if (!props.length) return resolve(null);
         try {
-          tizen.systeminfo.getPropertyValue(props[0], (n) => (n && n.ipAddress ? resolve(n.ipAddress) : tryProp(props.slice(1))), () => tryProp(props.slice(1)));
+          tizen.systeminfo.getPropertyValue(props[0], (n) => (n && n.ipAddress ? resolve({ ip: n.ipAddress, bits: maskBits(n.subnetMask) }) : tryProp(props.slice(1))), () => tryProp(props.slice(1)));
         } catch (_) { tryProp(props.slice(1)); }
       };
       tryProp(['ETHERNET_NETWORK', 'WIFI_NETWORK']);
     });
   }
 
-  // Ask every address on the TV's network (x.x.x.1-254) whether it is running GarysTV.
-  async function scan(onFound) {
-    const ip = await myAddress();
-    if (!ip) return [];
-    const prefix = ip.split('.').slice(0, 3).join('.');
-    const hosts = ip.startsWith('127.') ? ['127.0.0.1'] : Array.from({ length: 254 }, (_, i) => `${prefix}.${i + 1}`);
+  // Fire TV: the Android side checks which addresses have the GarysTV port open (quick, many at
+  // once), then only those are asked. A web page asking hundreds of empty addresses at once is slow
+  // enough that the real answer can miss its time limit.
+  let scanned = null;
+  window.GTV_SCANNED = (open) => { if (scanned) scanned(open); };
+  const openOnAndroid = (hosts) => new Promise((resolve) => { scanned = resolve; GTVAndroid.scan(hosts.join(','), PORT); });
+
+  async function probe(hosts, onFound) {
     const found = [];
+    const ask = isAndroid && GTVAndroid.scan ? await openOnAndroid(hosts) : hosts;
     let next = 0;
     await Promise.all(Array.from({ length: 32 }, async () => {
-      while (next < hosts.length) {
-        const hit = await ping(`http://${hosts[next++]}:${PORT}`);
+      while (next < ask.length) {
+        const hit = await ping(`http://${ask[next++]}:${PORT}`, 2500);
         if (hit) { found.push(hit); onFound(hit); }
       }
     }));
     return found;
+  }
+
+  // Ask the addresses on the TV's network whether they're running GarysTV. Home networks are
+  // usually x.x.x.1-254, but some routers hand out a bigger one (a /22 is four of those), so look
+  // next to the TV first, then the rest of the network (up to a /22; wider would take too long).
+  async function scan(onFound) {
+    const me = await myAddress();
+    if (!me) return [];
+    if (me.ip.startsWith('127.')) return probe(['127.0.0.1'], onFound);
+    const size = 2 ** (32 - Math.max(22, Math.min(30, me.bits)));
+    const start = Math.floor(toInt(me.ip) / size) * size;
+    const near = Math.floor(toInt(me.ip) / 256) * 256;
+    const inNet = (n) => n > start && n < start + size - 1; // not the network or broadcast address
+    const first = Array.from({ length: 256 }, (_, i) => near + i).filter(inNet);
+    const rest = Array.from({ length: size }, (_, i) => start + i).filter((n) => inNet(n) && (n < near || n >= near + 256));
+    const found = await probe(first.map(toIp), onFound);
+    return found.length || !rest.length ? found : probe(rest.map(toIp), onFound);
   }
 
   function normalize(addr) {

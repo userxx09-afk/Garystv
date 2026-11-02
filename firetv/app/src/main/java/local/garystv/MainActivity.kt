@@ -10,7 +10,12 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import java.net.Inet4Address
+import java.net.InetSocketAddress
 import java.net.NetworkInterface
+import java.net.Socket
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
+import kotlin.concurrent.thread
 
 // Fire TV side of GarysTV: the same screens as the PC and Samsung apps (bundled in
 // assets/www with tizen/tv.js), shown full screen. tv.js finds the GarysTV server on
@@ -81,15 +86,39 @@ class MainActivity : Activity() {
     }
 
     inner class Bridge {
-        // This Fire TV's home-network address; tv.js searches the addresses next to it for the server.
+        // This Fire TV's home-network address and the network's size, e.g. "192.168.5.40/22";
+        // tv.js searches that network for the server.
         @JavascriptInterface
         fun ipAddress(): String =
             NetworkInterface.getNetworkInterfaces().toList()
                 .filter { it.isUp && !it.isLoopback }
-                .flatMap { it.inetAddresses.toList() }
-                .filterIsInstance<Inet4Address>()
-                .firstOrNull { it.isSiteLocalAddress }
-                ?.hostAddress ?: ""
+                .flatMap { it.interfaceAddresses }
+                .firstOrNull { (it.address as? Inet4Address)?.isSiteLocalAddress == true }
+                ?.let { "${it.address.hostAddress}/${it.networkPrefixLength}" } ?: ""
+
+        // Which of these addresses have the GarysTV port open; answers through GTV_SCANNED([...]).
+        @JavascriptInterface
+        fun scan(hosts: String, port: Int) {
+            thread {
+                val pool = Executors.newFixedThreadPool(64)
+                val open = try {
+                    pool.invokeAll(hosts.split(',').filter { it.isNotBlank() }.map { host ->
+                        Callable {
+                            try {
+                                Socket().use { it.connect(InetSocketAddress(host, port), 700) }
+                                host
+                            } catch (_: Exception) {
+                                null
+                            }
+                        }
+                    }).mapNotNull { it.get() }
+                } finally {
+                    pool.shutdown()
+                }
+                val list = open.joinToString(",") { "\"$it\"" }
+                runOnUiThread { web.evaluateJavascript("window.GTV_SCANNED && GTV_SCANNED([$list])", null) }
+            }
+        }
 
         @JavascriptInterface
         fun exit() = runOnUiThread { finish() }
