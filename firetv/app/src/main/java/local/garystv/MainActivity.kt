@@ -2,12 +2,16 @@ package local.garystv
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.app.PendingIntent
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.os.Handler
 import android.os.Looper
 import android.view.KeyEvent
@@ -15,10 +19,14 @@ import android.view.WindowManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebView
+import org.json.JSONObject
+import java.io.File
+import java.net.HttpURLConnection
 import java.net.Inet4Address
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.Socket
+import java.net.URL
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 import kotlin.concurrent.thread
@@ -161,6 +169,16 @@ class MainActivity : Activity() {
         fun exit() = runOnUiThread { finish() }
 
         // VLC, the backup player. url is GarysTV's /direct/ address for the video.
+        // Updates: answers through GTV_UPDATE_INFO(info, error) and GTV_UPDATE_STATE(state, detail).
+        @JavascriptInterface
+        fun appVersion(): String = "${packageManager.getPackageInfo(packageName, 0).versionName} (build ${installedCode()})"
+
+        @JavascriptInterface
+        fun checkUpdate() { checkForUpdate() }
+
+        @JavascriptInterface
+        fun installUpdate() { downloadAndInstall() }
+
         @JavascriptInterface
         fun hasVlc(): Boolean = try {
             packageManager.getPackageInfo(VLC, 0)
@@ -187,7 +205,109 @@ class MainActivity : Activity() {
         }
     }
 
+    // ---------- updates ----------
+    // New versions come from the GitHub Release CI publishes on every change (version.json says
+    // which build it is). Android always shows its own Install button for an update; the first
+    // time it also asks to let GarysTV install apps.
+    private fun installedCode(): Long {
+        val info = packageManager.getPackageInfo(packageName, 0)
+        @Suppress("DEPRECATION")
+        return if (Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong()
+    }
+
+    private fun js(script: String) = runOnUiThread { web.evaluateJavascript(script, null) }
+
+    private fun fetch(url: String): HttpURLConnection {
+        var conn = URL(url).openConnection() as HttpURLConnection
+        var hops = 0
+        // GitHub sends release downloads on to its file servers.
+        while (conn.responseCode in 301..308 && hops++ < 5) {
+            val next = URL(conn.url, conn.getHeaderField("Location"))
+            conn.disconnect()
+            conn = next.openConnection() as HttpURLConnection
+        }
+        if (conn.responseCode != 200) throw Exception("GitHub answered ${conn.responseCode}")
+        return conn
+    }
+
+    private fun checkForUpdate() = thread {
+        try {
+            val text = fetch("$RELEASES/version.json").inputStream.bufferedReader().use { it.readText() }
+            val latest = JSONObject(text)
+            val code = latest.getLong("code")
+            val out = JSONObject().put("installed", installedCode()).put("version", latest.getString("version"))
+                .put("code", code).put("newer", code > installedCode())
+            js("window.GTV_UPDATE_INFO && GTV_UPDATE_INFO($out)")
+        } catch (e: Exception) {
+            js("window.GTV_UPDATE_INFO && GTV_UPDATE_INFO(null, ${JSONObject.quote(e.message ?: "No answer")})")
+        }
+    }
+
+    private fun downloadAndInstall() = thread {
+        try {
+            if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
+                runOnUiThread {
+                    startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+                }
+                js("window.GTV_UPDATE_STATE && GTV_UPDATE_STATE('permission')")
+                return@thread
+            }
+            val file = File(cacheDir, "update.apk")
+            val conn = fetch("$RELEASES/GarysTV.apk")
+            val total = conn.contentLengthLong
+            var done = 0L
+            var shown = -1
+            conn.inputStream.use { input ->
+                file.outputStream().use { output ->
+                    val buf = ByteArray(64 * 1024)
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        output.write(buf, 0, n)
+                        done += n
+                        val pct = if (total > 0) (done * 100 / total).toInt() else -1
+                        if (pct != shown && pct % 5 == 0) { shown = pct; js("window.GTV_UPDATE_STATE && GTV_UPDATE_STATE('downloading', $pct)") }
+                    }
+                }
+            }
+            val installer = packageManager.packageInstaller
+            val id = installer.createSession(PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL))
+            installer.openSession(id).use { session ->
+                session.openWrite("GarysTV.apk", 0, file.length()).use { out ->
+                    file.inputStream().use { it.copyTo(out) }
+                    session.fsync(out)
+                }
+                val flags = PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
+                val finished = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java).setAction(INSTALLED), flags)
+                session.commit(finished.intentSender)
+            }
+            js("window.GTV_UPDATE_STATE && GTV_UPDATE_STATE('confirm')")
+        } catch (e: Exception) {
+            js("window.GTV_UPDATE_STATE && GTV_UPDATE_STATE('error', ${JSONObject.quote(e.message ?: "Download failed")})")
+        }
+    }
+
+    // Android's answer to the install: show its Install screen, or say what went wrong.
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.action != INSTALLED) return
+        when (intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)) {
+            PackageInstaller.STATUS_PENDING_USER_ACTION -> {
+                @Suppress("DEPRECATION")
+                val confirm = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
+                if (confirm != null) startActivity(confirm)
+            }
+            PackageInstaller.STATUS_SUCCESS -> Unit // the new version starts in place of this one
+            else -> {
+                val why = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: "Android didn't install it"
+                js("window.GTV_UPDATE_STATE && GTV_UPDATE_STATE('error', ${JSONObject.quote(why)})")
+            }
+        }
+    }
+
     private companion object {
         const val VLC = "org.videolan.vlc"
+        const val RELEASES = "https://github.com/userxx09-afk/Garystv/releases/latest/download"
+        const val INSTALLED = "local.garystv.INSTALLED"
     }
 }

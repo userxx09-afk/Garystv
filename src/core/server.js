@@ -15,6 +15,7 @@ const { Tmdb } = require('./tmdb');
 const { ToolInstaller } = require('./installer');
 
 const UI_DIR = path.join(__dirname, '..', 'ui');
+const VERSION = require('../../package.json').version;
 const MPEGTS = require.resolve('mpegts.js/dist/mpegts.js');
 const HLSJS = require.resolve('hls.js/dist/hls.min.js');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg' };
@@ -205,7 +206,7 @@ function createServer(core) {
       // The TMDb key itself stays on the server; screens only learn whether there is one.
       settings: { ...core.settings, tmdbKey: undefined, tmdbKeyFrom: tmdb.keySource() }, types: core.describeTypes(), sources: core.sources, guides: core.guides,
       channels: core.channels, guideChannels: core.guideData.channels.map(({ id, names, number, providerName }) => ({ id, names, number, providerName })),
-      rules: core.rules, status: { ...core.status(), tools: tools.status(), platform: process.platform }, favLists: core.favLists,
+      rules: core.rules, status: { ...core.status(), tools: tools.status(), platform: process.platform, version: VERSION }, favLists: core.favLists,
     })],
     ['POST', '/api/favlists', (q, b) => core.addFavList(b)],
     ['PUT', '/api/favlists/:id', (q, b, p) => core.updateFavList(p.id, b)],
@@ -247,6 +248,10 @@ function createServer(core) {
     ['POST', '/api/timeshift/release', (q, b) => timeshift.release(b.channelId, b.viewer)],
     ['DELETE', '/api/recordings/:id', (q, b, p) => core.deleteRecording(p.id)],
     ['POST', '/api/tools/:name/install', (q, b, p) => tools.install(p.name)],
+    // The Windows app's own updates (src/app-updates.js); the home server is updated by hand.
+    ['GET', '/api/app-update', () => (core.appUpdater ? core.appUpdater.status() : { supported: false })],
+    ['POST', '/api/app-update/check', () => (core.appUpdater ? core.appUpdater.check() : null)],
+    ['POST', '/api/app-update/install', () => { if (!core.appUpdater) throw new Error('Updates are for the Windows app.'); return core.appUpdater.install(); }],
     ['POST', '/api/external-play', async (q, b) => {
       const vlc = findVlc(core.settings);
       if (!vlc) throw new Error('VLC is not installed.');

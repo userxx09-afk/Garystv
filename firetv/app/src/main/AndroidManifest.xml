@@ -2,6 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Updates: hands a new version to Android's installer (you still confirm it) -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- A TV app: no touchscreen, driven by the Fire TV remote. -->
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />

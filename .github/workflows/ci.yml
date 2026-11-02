@@ -8,6 +8,8 @@ on:
 env:
   # The Windows app's Electron isn't needed to test the engine or build the TV apps.
   ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+  # Every build has its own version, so the apps can tell an update from what they have.
+  GTV_VERSION: 0.2.${{ github.run_number }}
 
 jobs:
   engine:
@@ -58,6 +60,7 @@ jobs:
         working-directory: firetv
         env:
           GTV_VERSION_CODE: ${{ github.run_number }}
+          GTV_VERSION_NAME: ${{ env.GTV_VERSION }}
           GTV_KEYSTORE_PASSWORD: ${{ secrets.GTV_KEYSTORE_PASSWORD }}
         run: ./gradlew :app:assembleRelease :app:lintRelease
       - uses: actions/upload-artifact@v4
@@ -78,8 +81,48 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Build installer
-        run: npx electron-builder --win --publish never
+        run: |
+          npm version $env:GTV_VERSION --no-git-tag-version --allow-same-version
+          npx electron-builder --win --publish never
+          # latest.yml is what the installed app reads to find and check an update.
+          if (!(Test-Path dist/latest.yml)) { throw "electron-builder made no latest.yml" }
       - uses: actions/upload-artifact@v4
         with:
           name: GarysTV-Windows-installer
-          path: dist/GarysTV-Setup-*.exe
+          path: |
+            dist/GarysTV-Setup-*.exe
+            dist/GarysTV-Setup-*.exe.blockmap
+            dist/latest.yml
+
+  # The central place updates come from: a GitHub Release per change to main, holding the
+  # Fire TV / Android APK (with version.json, which the app checks) and the Windows installer
+  # (with latest.yml, which the Windows app checks). The newest Release is the update.
+  release:
+    name: Publish the update (GitHub Release)
+    needs: [engine, firetv, windows]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HAS_KEY: ${{ secrets.GTV_KEYSTORE_B64 != '' }}
+          CODE: ${{ github.run_number }}
+          NOTES: ${{ github.event.head_commit.message }}
+        run: |
+          if [ "$HAS_KEY" != "true" ]; then
+            echo "::warning::Not published: without the GTV_KEYSTORE_B64 secret the APK can't update the installed app."
+            exit 0
+          fi
+          mkdir rel
+          cp out/GarysTV-FireTV-apk/*.apk rel/GarysTV.apk
+          cp out/GarysTV-Windows-installer/* rel/
+          echo "{\"version\":\"$GTV_VERSION\",\"code\":$CODE,\"apk\":\"GarysTV.apk\"}" > rel/version.json
+          # A re-run of the same build replaces its Release.
+          gh release delete "v$GTV_VERSION" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "v$GTV_VERSION" rel/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "GarysTV $GTV_VERSION" --notes "${NOTES:-Update}" --latest

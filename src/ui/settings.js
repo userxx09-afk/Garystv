@@ -1,12 +1,12 @@
 // Settings: tuners & IPTV providers, guide sources, matching channels to the
 // guide, recording options and status.
-/* global App */
+/* global App, Updates, GTVAndroid */
 const SettingsView = {
   title: 'Settings',
   section: 'sources',
   chFilter: '',
   hints: [['↑↓←→', 'Move'], ['OK', 'Select'], ['Tab', 'Next field'], ['Esc', 'Back']],
-  sections: [['sources', 'Antenna & Providers'], ['guide', 'Guide data'], ['channels', 'Channels & matching'], ['recording', 'Recording'], ['media', 'Movies & Shows'], ['status', 'Status']],
+  sections: [['sources', 'Antenna & Providers'], ['guide', 'Guide data'], ['channels', 'Channels & matching'], ['recording', 'Recording'], ['media', 'Movies & Shows'], ['updates', 'Updates'], ['status', 'Status']],
 
   render(root) {
     root.innerHTML = `<div class="settings">
@@ -286,6 +286,67 @@ const SettingsView = {
     const del = $('#tmdbDel', pane);
     if (del) del.onclick = async () => { await api.put('/api/settings', { tmdbKey: '' }); toast('Key removed'); };
     $('#tmdbClear', pane).onclick = async () => { await api.post('/api/tmdb/clear'); toast('Saved movie & show info cleared. It is looked up again as you browse.'); };
+  },
+
+  // ---------- updates ----------
+  async updates(pane) {
+    const st = App.state.status;
+    const server = `<div class="s">${window.GTV_SERVER ? 'The GarysTV this screen is connected to' : 'This GarysTV'} is version <b>${esc(st.version)}</b>${st.platform === 'linux' ? ' on the home server, which is updated by hand' : ''}.</div>`;
+    if (Updates.android) return this.androidUpdates(pane, server);
+    if (Updates.windowsApp) return this.windowsUpdates(pane, server);
+    pane.innerHTML = `<div class="box"><h3>Updates</h3>${server}
+      <div>This screen comes from that GarysTV, so it changes whenever that is updated: there's nothing to install here.</div></div>`;
+  },
+
+  androidUpdates(pane, server) {
+    const paint = () => {
+      if (!document.body.contains(pane) || this.section !== 'updates') { Updates.listeners.delete(paint); return; }
+      const i = Updates.info, s = Updates.state;
+      const now = s === 'checking' ? 'Checking...'
+        : s === 'downloading' ? `Downloading the update${Updates.detail >= 0 ? ` (${Updates.detail}%)` : ''}...`
+          : s === 'confirm' ? 'Downloaded. Choose Install on the screen Android shows.'
+            : s === 'permission' ? 'Allow GarysTV to install apps (the screen Android opened), then choose Install again.'
+              : Updates.error ? `⚠️ ${esc(Updates.error)}`
+                : !i ? 'Not checked yet.' : i.newer ? `✨ Version <b>${esc(i.version)}</b> is out.` : '✅ This is the newest version.';
+      pane.innerHTML = `<div class="box"><h3>Updates</h3>
+        <div>This app: <b>${esc(GTVAndroid.appVersion())}</b></div>
+        <div>${now}</div>
+        <div class="actions">${i && i.newer && !s ? '<div class="btn nav primary" id="updInstall" data-key="upd-install">Install the update</div>' : ''}<div class="btn nav" id="updCheck" data-key="upd-check">Check now</div></div>
+        <label class="check"><input type="checkbox" id="updAuto" ${Updates.autoOffer ? 'checked' : ''}> When GarysTV starts, check for updates and offer to install them</label>
+        <div class="s">Updates come from GarysTV's page on GitHub. Android always asks you to confirm an install; the first time it also asks to let GarysTV install apps.</div>
+        ${server}</div>`;
+      const keep = Nav.key();
+      const inst = $('#updInstall', pane);
+      if (inst) inst.onclick = () => Updates.install();
+      $('#updCheck', pane).onclick = () => Updates.check();
+      $('#updAuto', pane).onchange = (e) => { Updates.autoOffer = e.target.checked; };
+      if (keep && keep.startsWith('upd-')) Nav.restore(keep);
+    };
+    Updates.listeners.add(paint);
+    paint();
+    if (!Updates.info && !Updates.state) Updates.check();
+  },
+
+  async windowsUpdates(pane, server) {
+    let u;
+    try { u = await api.get('/api/app-update'); } catch (e) { pane.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+    const auto = App.state.settings.autoUpdate !== false;
+    const now = !u.supported ? esc(u.reason || 'Updates work in the installed app.')
+      : u.ready ? `✨ Version <b>${esc(u.available)}</b> is downloaded. ${auto ? (u.busy ? 'It installs as soon as nothing is recording or about to.' : 'It installs in a few minutes.') : 'Restart GarysTV to install it.'}`
+        : u.available ? `Downloading version <b>${esc(u.available)}</b>${u.progress != null ? ` (${u.progress}%)` : ''}...`
+          : u.error ? `⚠️ Couldn't check: ${esc(u.error)}`
+            : u.checkedAt ? `✅ This is the newest version (checked ${fmt.when(u.checkedAt)}).` : 'Checking soon...';
+    pane.innerHTML = `<div class="box"><h3>Updates</h3>
+      <div>This app: <b>${esc(u.current || App.state.status.version)}</b></div>
+      <div>${now}</div>
+      <div class="actions">${u.ready ? '<div class="btn nav primary" id="updNow">Restart and update now</div>' : ''}${u.supported ? '<div class="btn nav" id="updCheck">Check now</div>' : ''}</div>
+      <label class="check"><input type="checkbox" id="updAuto" ${auto ? 'checked' : ''}> Install updates automatically (only while nothing is recording or about to)</label>
+      <div class="s">Updates come from GarysTV's page on GitHub and are checked every few hours. Timers, recordings and settings are kept.</div></div>`;
+    const now2 = $('#updNow', pane);
+    if (now2) now2.onclick = async () => { try { await api.post('/api/app-update/install'); toast('Updating. GarysTV starts again in a moment.'); } catch (e) { toast(e.message); } };
+    const chk = $('#updCheck', pane);
+    if (chk) chk.onclick = async () => { await api.post('/api/app-update/check'); toast('Checking for updates...'); setTimeout(() => { if (this.section === 'updates') App.render(); }, 3000); };
+    $('#updAuto', pane).onchange = (e) => api.put('/api/settings', { autoUpdate: e.target.checked });
   },
 
   // ---------- status ----------

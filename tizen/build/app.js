@@ -1,6 +1,6 @@
 // App shell: screen switching, remote-style keys, live updates from the
 // engine, and the record / series-timer dialogs shared by several screens.
-/* global HomeView, GuideView, DvrView, TimersView, SearchView, SettingsView, MoviesView, ShowsView, Player */
+/* global HomeView, GuideView, DvrView, TimersView, SearchView, SettingsView, MoviesView, ShowsView, Player, Updates */
 const VIEWS = { home: HomeView, guide: GuideView, movies: MoviesView, shows: ShowsView, dvr: DvrView, timers: TimersView, search: SearchView, settings: SettingsView };
 
 const App = {
@@ -395,5 +395,6 @@ function tickClock() {
   App.viewName = VIEWS[location.hash.slice(1)] ? location.hash.slice(1) : 'home';
   await App.render();
   if (!window.GTV_SERVER) history.pushState({ gtv: 1 }, '', location.hash); // the TV apps have their own Back
+  Updates.startCheck();
   connectEvents();
 })();

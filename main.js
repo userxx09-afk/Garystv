@@ -5,6 +5,7 @@ const { app, BrowserWindow, Tray, Menu, nativeImage, powerSaveBlocker, globalSho
 const path = require('path');
 const { DvrCore } = require('./src/core');
 const { createServer } = require('./src/core/server');
+const { setupUpdates } = require('./src/app-updates');
 
 const args = process.argv.slice(1);
 const flag = (name) => { const a = args.find((x) => x.startsWith(`--${name}`)); return a ? (a.split('=')[1] ?? true) : null; };
@@ -101,6 +102,7 @@ app.whenReady().then(async () => {
   await core.init();
   port = await listen(createServer(core), core.settings.port);
   core.tools.autoInstall(); // ffmpeg and VLC, if this PC doesn't have them yet
+  setupUpdates(app, core);
 
   app.setLoginItemSettings({ openAtLogin: !!core.settings.startWithWindows, args: ['--hidden'] });
   core.on('changed', () => {

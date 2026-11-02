@@ -1,6 +1,6 @@
 {
   "name": "garystv",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Home DVR for over-the-air antenna tuners and IPTV",
   "main": "main.js",
   "private": true,
@@ -30,9 +30,17 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "GarysTV"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "userxx09-afk",
+        "repo": "Garystv"
+      }
+    ]
   },
   "dependencies": {
+    "electron-updater": "^6.8.11",
     "fast-xml-parser": "^5.11.2",
     "hls.js": "^1.5.17",
     "mpegts.js": "^1.8.2"
