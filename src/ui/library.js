@@ -3,15 +3,15 @@
 // episodes. Where you stopped is remembered, so "Continue watching" picks up there.
 // The panel on the right shows TMDb's poster, rating and synopsis for the
 // highlighted title (core/tmdb.js), or says why it can't.
-/* global App, Player */
+/* global App, Player, SearchView */
 const PAGE = 60; // posters drawn at a time; "More" adds the next lot (TVs slow down with thousands)
 
 function libraryView(kind) {
   const movies = kind === 'movies';
   const view = {
     title: movies ? 'Movies' : 'Shows',
-    hints: [['←→↑↓', 'Move'], ['OK', movies ? 'Watch' : 'Open'], ['Esc', 'Back']],
-    cats: null, catId: null, items: {}, shown: PAGE, info: null, show: null, season: null, loadTimer: null, infoTimer: null, looked: new Map(),
+    hints: [['←→↑↓', 'Move'], ['OK', movies ? 'Watch' : 'Open'], ['M', 'Menu'], ['Esc', 'Back']],
+    cats: null, catId: null, items: {}, shown: PAGE, info: null, show: null, fromElsewhere: false, season: null, loadTimer: null, infoTimer: null, looked: new Map(),
 
     // TMDb's answer for a title -> { status: found | none | nokey | error, ... }. Kept for this visit.
     tmdb(name, year) {
@@ -138,7 +138,9 @@ function libraryView(kind) {
         if (t.status === 'found') { this.show.plot ||= t.overview; this.show.rating ||= t.rating; this.show.year ||= t.year; }
         const first = this.show.seasons[0];
         this.season = first && first.season;
-        App.render(first && first.episodes[0] ? `e-${first.episodes[0].id}` : null);
+        const focus = first && first.episodes[0] ? `e-${first.episodes[0].id}` : null;
+        this.fromElsewhere = App.view !== this; // opened from Search: Back goes back there
+        if (this.fromElsewhere) App.go(kind, { focus }); else App.render(focus);
         return;
       }
       let m = v;
@@ -205,12 +207,34 @@ function libraryView(kind) {
     closeShow() {
       const id = this.show.id;
       this.show = null;
-      App.render(`p-${id}`);
+      if (this.fromElsewhere) { this.fromElsewhere = false; App.back(); } else App.render(`p-${id}`);
     },
 
-    onKey(e) {
-      if ((e.key === 'Escape' || e.key === 'Backspace') && this.show) { this.closeShow(); return true; }
-      return false;
+    onBack() {
+      if (!this.show) return false;
+      this.closeShow();
+      return true;
+    },
+
+    // Hold OK / M / a long press on a poster or an episode.
+    menu() {
+      const d = (Nav.current && Nav.current.dataset) || {};
+      const items = [];
+      const all = this.items[this.catId] || [];
+      const v = d.item && all.find((x) => x.id === d.item);
+      const c = d.cont && this.continueItems().find((x) => x.id === d.cont);
+      if (v) items.push({ label: movies ? '▶ Watch...' : '▦ Episodes', run: () => this.open(v), cls: 'primary' });
+      if (c) {
+        items.push({ label: `▶ Resume from ${fmt.clock(c.position)}`, run: () => Player.play('vod', c.id, { offset: c.position, item: c }), cls: 'primary' });
+        if (c.showId) items.push({ label: 'All episodes', run: () => this.open({ id: c.showId, name: c.title, poster: c.poster }) });
+        items.push({ label: '✕ Take off Continue watching', run: async () => { await api.put(`/api/vod/progress/${encodeURIComponent(c.id)}`, { position: 0 }); App.render(); } });
+      }
+      if (d.ep) items.push({ label: '▶ Play this episode', run: () => Nav.current.click(), cls: 'primary' });
+      if (this.show) items.push({ label: `‹ All ${this.title.toLowerCase()}`, run: () => this.closeShow() });
+      items.push({ label: `⌕ Search ${this.title.toLowerCase()}`, run: () => { SearchView.kind = kind; App.go('search'); } });
+      items.push({ label: '⟳ Reload the list', run: () => { this.cats = null; this.items = {}; App.render(); } });
+      const name = v ? v.name : c ? c.title : this.show ? this.show.name : this.title;
+      return { title: name, items };
     },
   };
   return view;

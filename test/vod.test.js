@@ -22,6 +22,13 @@ function fakePanel() {
         { stream_id: 2, name: 'New Movie', added: '200', year: '2026' },
       ]);
     }
+    if (a === 'get_vod_streams' && !q.get('category_id')) { // the whole library, for search
+      return send([
+        { stream_id: 3, name: 'EN - Spider-Man (2002)', added: '50' },
+        { stream_id: 4, name: 'The Amazing Spider-Man', added: '300' },
+        { stream_id: 5, name: 'Cars', added: '10' },
+      ]);
+    }
     if (a === 'get_vod_info') return send({ info: { plot: 'Things happen.', duration_secs: 5400, genre: 'Action' }, movie_data: { name: 'New Movie' } });
     if (a === 'get_series_categories') return send([{ category_id: '9', category_name: 'US Shows' }]);
     if (a === 'get_series') return send([{ series_id: 44, name: 'A Show', cover: 'http://p/s.jpg', last_modified: '5' }]);
@@ -60,6 +67,12 @@ test('Movies and shows from an IPTV provider', async () => {
     assert.deepEqual(show.seasons.map((s) => [s.season, s.episodes.map((e) => e.title)]), [[1, ['One-one', 'One-two']], [2, ['Two-one']]]);
     assert.equal((await vod.input(show.seasons[1].episodes[0].id)).url, `${base}/series/u1/p%20w/902.mp4`);
     await assert.rejects(vod.input('m~src1~1;rm~mkv'), /Not found/);
+
+    // Search: every word must match, punctuation doesn't matter, closest name first.
+    assert.deepEqual((await vod.search('movies', 'spider man')).map((m) => m.name), ['Spider-Man (2002)', 'The Amazing Spider-Man']);
+    assert.deepEqual((await vod.search('movies', 'amazing spider')).map((m) => m.id), ['m~src1~4~mp4']);
+    assert.deepEqual(await vod.search('movies', '  '), []);
+    assert.deepEqual((await vod.search('shows', 'show')).map((s) => s.name), ['A Show']);
 
     // Where you stopped: kept part way through, dropped near the end.
     vod.saveProgress('m~src1~2~mp4', { position: 600, duration: 5400, title: 'New Movie' });

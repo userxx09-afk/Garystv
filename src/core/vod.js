@@ -57,12 +57,23 @@ class Vod {
   async items(kind, categoryId) {
     const [srcId, catId] = String(categoryId).split('~');
     const src = this.provider(srcId);
-    const action = kind === 'shows' ? 'get_series' : 'get_vod_streams';
-    const list = await this.cached(`${kind}:${categoryId}`, () => this.call(src, action, { category_id: catId }));
-    return (Array.isArray(list) ? list : []).map((v) => (kind === 'shows'
-      ? { id: `s~${src.id}~${v.series_id}`, name: clean(v.name), poster: v.cover || '', year: year(v), rating: rating(v), plot: v.plot || '', genre: v.genre || '', added: +v.last_modified || 0 }
-      : { id: `m~${src.id}~${v.stream_id}~${v.container_extension || 'mp4'}`, name: clean(v.name), poster: v.stream_icon || '', year: year(v), rating: rating(v), added: +v.added || 0 }))
-      .sort((a, b) => b.added - a.added);
+    const list = await this.cached(`${kind}:${categoryId}`, () => this.call(src, listAction(kind), { category_id: catId }));
+    return toItems(kind, src, list).sort((a, b) => b.added - a.added);
+  }
+
+  // Titles anywhere in the library whose name has every word typed, best match first.
+  // The whole list is read once (it can be tens of thousands) and kept like a category.
+  async search(kind, q) {
+    const want = wordsOf(q).join(' ');
+    if (!want) return [];
+    const lists = await Promise.all(this.providers().map((src) => this.cached(`${kind}:all:${src.id}`,
+      () => this.call(src, listAction(kind)).then((list) => toItems(kind, src, list).map((v) => ({ v, words: wordsOf(v.name).join(' ') }))))
+      .catch((e) => { this.core.note(`${src.name}: ${kind}: ${e.message}`); return []; })));
+    const each = want.split(' ');
+    const score = (w) => (w === want ? 0 : w.startsWith(want) ? 1 : 2);
+    return lists.flat().filter((x) => each.every((w) => x.words.includes(w)))
+      .sort((a, b) => score(a.words) - score(b.words) || b.v.added - a.v.added)
+      .slice(0, 60).map((x) => x.v);
   }
 
   // A movie's details (plot, length...) for its info screen.
@@ -118,6 +129,15 @@ class Vod {
   continueList() { return Object.entries(this.progress).map(([id, p]) => ({ id, ...p })).sort((a, b) => b.at - a.at); }
 }
 
+const listAction = (kind) => (kind === 'shows' ? 'get_series' : 'get_vod_streams');
+function toItems(kind, src, list) {
+  return (Array.isArray(list) ? list : []).map((v) => (kind === 'shows'
+    ? { id: `s~${src.id}~${v.series_id}`, name: clean(v.name), poster: v.cover || '', year: year(v), rating: rating(v), plot: v.plot || '', genre: v.genre || '', added: +v.last_modified || 0 }
+    : { id: `m~${src.id}~${v.stream_id}~${v.container_extension || 'mp4'}`, name: clean(v.name), poster: v.stream_icon || '', year: year(v), rating: rating(v), added: +v.added || 0 }));
+}
+// Lower-case words without punctuation, so "Spider-Man" is found by "spider man".
+function wordsOf(t) { return String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').split(/[^a-z0-9]+/).filter(Boolean); }
+
 // Providers often prefix names with a language tag ("EN - ") and suffix the year.
 function clean(name) { return String(name || '').replace(/^\s*[A-Z]{2,3}\s*[-|:]\s+/, '').trim() || 'Untitled'; }
 function year(v) {
@@ -126,4 +146,4 @@ function year(v) {
 }
 function rating(v) { const r = parseFloat(v.rating); return r > 0 ? Math.round(r * 10) / 10 : null; }
 
-module.exports = { Vod, clean };
+module.exports = { Vod, clean, wordsOf };

@@ -3,7 +3,7 @@
 //     and sets window.GTV_SERVER; the screens wait on window.GTV_READY before starting.
 //  2. Turns the TV remote's buttons into the keys the screens already understand.
 //     The Fire TV app (firetv/) passes its remote buttons in as Samsung codes via GTV_REMOTE.
-/* global tizen, GTVAndroid, Player, GuideView, App, setHints:writable */
+/* global tizen, GTVAndroid, Player, setHints:writable */
 (function () {
   const PORT = 5480;
   const SAVED = 'gtv.server';
@@ -53,8 +53,36 @@
     428: () => (watching() ? 'ChannelDown' : 'PageDown'), // CH ▼
   };
   for (let d = 0; d <= 9; d++) KEYS[48 + d] = String(d);
-  // Fire TV: OK held down (the Android side tells a hold from a press). Watching: the options menu; Guide: favorites.
-  KEYS[10001] = () => (watching() || (typeof App !== 'undefined' && App.view === GuideView) ? 'ContextMenu' : 'Enter'); // Guide: favorites
+  // Fire TV: OK held down (the Android side tells a hold from a press): the menu for wherever you are.
+  KEYS[10001] = 'ContextMenu';
+
+  const send = (key) => (document.activeElement || document.body).dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+
+  // Samsung: OK held down. The remote repeats the key while it's held, so a repeat means a hold
+  // (the menu); letting go first is a press. Without either (an old TV that sends no key-up) it
+  // counts as a press after a moment. A text box gets OK straight away, for its keyboard.
+  const hold = { timer: null, held: false, waiting: false };
+  function okHold(e) {
+    if (!isTizen || e.keyCode !== 13 || connect.open) return false;
+    const a = document.activeElement;
+    if (a && ['INPUT', 'SELECT', 'TEXTAREA'].includes(a.tagName)) return false;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (e.type === 'keyup') {
+      clearTimeout(hold.timer);
+      if (hold.waiting && !hold.held) send('Enter');
+      hold.waiting = false;
+    } else if (!hold.waiting) {
+      Object.assign(hold, { waiting: true, held: false });
+      hold.timer = setTimeout(() => { if (hold.waiting && !hold.held) { hold.waiting = false; send('Enter'); } }, 1500);
+    } else if (!hold.held) {
+      hold.held = true;
+      clearTimeout(hold.timer);
+      send('ContextMenu');
+    }
+    return true;
+  }
+  window.addEventListener('keyup', okHold, true);
 
   function onRemote(e) {
     if (!e.isTrusted && !e.gtvRemote) return; // our own re-sent key (gtvRemote: a simulated remote press, for testing)
@@ -63,14 +91,14 @@
       if (connect.onKey(e)) e.preventDefault();
       return;
     }
+    if (okHold(e)) return;
     let key = KEYS[e.keyCode];
     if (typeof key === 'function') key = key();
     if (!key || key === e.key) return;
     e.preventDefault();
     e.stopImmediatePropagation();
     if (key === 'ChannelUp' || key === 'ChannelDown') { Player.surf(key === 'ChannelUp' ? 1 : -1); return; }
-    const target = document.activeElement || document.body;
-    target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+    send(key);
   }
   window.addEventListener('keydown', onRemote, true);
   // Fire TV: buttons the Android side catches (Back, ≡, play/pause, rewind...), as Samsung codes.
@@ -79,7 +107,7 @@
   // Show remote buttons in the hint bar instead of keyboard keys.
   const HINT = isAndroid
     // Fire TV remotes: no colored or guide buttons (Home has My Recordings, Timers, Search and the Guide); ≡ records.
-    ? { R: ['≡'], M: ['HOLD OK'], D: null, T: null, S: null, G: null, Esc: ['BACK'], 'PgUp/PgDn': ['CH ▲▼'], '[ ]': ['⏪ ⏩'], Tab: null, Del: null, Type: ['OK', '', 'Type'] }
+    ? { R: ['≡'], M: ['HOLD OK', '', 'Menu'], D: null, T: null, S: null, G: null, Esc: ['BACK'], 'PgUp/PgDn': ['CH ▲▼'], '[ ]': ['⏪ ⏩'], Tab: null, Del: null, Type: ['OK', '', 'Type'] }
     : { R: ['●', 'k-red'], D: ['●', 'k-green'], T: ['●', 'k-yellow'], S: ['●', 'k-blue'], G: ['GUIDE'], M: ['TOOLS'], Esc: ['BACK'],
       'PgUp/PgDn': ['CH ▲▼'], '[ ]': ['⏪ ⏩'], Tab: null, Del: null, Type: ['OK', '', 'Type'] };
   function tvHints(list) {
@@ -87,7 +115,7 @@
       if (!(k in HINT)) return [[k, label, cls]];
       if (!HINT[k]) return [];
       const [nk, ncls, nlabel] = HINT[k];
-      return [[nk, nlabel || label, ncls || cls]];
+      return [[nk, nlabel || label, ncls || cls, k]]; // k: what a click on the hint presses
     });
   }
 

@@ -252,3 +252,26 @@ html.tv .osd-btns { display: none; } /* the remote's buttons do these on the TV 
 .seasons { display: flex; gap: .5rem; flex-wrap: wrap; }
 .seasons .btn.picked:not(.focus) { border-color: var(--red2); }
 .show .list .item .s { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; white-space: normal; }
+
+/* ---------- top buttons, clickable hints, menus ---------- */
+.brand { cursor: pointer; }
+.topnav { display: flex; gap: .35rem; }
+.topnav span { padding: .3rem .8rem; border-radius: 1rem; background: var(--panel); border: 1px solid var(--line); color: var(--muted); font-size: .9rem; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.topnav span:hover { color: var(--text); border-color: var(--focus-bg); }
+.hints .press { cursor: pointer; }
+.hints .press:hover b { border-color: var(--focus-bg); }
+.modal .menu-list .gap { margin-top: .7rem; }
+@media (max-width: 900px) { .crumb { display: none; } .topnav span { padding: .3rem .55rem; } }
+
+/* the bar above the guide: all channels, favorites lists, filter */
+.g-bar { display: flex; gap: .5rem; align-items: center; padding: 0 0 .6rem; flex-wrap: wrap; }
+.g-bar .spacer { flex: 1; }
+.chip { padding: .3rem 1rem; border-radius: 2rem; background: var(--panel); border: 2px solid var(--line); cursor: pointer; font-weight: 600; font-size: .95rem; white-space: nowrap; }
+.chip.on:not(.focus) { background: var(--red); border-color: var(--red); }
+
+/* search results */
+.shead { color: var(--yellow); font-weight: 700; text-transform: uppercase; letter-spacing: .08em; font-size: .85rem; padding: .7rem .2rem .1rem; flex: none; }
+.item .slogo { height: 1.6rem; max-width: 3.5rem; object-fit: contain; }
+.item .sposter { width: 2.6rem; height: 3.9rem; object-fit: cover; border-radius: .3rem; flex: none; }
+.item.more .t { color: var(--muted); }
+#skinds:empty { display: none; }

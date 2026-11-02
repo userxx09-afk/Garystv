@@ -14,17 +14,47 @@ const App = {
     $('#recText').textContent = n > 1 ? `Recording ${n} shows` : 'Recording';
   },
 
-  go(name, { push = true } = {}) {
+  go(name, { push = true, focus = null } = {}) {
     if (!VIEWS[name]) name = 'home';
     if (Player.mode === 'full' || (Player.mode === 'pip' && name !== 'guide')) Player.stop();
     if (push && this.viewName !== name) this.history.push(this.viewName);
     this.viewName = name;
-    if (location.hash !== `#${name}`) history.replaceState(null, '', `#${name}`);
-    this.render();
+    if (location.hash !== `#${name}`) history.replaceState(history.state, '', `#${name}`);
+    this.render(focus);
+  },
+
+  // The logo: straight to Home from anywhere, closing whatever is open.
+  home() {
+    while (Modal.closeTop());
+    if (Player.mode !== 'off') Player.stop();
+    for (const v of [MoviesView, ShowsView]) { v.show = null; v.fromElsewhere = false; }
+    DvrView.folder = null;
+    this.history = [];
+    this.go('home', { push: false });
+  },
+
+  // Hold OK (TV), M, right-click or a long press: what you can do here, then where you can go.
+  // A screen's menu() -> { title, body, items: [{ label, run, cls }] } for what's highlighted.
+  async menu() {
+    if (Modal.top()) return;
+    const view = this.view;
+    let own = {};
+    try { own = (view.menu && await view.menu()) || {}; } catch (e) { toast(e.message); }
+    const items = (own.items || []).map((c) => ({ ...c, value: c.run }));
+    const places = [['home', '⌂ Home'], ['guide', '▦ Guide'], ['movies', '🎬 Movies'], ['shows', '📺 Shows'], ['dvr', '● My Recordings'], ['search', '⌕ Search'], ['settings', '⚙ Settings']]
+      .filter(([k]) => k !== this.viewName || (view.show || view.folder));
+    places.forEach(([k, label], i) => items.push({ label, value: () => (k === 'home' ? this.home() : this.go(k)), cls: i === 0 ? 'gap' : '' }));
+    items.push({ label: 'Close', value: null });
+    const run = await Modal.menu(own.title || view.title || 'Menu', own.body || '', items);
+    if (typeof run === 'function') {
+      try { await run(); } catch (e) { toast(e.message); }
+    }
   },
 
   back() {
     if (Modal.closeTop()) return;
+    if (Player.mode === 'full') { Player.stop(); this.render(); return; }
+    if (this.view && this.view.onBack && this.view.onBack()) return; // a screen's own step back (a folder, a show)
     if (Player.mode === 'pip') { Player.setMode('full'); Player.showOsd(); return; }
     const prev = this.history.pop();
     if (!prev && this.viewName === 'home' && window.GTV_EXIT) { window.GTV_EXIT(); return; } // TV: Back on Home leaves the app
@@ -56,6 +86,48 @@ const App = {
       season: p.season ?? null, episode: p.episode ?? null, categories: p.categories || [], isNew: !!p.isNew, programId: p.programId || '',
     });
     toast(`● Will record ${p.title}`);
+    await this.loadAll();
+  },
+
+  // Recording choices for a channel and the show on it, for the hold-OK menus.
+  recordItems(row, p) {
+    const now = Date.now();
+    const items = [];
+    const active = this.recordings.find((r) => r.status === 'recording' && r.channelId === row.id);
+    if (active) {
+      items.push({
+        label: `■ Stop recording "${active.title}"`, cls: 'danger',
+        run: async () => {
+          const rule = this.state.rules.find((x) => x.id === active.ruleId);
+          if (rule && rule.type === 'once') await api.del(`/api/rules/${rule.id}`);
+          else await api.post('/api/jobs/skip', { id: active.jobId });
+          toast('Recording stopped. It is saved in My Recordings.');
+          await this.loadAll();
+        },
+      });
+    }
+    if (p && !p.filler && p.end > now) {
+      const job = this.jobFor(row, p);
+      if (job && job.status !== 'skipped') {
+        if (job.status !== 'recording') items.push({ label: `✕ Don't record "${p.title}"`, run: () => this.cancelProgram(row, p) });
+      } else items.push({ label: `● Record "${p.title}"`, run: () => this.recordOnce(row, p) });
+      const series = this.seriesRuleFor(p);
+      items.push({ label: series ? '●● Change the series timer...' : `●● Record every episode of "${p.title}"...`, run: () => this.seriesDialog(row, p, series) });
+    }
+    items.push({ label: '● Record now for...', run: () => this.recordNowMenu(row, p) });
+    items.push({ label: '⏱ Record at a set time...', run: () => this.manualDialog(row.id) });
+    return items;
+  },
+
+  // Starts now and ends exactly when chosen: no early/late padding.
+  async recordNowMenu(row, p) {
+    const choices = [[30, '30 minutes'], [60, '1 hour'], [120, '2 hours'], [180, '3 hours'], [240, 'Until I stop it (up to 4 hours)']]
+      .map(([min, label]) => ({ label: `● ${label}`, value: min }));
+    const min = await Modal.menu(`Record ${row.number} ${row.name} now`, '', [...choices, { label: 'Cancel', value: null }]);
+    if (!min) return;
+    const now = Date.now();
+    await api.post('/api/rules', { type: 'once', channelId: row.id, start: now, end: now + min * 60000, title: p && !p.filler ? p.title : row.name, prePad: 0, postPad: 0, categories: [] });
+    toast(min === 240 ? 'Recording until you stop it.' : `Recording ${row.name} for ${choices.find((c) => c.value === min).label.slice(2)}`);
     await this.loadAll();
   },
 
@@ -182,7 +254,7 @@ document.addEventListener('keydown', (e) => {
   const typing = a && ['INPUT', 'SELECT', 'TEXTAREA'].includes(a.tagName);
   if (typing) {
     if (App.view && App.view.onKey && !Modal.top() && App.view.onKey(e)) e.preventDefault();
-    else if (e.key === 'Escape') { a.blur(); if (!a.value && !Modal.top()) App.back(); e.preventDefault(); } // empty box: Back leaves the screen
+    else if (e.key === 'Escape') { a.blur(); App.back(); e.preventDefault(); }
     return;
   }
   if (Player.onKey(e)) { e.preventDefault(); return; }
@@ -193,10 +265,65 @@ document.addEventListener('keydown', (e) => {
   }
   if (App.view && App.view.onKey && App.view.onKey(e)) { e.preventDefault(); return; }
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if ((k === 'ContextMenu' || k === 'm') && !(e.ctrlKey || e.altKey)) { App.menu(); e.preventDefault(); return; }
   const jumps = { g: 'guide', d: 'dvr', t: 'timers', s: 'search', h: 'home', Home: 'home', F1: 'guide' };
   if (jumps[k] && !(e.ctrlKey || e.altKey)) { App.go(jumps[k]); e.preventDefault(); return; }
   if (k === 'Escape' || k === 'Backspace') { App.back(); e.preventDefault(); return; }
   if (Nav.handle(e)) e.preventDefault();
+});
+
+// ---------- mouse, touch and the browser's Back ----------
+// Holding the mouse button or a finger on something (or right-clicking it) is the same as
+// holding OK on the remote: it's highlighted and the menu comes up.
+const press = { timer: null, held: false, x: 0, y: 0 };
+function pick(target) {
+  const el = target.closest && target.closest('.nav');
+  if (el && Nav.scope().contains(el)) Nav.focus(el, { scroll: false });
+  const cell = target.closest && target.closest('.g-p');
+  if (cell && App.view === GuideView) GuideView.select(cell);
+}
+function holdMenu(target) {
+  if (Modal.top() || !$('#app').contains(target)) return;
+  press.held = true;
+  pick(target);
+  App.menu();
+}
+document.addEventListener('pointerdown', (e) => {
+  clearTimeout(press.timer);
+  press.held = false;
+  if (e.button !== 0) return;
+  Object.assign(press, { x: e.clientX, y: e.clientY });
+  press.timer = setTimeout(() => holdMenu(e.target), 650);
+});
+document.addEventListener('pointermove', (e) => { if (Math.hypot(e.clientX - press.x, e.clientY - press.y) > 12) clearTimeout(press.timer); });
+['pointerup', 'pointercancel'].forEach((t) => document.addEventListener(t, () => clearTimeout(press.timer)));
+document.addEventListener('contextmenu', (e) => {
+  if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return; // copy and paste
+  e.preventDefault();
+  clearTimeout(press.timer);
+  if (!press.held) holdMenu(e.target);
+});
+// The click that ends a long press doesn't also open what was under it.
+document.addEventListener('click', (e) => { if (press.held) { press.held = false; e.stopPropagation(); e.preventDefault(); } }, true);
+
+$('#brand').onclick = () => App.home();
+$('#topnav').onclick = (e) => {
+  const t = e.target.closest('[data-top]');
+  if (!t) return;
+  const k = t.dataset.top;
+  if (k === 'back') App.back();
+  else if (k === 'home') App.home();
+  else if (k === 'menu') App.menu();
+  else App.go(k);
+};
+
+// A phone or browser's own Back button steps back in GarysTV instead of leaving the page
+// (one extra history entry is kept for it; on Home with nothing open it leaves as usual).
+function atStart() { return !Modal.top() && Player.mode === 'off' && App.viewName === 'home' && !App.history.length; }
+window.addEventListener('popstate', () => {
+  if (atStart()) return;
+  App.back();
+  history.pushState({ gtv: 1 }, '', location.hash);
 });
 
 // ---------- live updates ----------
@@ -229,5 +356,6 @@ function tickClock() {
   await App.loadAll();
   App.viewName = VIEWS[location.hash.slice(1)] ? location.hash.slice(1) : 'home';
   await App.render();
+  if (!window.GTV_SERVER) history.pushState({ gtv: 1 }, '', location.hash); // the TV apps have their own Back
   connectEvents();
 })();

@@ -314,6 +314,7 @@ const Player = {
     choices.push({ label: $('#video').paused ? '▶ Play' : '❚❚ Pause', value: 'pause' });
     choices.push({ label: '▦ Guide', value: 'guide' });
     choices.push({ label: '■ Stop watching', value: 'stopWatching' });
+    choices.push({ label: '⌂ Home', value: 'home' });
     choices.push({ label: 'Cancel', value: null });
     const v = await Modal.menu(`${ch.number} ${ch.name}`, p && !p.filler ? `<div class="s">${esc(p.title)} · until ${fmt.time(p.end)}</div>` : '', choices);
     try {
@@ -331,7 +332,22 @@ const Player = {
       else if (v === 'pause') this.togglePause();
       else if (v === 'guide') { this.setMode('pip'); App.go('guide'); }
       else if (v === 'stopWatching') { this.stop(); App.render(); }
+      else if (v === 'home') App.home();
     } catch (e) { toast(e.message); }
+  },
+
+  // Hold OK / menu key while watching a recording, movie or episode.
+  async playbackMenu() {
+    const r = this.rec || {};
+    const choices = [{ label: $('#video').paused ? '▶ Play' : '❚❚ Pause', value: 'pause', cls: 'primary' }];
+    if (this.position() > 30) choices.push({ label: '⟲ Start over', value: 'over' });
+    choices.push({ label: '↺ Back 5 minutes', value: 'back5' }, { label: '■ Stop watching', value: 'stop' }, { label: '⌂ Home', value: 'home' }, { label: 'Cancel', value: null });
+    const v = await Modal.menu(r.title || 'Playing', r.subtitle ? `<div class="s">${esc(r.subtitle)}</div>` : '', choices);
+    if (v === 'pause') this.togglePause();
+    if (v === 'over') this.seekTo(0);
+    if (v === 'back5') this.seek(-300);
+    if (v === 'stop') { this.stop(); App.render(); }
+    if (v === 'home') App.home();
   },
 
   surf(delta) {
@@ -356,7 +372,7 @@ const Player = {
     if (this.channel && k === 'ArrowDown') { this.surf(1); return true; }
     if (this.channel && (k === 'g' || k === 'G')) { this.setMode('pip'); App.go('guide'); return true; }
     if (this.channel && (k === 'r' || k === 'R')) { this.recordMenu(); return true; }
-    if (this.channel && k === 'ContextMenu') { this.optionsMenu(); return true; }
+    if (k === 'ContextMenu' || k === 'm' || k === 'M') { if (this.channel) this.optionsMenu(); else this.playbackMenu(); return true; }
     this.showOsd();
     return ['Enter', 'i', 'I'].includes(k);
   },

@@ -1,5 +1,5 @@
 // Home menu, My Recordings (DVR), Timers and Search screens.
-/* global App, Player, GuideView */
+/* global App, Player, GuideView, MoviesView, ShowsView */
 const ICONS = {
   guide: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 9v11M3 14.5h18"/></svg>',
   live: '<svg viewBox="0 0 24 24"><rect x="2.5" y="5" width="19" height="13" rx="2"/><path d="M8 21h8M10 9.5v5l4.5-2.5z"/></svg>',
@@ -14,7 +14,7 @@ const ICONS = {
 // ---------------- Home ----------------
 const HomeView = {
   title: '',
-  hints: [['←→↑↓', 'Move'], ['OK', 'Select'], ['G', 'Guide'], ['D', 'My Recordings'], ['T', 'Timers'], ['S', 'Search']],
+  hints: [['←→↑↓', 'Move'], ['OK', 'Select'], ['M', 'Menu'], ['G', 'Guide'], ['D', 'My Recordings'], ['T', 'Timers'], ['S', 'Search']],
   render(root) {
     const h = new Date().getHours();
     const greet = h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
@@ -68,13 +68,29 @@ const HomeView = {
     $$('[data-rec]', root).forEach((el) => { el.onclick = () => DvrView.recordingMenu(App.recordings.find((r) => r.id === el.dataset.rec)); });
     $$('[data-job]', root).forEach((el) => { el.onclick = () => App.go('timers'); });
   },
+
+  menu() {
+    const el = Nav.current, d = (el && el.dataset) || {};
+    const items = [];
+    const l = d.fav && (App.state.favLists || []).find((x) => x.id === d.fav);
+    const r = d.rec && App.recordings.find((x) => x.id === d.rec);
+    if (l) {
+      const after = async () => { await App.loadAll(); App.render(); };
+      items.push({ label: `▦ Open ${l.name} in the Guide`, run: () => el.click(), cls: 'primary' });
+      items.push({ label: `✎ Rename ${l.name}...`, run: async () => { const name = await Modal.prompt(`Rename ${l.name}`, 'New name', l.name); if (name) { await api.put(`/api/favlists/${l.id}`, { name }); await after(); } } });
+      items.push({ label: `✕ Delete ${l.name}`, cls: 'danger', run: async () => { if (await Modal.confirm(`Delete ${l.name}?`, 'The channels stay in the guide; only this list goes.', 'Delete list')) { await api.del(`/api/favlists/${l.id}`); await after(); } } });
+    } else if (r) items.push(...DvrView.menuFor(r));
+    else if (el) items.push({ label: 'Open', run: () => el.click(), cls: 'primary' });
+    items.push({ label: '▶ Live TV (last channel)', run: () => $('[data-go="live"]').click() });
+    return { title: 'GarysTV', items };
+  },
 };
 
 // ---------------- My Recordings ----------------
 const DvrView = {
   title: 'My Recordings',
   folder: null,
-  hints: [['↑↓', 'Move'], ['OK', 'Play / open'], ['Del', 'Delete'], ['Esc', 'Back']],
+  hints: [['↑↓', 'Move'], ['OK', 'Play / open'], ['M', 'Menu'], ['Del', 'Delete'], ['Esc', 'Back']],
 
   groups() {
     const map = new Map();
@@ -108,7 +124,7 @@ const DvrView = {
         <div class="col"><h2>Details</h2><div class="detail" id="dvrDetail"><div class="empty">Highlight a recording to see details.</div></div></div>
       </div>`;
     const up = $('#upBtn', root);
-    if (up) up.onclick = () => { this.folder = null; App.render(); };
+    if (up) up.onclick = () => this.onBack();
     $$('[data-folder]', root).forEach((el) => {
       el.onclick = () => { this.folder = el.dataset.folder; App.render(); };
       el._onFocus = () => this.showFolder(this.groups().find((g) => g.title.toLowerCase() === el.dataset.folder));
@@ -159,13 +175,41 @@ const DvrView = {
     toast('Recording deleted');
   },
 
+  // What the menu offers for one recording.
+  menuFor(r) {
+    const items = [];
+    if (r.position > 30 && !r.watched) items.push({ label: `▶ Resume from ${fmt.clock(r.position)}`, run: () => Player.play('rec', r.id, { offset: r.position }), cls: 'primary' });
+    items.push({ label: r.position > 30 ? '⟲ Start over' : '▶ Play', run: () => Player.play('rec', r.id), cls: r.position > 30 ? '' : 'primary' });
+    if (r.status === 'recording') items.push({ label: '■ Stop recording', run: async () => { await api.post('/api/jobs/skip', { id: r.jobId }); toast('Recording stopped'); } });
+    items.push({ label: r.watched ? 'Mark as not watched' : 'Mark as watched', run: () => api.put(`/api/recordings/${r.id}`, { watched: !r.watched, position: r.position }) });
+    items.push({ label: '🗑 Delete...', run: () => this.remove(r), cls: 'danger' });
+    return items;
+  },
+
+  menu() {
+    const d = (Nav.current && Nav.current.dataset) || {};
+    const r = d.rec && App.recordings.find((x) => x.id === d.rec);
+    const items = r ? this.menuFor(r) : [];
+    if (d.folder) items.push({ label: 'Open this folder', run: () => Nav.current.click(), cls: 'primary' });
+    if (this.folder) items.push({ label: '‹ All recordings', run: () => this.onBack() });
+    return { title: r ? r.title : this.title, body: r ? `<div class="s">${esc([fmt.se(r), r.subtitle, fmt.when(r.start)].filter(Boolean).join('  ·  '))}</div>` : '', items };
+  },
+
+  // Back inside a folder: out to all recordings, on the folder you were in.
+  onBack() {
+    if (!this.folder) return false;
+    const g = this.groups().find((x) => x.title.toLowerCase() === this.folder);
+    this.folder = null;
+    App.render(g ? `f-${g.title}` : null);
+    return true;
+  },
+
   onKey(e) {
     if (e.key === 'Delete') {
       const id = Nav.current && Nav.current.dataset.rec;
       if (id) this.remove(App.recordings.find((r) => r.id === id));
       return true;
     }
-    if ((e.key === 'Escape' || e.key === 'Backspace') && this.folder) { this.folder = null; App.render(); return true; }
     return false;
   },
 };
@@ -181,7 +225,7 @@ function recItem(r) {
 const TimersView = {
   title: 'Timers',
   tab: 'schedule',
-  hints: [['↑↓', 'Move'], ['OK', 'Options'], ['←→', 'Switch list'], ['Esc', 'Back']],
+  hints: [['↑↓', 'Move'], ['OK', 'Options'], ['←→', 'Switch list'], ['M', 'Menu'], ['Esc', 'Back']],
 
   describe(r) {
     const ch = r.channelId ? App.state.channels.find((c) => c.id === r.channelId) : null;
@@ -259,6 +303,18 @@ const TimersView = {
     if (v === 'rule') { this.tab = 'rules'; App.render(`rule-${j.ruleId}`); }
   },
 
+  menu() {
+    const d = (Nav.current && Nav.current.dataset) || {};
+    const items = [];
+    const rule = d.rule && App.state.rules.find((x) => x.id === d.rule);
+    const job = d.job && App.schedule.find((x) => x.id === d.job);
+    if (rule) items.push({ label: `Options for "${rule.title}"...`, run: () => this.ruleMenu(rule), cls: 'primary' });
+    if (job) items.push({ label: `Options for "${job.title}"...`, run: () => this.jobMenu(job), cls: 'primary' });
+    items.push({ label: '+ Manual timer...', run: () => App.manualDialog() });
+    items.push({ label: this.tab === 'rules' ? 'Show upcoming recordings' : 'Show timers & priority', run: () => { this.tab = this.tab === 'rules' ? 'schedule' : 'rules'; App.render(); } });
+    return { title: this.title, items };
+  },
+
   onKey(e) {
     if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && Nav.current && !Nav.current.classList.contains('tab')) {
       this.tab = this.tab === 'rules' ? 'schedule' : 'rules';
@@ -270,46 +326,145 @@ const TimersView = {
 };
 
 // ---------------- Search ----------------
+// One box for everything: channels, what's on TV, recordings, movies and shows.
+// Movies and shows come from the IPTV provider's library and can take a moment, so
+// they're asked for separately and appear when they arrive.
+const KINDS = [['all', 'Everything'], ['channels', 'Channels'], ['programs', 'On TV'], ['recordings', 'Recordings'], ['movies', 'Movies'], ['shows', 'Shows']];
 const SearchView = {
   title: 'Search',
   q: '',
-  results: [],
-  hints: [['Type', 'Show name'], ['↓', 'Results'], ['OK', 'Options'], ['Esc', 'Back']],
+  kind: 'all',
+  res: {},
+  items: [],
+  vodWaiting: false,
+  seq: 0,
+  hints: [['Type', 'Search'], ['↓', 'Results'], ['OK', 'Open'], ['M', 'Menu'], ['Esc', 'Back']],
+
   render(root) {
     root.innerHTML = `
-      <div class="searchbox">${ICONS.search.replace('<svg', '<svg width="32" height="32" stroke="currentColor" fill="none" stroke-width="2"')}<input id="q" class="nav" data-key="q" placeholder="Type a show name..." value="${esc(this.q)}"></div>
+      <div class="searchbox">${ICONS.search.replace('<svg', '<svg width="32" height="32" stroke="currentColor" fill="none" stroke-width="2"')}<input id="q" class="nav" data-key="q" placeholder="Channels, shows, movies, recordings..." value="${esc(this.q)}"></div>
+      <div class="tabs" id="skinds"></div>
       <div class="col" style="flex:1;min-height:0"><div class="list" id="sres"></div></div>`;
     const input = $('#q', root);
     let timer;
-    input.oninput = () => { clearTimeout(timer); timer = setTimeout(() => this.search(input.value), 250); };
-    setTimeout(() => { input.focus(); Nav.focus(input); }, 0);
+    input.oninput = () => { clearTimeout(timer); timer = setTimeout(() => this.search(input.value), 300); };
+    input._onFocus = () => input.focus(); // reached with the arrows: OK brings up the TV's keyboard
+    if (!this.q) setTimeout(() => { if (App.view === this && !Modal.top()) Nav.focus(input); }, 0);
     this.paint();
   },
+
   async search(q) {
     this.q = q;
-    this.results = q.trim().length >= 2 ? await api.get(`/api/search?q=${encodeURIComponent(q)}`) : [];
+    const seq = ++this.seq;
+    if (q.trim().length < 2) { this.res = {}; this.vodWaiting = false; this.paint(); return; }
+    this.vodWaiting = true;
+    const vod = api.get(`/api/vod/search?q=${encodeURIComponent(q)}`).catch(() => ({ movies: [], shows: [] }));
+    try {
+      const r = await api.get(`/api/search?q=${encodeURIComponent(q)}`);
+      if (seq !== this.seq) return;
+      this.res = { ...r, movies: null, shows: null };
+    } catch (e) { toast(e.message); }
+    this.paint();
+    const v = await vod;
+    if (seq !== this.seq) return;
+    this.vodWaiting = false;
+    Object.assign(this.res, v);
     this.paint();
   },
-  paint() {
-    const box = $('#sres');
-    if (!box) return;
-    box.innerHTML = this.results.length ? this.results.map((p, i) => `
-      <div class="item nav" data-key="s-${i}" data-i="${i}"><div class="main"><div class="t">${p.isNew ? '<span class="tag new">NEW</span>' : ''}${esc(p.title)}</div>
-        <div class="s">${esc([fmt.se(p), p.subtitle, `${p.number} ${p.channelName}`].filter(Boolean).join('  ·  '))}</div></div><div class="m">${fmt.when(p.start)}</div></div>`).join('')
-      : `<div class="empty">${this.q.trim().length >= 2 ? 'No upcoming shows match.' : 'Search the guide for upcoming shows.'}</div>`;
-    $$('[data-i]', box).forEach((el) => {
-      el.onclick = () => {
-        const p = this.results[+el.dataset.i];
-        App.programDialog({ id: p.channelId, number: p.number, name: p.channelName }, p).then(() => this.search(this.q));
-      };
-    });
-  },
-  onKey(e) {
-    if (document.activeElement && document.activeElement.id === 'q') {
-      if (e.key === 'ArrowDown' || e.key === 'Enter') { document.activeElement.blur(); Nav.focus($('#sres .nav')); return true; }
-      return false;
+
+  // Each result as { key, html, open(), more: [menu items] }.
+  rows(kind) {
+    const list = this.res[kind] || [];
+    if (kind === 'channels') {
+      return list.map((c) => ({
+        key: `c-${c.id}`,
+        html: `<div class="main"><div class="t">${c.logo ? `<img class="slogo" src="${esc(c.logo)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}${esc(c.number)} ${esc(c.name)}</div><div class="s">${esc(c.group || 'Channel')}</div></div><div class="m">Watch</div>`,
+        open: () => Player.play('live', c.id),
+        more: [...App.recordItems(c, null), { label: '▦ Find it in the Guide', run: () => { GuideView.filter = null; GuideView.setList(null, c.id); App.go('guide'); } }],
+      }));
     }
-    if (e.key === 'ArrowUp' && Nav.current === $('#sres .nav')) { $('#q').focus(); Nav.focus($('#q')); return true; }
+    if (kind === 'programs') {
+      return list.map((p) => {
+        const row = { id: p.channelId, number: p.number, name: p.channelName };
+        return {
+          key: `p-${p.channelId}-${p.start}`,
+          html: `<div class="main"><div class="t">${p.isNew ? '<span class="tag new">NEW</span>' : ''}${esc(p.title)}</div>
+            <div class="s">${esc([fmt.se(p), p.subtitle, `${p.number} ${p.channelName}`].filter(Boolean).join('  ·  '))}</div></div><div class="m">${p.start <= Date.now() ? 'On now' : fmt.when(p.start)}</div>`,
+          open: () => App.programDialog(row, p).then(() => this.search(this.q)),
+          more: [
+            ...(p.start <= Date.now() ? [{ label: '▶ Watch now', run: () => Player.play('live', p.channelId) }] : []),
+            ...App.recordItems(row, p),
+          ],
+        };
+      });
+    }
+    if (kind === 'recordings') {
+      return list.map((rec) => ({
+        key: `r-${rec.id}`,
+        html: `<div class="main"><div class="t">${esc(rec.title)}</div><div class="s">${esc([fmt.se(rec), rec.subtitle, `${rec.channelNumber} ${rec.channelName}`].filter(Boolean).join('  ·  '))}</div></div><div class="m">${fmt.when(rec.start)}</div>`,
+        open: () => DvrView.recordingMenu(App.recordings.find((x) => x.id === rec.id) || rec),
+        more: DvrView.menuFor(App.recordings.find((x) => x.id === rec.id) || rec),
+      }));
+    }
+    const lib = kind === 'movies' ? MoviesView : ShowsView;
+    return list.map((v) => ({
+      key: `${kind[0]}-${v.id}`,
+      html: `${v.poster ? `<img class="sposter" src="${esc(v.poster)}" alt="" loading="lazy" onerror="this.remove()">` : ''}<div class="main"><div class="t">${esc(v.name)}</div>
+        <div class="s">${esc([kind === 'movies' ? 'Movie' : 'Show', v.year, v.rating ? `★ ${v.rating}` : ''].filter(Boolean).join(' · '))}</div></div><div class="m">${kind === 'movies' ? 'Watch' : 'Episodes'}</div>`,
+      open: () => lib.open(v),
+      more: [],
+    }));
+  },
+
+  paint() {
+    const box = $('#sres'), tabs = $('#skinds');
+    if (!box) return;
+    const r = this.res;
+    const asked = this.q.trim().length >= 2;
+    const name = (k) => KINDS.find(([x]) => x === k)[1];
+    tabs.innerHTML = asked ? KINDS.map(([k, label]) => {
+      const n = k === 'all' ? '' : r[k] ? ` ${r[k].length}` : ' …';
+      return `<div class="tab nav${this.kind === k ? ' on' : ''}" data-key="k-${k}" data-kind="${k}">${label}${n}</div>`;
+    }).join('') : '';
+    $$('[data-kind]', tabs).forEach((el) => { el.onclick = () => { this.kind = el.dataset.kind; this.paint(); }; });
+    this.items = [];
+    let html = '';
+    const kinds = this.kind === 'all' ? KINDS.slice(1).map(([k]) => k) : [this.kind];
+    for (const k of kinds) {
+      const rows = this.rows(k);
+      const shown = this.kind === 'all' ? rows.slice(0, 5) : rows;
+      if (!shown.length) continue;
+      if (this.kind === 'all') html += `<div class="shead">${name(k)}</div>`;
+      for (const row of shown) {
+        html += `<div class="item nav" data-key="${esc(row.key)}" data-n="${this.items.length}">${row.html}</div>`;
+        this.items.push(row);
+      }
+      if (rows.length > shown.length) html += `<div class="item nav more" data-key="more-${k}" data-more="${k}"><div class="main"><div class="t">All ${rows.length} ${name(k).toLowerCase()} ›</div></div></div>`;
+    }
+    if (asked && this.vodWaiting && ['all', 'movies', 'shows'].includes(this.kind)) html += '<div class="empty">Looking through movies and shows...</div>';
+    box.innerHTML = html || `<div class="empty">${asked ? 'Nothing matches.' : 'Search channels, the guide, your recordings, and the movies and shows from your IPTV provider.'}</div>`;
+    $$('[data-n]', box).forEach((el) => { el.onclick = () => this.items[+el.dataset.n].open(); });
+    $$('[data-more]', box).forEach((el) => { el.onclick = () => { this.kind = el.dataset.more; this.paint(); Nav.focus($('#sres .nav')); }; });
+    if (Nav.current && !document.body.contains(Nav.current)) Nav.restore(Nav.current.dataset.key); // results redrawn under the highlight
+  },
+
+  menu() {
+    const n = Nav.current && Nav.current.dataset.n;
+    const row = n != null && this.items[+n];
+    const items = row ? [{ label: 'Open', run: row.open, cls: 'primary' }, ...row.more] : [];
+    if (this.q) {
+      items.push({ label: '✕ Clear the search', run: () => { this.q = ''; this.res = {}; this.kind = 'all'; App.render('q'); } });
+      for (const [k, label] of KINDS) if (k !== this.kind) items.push({ label: `Show only: ${label}`, run: () => { this.kind = k; this.paint(); } });
+    }
+    return { title: 'Search', items };
+  },
+
+  onKey(e) {
+    if (document.activeElement && document.activeElement.id === 'q' && (e.key === 'ArrowDown' || e.key === 'Enter')) {
+      document.activeElement.blur();
+      Nav.focus($('#skinds .nav') || $('#sres .nav'));
+      return true;
+    }
     return false;
   },
 };

@@ -202,6 +202,18 @@ function optionRow(label, values, index, onChange) {
   return el;
 }
 
+// The hint bar along the bottom. Each hint can be clicked (or tapped) to do the same as its key.
+// list: [key, label, class, key it stands for (when the TV shows its own button name instead)]
+const HINT_KEYS = { OK: 'Enter', Esc: 'Escape', Del: 'Delete', Space: ' ', Home: 'Home' };
+function hintKey(k) { return HINT_KEYS[k] || (/^[A-Za-z]$/.test(k) ? k.toLowerCase() : null); }
 function setHints(list) {
-  $('#hints').innerHTML = list.map(([k, label, cls]) => `<span class="${cls || ''}"><b>${esc(k)}</b>${esc(label)}</span>`).join('');
+  $('#hints').innerHTML = list.map(([k, label, cls, orig]) => {
+    const key = hintKey(orig || k);
+    return `<span class="${cls || ''}${key ? ' press' : ''}"${key ? ` data-press="${esc(key)}"` : ''}><b>${esc(k)}</b>${esc(label)}</span>`;
+  }).join('');
 }
+document.addEventListener('click', (e) => {
+  const h = e.target.closest && e.target.closest('[data-press]');
+  if (!h || !$('#hints').contains(h)) return;
+  (document.activeElement || document.body).dispatchEvent(new KeyboardEvent('keydown', { key: h.dataset.press, bubbles: true, cancelable: true }));
+});

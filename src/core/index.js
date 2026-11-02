@@ -311,7 +311,7 @@ class DvrCore extends EventEmitter {
           : { start: from, end: to, title: c.city ? `${c.name} - ${c.city}` : c.name, subtitle: c.group ? `${c.group} · Live` : 'No guide data', desc: c.group ? 'Live channel. No schedule listing is available for it.' : '', filler: true }];
       }
       return {
-        id: c.id, number: c.number, name: c.name, logo, favorite: c.favorite, sourceId: c.sourceId,
+        id: c.id, number: c.number, name: c.name, logo, favorite: c.favorite, sourceId: c.sourceId, group: c.group || '',
         programs: programs.map((p) => {
           const job = jobs.get(`${c.id}@${p.start}`);
           return { ...p, timer: job ? (job.ruleType === 'series' ? 'series' : 'once') : null, timerStatus: job ? job.status : null, seriesTimer: seriesTitles.has(normTitle(p.title)) };
@@ -320,19 +320,22 @@ class DvrCore extends EventEmitter {
     });
   }
 
+  // Search everything at once: upcoming shows, channels and recordings (movies and shows are core/vod.js).
   search(q) {
     const want = String(q || '').toLowerCase().trim();
-    if (want.length < 2) return [];
+    if (want.length < 2) return { programs: [], channels: [], recordings: [] };
+    const has = (...t) => t.some((x) => String(x || '').toLowerCase().includes(want));
     const now = Date.now();
-    const out = [];
+    const programs = [];
+    const channels = [];
     for (const c of this.visibleChannels()) {
+      if (has(c.name, c.group, c.city) || String(c.number) === want) channels.push({ id: c.id, number: c.number, name: c.name, group: c.group || '', logo: c.logo || '' });
       for (const p of this.programsFor(c)) {
-        if (p.end > now && (p.title.toLowerCase().includes(want) || (p.subtitle || '').toLowerCase().includes(want))) {
-          out.push({ channelId: c.id, number: c.number, channelName: c.name, ...p });
-        }
+        if (p.end > now && has(p.title, p.subtitle)) programs.push({ channelId: c.id, number: c.number, channelName: c.name, ...p });
       }
     }
-    return out.sort((a, b) => a.start - b.start).slice(0, 200);
+    const recordings = this.getRecordings().filter((r) => has(r.title, r.subtitle)).slice(0, 100);
+    return { programs: programs.sort((x, y) => x.start - y.start).slice(0, 200), channels: channels.slice(0, 60), recordings };
   }
 
   // ---------- timers ----------
