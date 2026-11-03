@@ -13,6 +13,7 @@ const sourceTypes = require('./sources');
 const { Vod } = require('./vod');
 const { Tmdb } = require('./tmdb');
 const { ToolInstaller } = require('./installer');
+const { Auth } = require('./auth');
 
 const UI_DIR = path.join(__dirname, '..', 'ui');
 const VERSION = require('../../package.json').version;
@@ -181,6 +182,7 @@ function sendFile(req, res, file) {
 function createServer(core) {
   const clients = new Set();
   const tools = core.tools = new ToolInstaller(core);
+  const auth = core.auth = new Auth(core);
   const timeshift = core.timeshift = new Timeshift({
     ffmpeg: () => findFfmpeg(core.settings),
     dir: () => path.join(core.settings.recordingsDir, '.live-buffer'),
@@ -214,6 +216,11 @@ function createServer(core) {
       channels: core.channels, guideChannels: core.guideData.channels.map(({ id, names, number, providerName }) => ({ id, names, number, providerName })),
       rules: core.rules, status: { ...core.status(), tools: tools.status(), platform: process.platform, version: VERSION }, favLists: core.favLists,
     })],
+    // Other locations (auth.js): the password they sign in with, and the devices signed in.
+    ['GET', '/api/remote', (q, b, p, req) => ({ ...auth.overview(), home: req.who.home, me: req.who.login ? req.who.login.id : null })],
+    ['PUT', '/api/remote/password', (q, b) => auth.setPassword(b.password)],
+    ['DELETE', '/api/remote/logins/:id', (q, b, p) => auth.signOut(p.id)],
+    ['DELETE', '/api/remote/logins', () => auth.signOut()],
     ['POST', '/api/favlists', (q, b) => core.addFavList(b)],
     ['PUT', '/api/favlists/:id', (q, b, p) => core.updateFavList(p.id, b)],
     ['DELETE', '/api/favlists/:id', (q, b, p) => core.removeFavList(p.id)],
@@ -280,7 +287,27 @@ function createServer(core) {
   return http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://x');
     const q = Object.fromEntries(url.searchParams);
-    const caller = checkCaller(req);
+    // At home: as always. From another location: a linked GarysTV's key, or a device that signed in (auth.js).
+    const who = (core.peers && core.peers.check(req)) || auth.check(req);
+    req.who = who;
+    if (!who.home) {
+      const origin = req.headers.origin;
+      let sameSite = !origin;
+      try { sameSite = sameSite || new URL(origin).host === req.headers.host; } catch (_) { /* odd origin */ }
+      if (!sameSite) return send(res, 403, { error: 'Not allowed from this address' });
+      if (url.pathname === '/api/login' && req.method === 'POST') {
+        try {
+          res.setHeader('Set-Cookie', auth.signIn(req, await readBody(req)));
+          return send(res, 200, { ok: true });
+        } catch (e) { return send(res, e.status || 400, { error: e.message }); }
+      }
+      if (!who.ok) {
+        // The screens' own files aren't secret; the start page becomes the sign-in page.
+        if (['/', '/index.html'].includes(url.pathname)) return fs.readFile(path.join(UI_DIR, 'login.html'), (err, data) => { res.writeHead(200, { 'Content-Type': MIME['.html'], 'Cache-Control': 'no-store' }); res.end(data); });
+        if (url.pathname.startsWith('/api/') || /^\/(events|stream|direct|timeshift|peer)\b/.test(url.pathname)) return send(res, 401, { error: 'Sign in first.', login: true });
+      }
+    }
+    const caller = who.home ? checkCaller(req) : { ok: true };
     if (!caller.ok) return send(res, 403, { error: 'Not allowed from this address' });
     if (caller.cors) {
       res.setHeader('Access-Control-Allow-Origin', caller.cors);
@@ -337,7 +364,7 @@ function createServer(core) {
           if (!hit) continue;
           const params = Object.fromEntries(r.keys.map((k, i) => [k, hit[i + 1]]));
           const body = ['POST', 'PUT'].includes(req.method) ? await readBody(req, url.pathname === '/api/backup' ? 50e6 : 1e6) : {}; // a backup can be big
-          return send(res, 200, await r.fn(q, body, params));
+          return send(res, 200, await r.fn(q, body, params, req));
         }
         return send(res, 404, { error: 'Not found' });
       }

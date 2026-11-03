@@ -223,3 +223,25 @@ test('Updates: when they may go in, and which version is newer', () => {
   assert.equal(newer('0.2.9', '0.2.31'), false);
   assert.equal(newer('0.2.31', '0.2.31'), false);
 });
+
+test('Other locations: home just works, elsewhere signs in once', () => {
+  const { DvrCore } = require('../src/core');
+  const { Auth, isHome } = require('../src/core/auth');
+  const core = new DvrCore({ dataDir: require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'gtv-auth-')) });
+  const auth = new Auth(core);
+  const req = (ip, cookie = '') => ({ socket: { remoteAddress: ip }, headers: { cookie } });
+  assert.deepEqual(['192.168.5.20', '::ffff:10.0.0.4', '127.0.0.1', '100.64.0.7', '8.8.8.8', 'fd7a:115c:a1e0::3'].map((ip) => isHome(ip.replace(/^::ffff:/, ''))), [true, true, true, false, false, false]);
+  assert.equal(auth.check(req('192.168.5.20')).ok, true);
+  assert.equal(auth.check(req('100.64.0.7')).ok, false); // Tailscale is another location
+  assert.throws(() => auth.signIn(req('100.64.0.7'), { password: 'x' }), /doesn't allow other locations/); // no password set yet
+  assert.throws(() => auth.setPassword('abc'), /6 characters/);
+  auth.setPassword('secret99');
+  assert.throws(() => auth.signIn(req('100.64.0.7'), { password: 'nope' }), (e) => e.status === 401);
+  const cookie = auth.signIn(req('100.64.0.7'), { password: 'secret99', device: 'Fire TV' }).split(';')[0];
+  assert.equal(auth.check(req('100.64.0.7', cookie)).login.device, 'Fire TV');
+  assert.equal(JSON.stringify(auth.overview()).includes(cookie.split('=')[1]), false); // the token never leaves
+  for (let i = 0; i < 5; i++) assert.throws(() => auth.signIn(req('100.64.0.9'), { password: 'guess' }));
+  assert.throws(() => auth.signIn(req('100.64.0.9'), { password: 'secret99' }), (e) => e.status === 429); // too many tries
+  auth.setPassword(''); // off: everyone from away is signed out
+  assert.equal(auth.check(req('100.64.0.7', cookie)).ok, false);
+});

@@ -6,7 +6,7 @@ const SettingsView = {
   section: 'sources',
   chFilter: '',
   hints: [['↑↓←→', 'Move'], ['OK', 'Select'], ['Tab', 'Next field'], ['Esc', 'Back']],
-  sections: [['sources', 'Antenna & Providers'], ['guide', 'Guide data'], ['channels', 'Channels & matching'], ['startup', 'When it starts'], ['recording', 'Recording'], ['media', 'Movies & Shows'], ['updates', 'Updates'], ['backup', 'Backup & restore'], ['status', 'Status']],
+  sections: [['sources', 'Antenna & Providers'], ['guide', 'Guide data'], ['channels', 'Channels & matching'], ['startup', 'When it starts'], ['recording', 'Recording'], ['media', 'Movies & Shows'], ['remote', 'Other locations'], ['updates', 'Updates'], ['backup', 'Backup & restore'], ['status', 'Status']],
 
   render(root) {
     root.innerHTML = `<div class="settings">
@@ -443,6 +443,41 @@ const SettingsView = {
     const del = $('#tmdbDel', pane);
     if (del) del.onclick = async () => { await api.put('/api/settings', { tmdbKey: '' }); toast('Key removed'); };
     $('#tmdbClear', pane).onclick = async () => { await api.post('/api/tmdb/clear'); toast('Saved movie & show info cleared. It is looked up again as you browse.'); };
+  },
+
+  // ---------- other locations ----------
+  // Devices on this home network just use GarysTV. From anywhere else (over Tailscale /
+  // headscale), a device signs in once with the password set here (core/auth.js).
+  async remote(pane) {
+    let r;
+    try { r = await api.get('/api/remote'); } catch (e) { pane.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+    const again = () => { if (document.body.contains(pane)) this.remote(pane); };
+    const devices = r.logins.map((l) => `<div style="display:flex;gap:.8rem;align-items:center;margin:.3rem 0"><div style="flex:1"><b>${esc(l.device)}</b>${l.id === r.me ? ' (this one)' : ''}
+      <span class="s">signed in ${fmt.when(l.created)} · last used ${fmt.when(l.lastSeen)} from ${esc(l.ip)}</span></div>
+      <span class="btn nav" data-out="${esc(l.id)}" data-key="rm-out-${esc(l.id)}">Sign out</span></div>`).join('');
+    pane.innerHTML = `<div class="box"><h3>Using GarysTV from another location</h3>
+        <div class="s">On this home network nothing is asked, as always. From somewhere else (another house, over Tailscale or headscale), a device has to sign in once with this password; then it's remembered for a year. Without a password, other locations can't use this GarysTV at all.</div>
+        <div style="margin:.6rem 0">${r.passwordSet ? '✅ A password is set: other locations can sign in.' : '🔒 No password: other locations are turned away.'}</div>
+        <div class="actions"><div class="btn nav primary" id="rmSet" data-key="rm-set">${r.passwordSet ? 'Change the password' : 'Set a password'}</div>${r.passwordSet ? '<div class="btn nav" id="rmOff" data-key="rm-off">Turn off other locations</div>' : ''}</div></div>
+      <div class="box"><h3>Devices signed in from other locations</h3>
+        ${devices || '<div class="s">None.</div>'}
+        ${r.logins.length > 1 ? '<div class="actions"><div class="btn nav" id="rmAll" data-key="rm-all">Sign them all out</div></div>' : ''}</div>`;
+    $('#rmSet', pane).onclick = async () => {
+      const pw = await Modal.prompt(r.passwordSet ? 'Change the password' : 'Set a password', 'Password for other locations (at least 6 characters)', '', 'Save');
+      if (!pw) return;
+      try { await api.put('/api/remote/password', { password: pw }); toast('Saved. Devices already signed in stay signed in.', 5000); again(); } catch (e) { toast(e.message); }
+    };
+    const off = $('#rmOff', pane);
+    if (off) {
+      off.onclick = async () => {
+        if (!await Modal.confirm('Turn off other locations?', 'Every device signed in from another location is signed out, and none can sign in until you set a password again.', 'Turn off')) return;
+        await api.put('/api/remote/password', { password: '' }).catch((e) => toast(e.message));
+        again();
+      };
+    }
+    const all = $('#rmAll', pane);
+    if (all) all.onclick = () => api.del('/api/remote/logins').then(again).catch((e) => toast(e.message));
+    $('[data-out]', pane).forEach((el) => { el.onclick = () => api.del(`/api/remote/logins/${encodeURIComponent(el.dataset.out)}`).then(again).catch((e) => toast(e.message)); });
   },
 
   // ---------- updates ----------
