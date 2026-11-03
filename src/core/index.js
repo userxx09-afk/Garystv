@@ -7,6 +7,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { EventEmitter } = require('events');
 const { Store } = require('./store');
+const { makeBackup, restoreBackup } = require('./backup');
 const sources = require('./sources');
 const { reconcile } = require('./guide/reconcile');
 const { buildSchedule, episodeKey, normTitle } = require('./scheduler');
@@ -160,9 +161,10 @@ class DvrCore extends EventEmitter {
     this.store.write('sources', this.sources.map((s) => (s.id === id ? { ...s, config: result.config, tunerCount: result.tunerCount, info: result.info, scannedAt: Date.now() } : s)));
     // Keep the user's choices (hidden, favorite, manual guide match, their own number) across rescans.
     const old = new Map(this.channels.filter((c) => c.sourceId === id).map((c) => [c.id, c]));
+    const restored = this.store.read('channelchoices', {}); // from a backup, until each channel is here
     const fresh = result.channels.map((c) => {
       const cid = `${id}:${c.key}`;
-      const prev = old.get(cid) || {};
+      const prev = old.get(cid) || restored[cid] || {};
       return {
         id: cid, sourceId: id, number: prev.alias || c.number || '', sourceNumber: c.number || '', alias: prev.alias || '', name: c.name, callsign: c.callsign || '', tvgId: c.tvgId || '',
         logo: c.logo || prev.logo || '', group: c.group || '', city: c.city || '', hd: !!c.hd, streamUrl: c.streamUrl,
@@ -203,6 +205,23 @@ class DvrCore extends EventEmitter {
     this.store.write('channels', this.channels.map((c) => (at.has(c.id) ? withAlias(c, clear ? '' : String(first + at.get(c.id))) : c)));
     this.changed('channels');
     return { count: at.size };
+  }
+
+  // ---------- backup & restore (backup.js) ----------
+  backup(opts) { return makeBackup(this, opts); }
+  restore(b) {
+    const result = restoreBackup(this, b);
+    for (const what of ['settings', 'sources', 'guides', 'channels', 'rules']) this.changed(what);
+    // Channels and the guide come from the providers again, here; your choices are put back as they arrive.
+    (async () => {
+      for (const s of this.sources.filter((x) => x.enabled)) {
+        try { await this.scanSource(s.id); } catch (e) { this.note(`restore: ${s.name}: ${e.message}`); }
+      }
+      this.changed('channels');
+      await this.refreshGuides().catch((e) => this.note(`restore: guide: ${e.message}`));
+    })();
+    this.note(`restored a backup: ${result.sources} sources, ${result.rules} timers, ${result.favlists} favorites lists`);
+    return result;
   }
 
   // ---------- favorites lists ----------

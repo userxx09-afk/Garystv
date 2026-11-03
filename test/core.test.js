@@ -128,3 +128,40 @@ test('Your own channel numbers', () => {
   assert.deepEqual(core.channels.map((c) => c.number), ['1000', '1001', '1002']);
   assert.throws(() => core.renumberChannels({ ids: ['s:A'], start: 0 }), /first/);
 });
+
+test('Backup and restore', () => {
+  const { DvrCore } = require('../src/core');
+  const mk = () => new DvrCore({ dataDir: require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'gtv-bk-')) });
+  const a = mk();
+  a.store.write('sources', [{ id: 's1', type: 'xtream', enabled: true, name: 'WebTV', config: { servers: 'http://p', username: 'u1', password: 'pw123' } }]);
+  a.store.write('guides', [{ id: 'g1', type: 'xmltv', name: 'P guide', config: { url: 'http://p/xmltv.php?username=u1&password=pw123' } }, { id: 'g2', type: 'xmltv', name: 'Free', config: { url: 'http://free/epg.xml' } }]);
+  a.store.write('channels', [{ id: 's1:7', sourceId: 's1', number: '1000', name: 'ESPN', streamUrl: 'http://p/live/u1/pw123/7.ts' }, { id: 's1:8', sourceId: 's1', number: '1001', name: 'X' }]);
+  a.updateChannel('s1:7', { alias: '6', favorite: true });
+  a.updateSettings({ prePadMin: 3, recordingsDir: 'D:\TV', tmdbKey: 'k123' });
+  a.addFavList({ name: 'Gary' });
+
+  // Without logins: no password anywhere in the file, not even in the provider's guide address.
+  const plain = a.backup();
+  assert.equal(JSON.stringify(plain).includes('pw123'), false);
+  assert.equal(JSON.stringify(plain).includes('k123'), false);
+  assert.deepEqual(plain.channels, [{ id: 's1:7', favorite: true, alias: '6', mapMode: undefined }].map(({ mapMode, ...c }) => c));
+  assert.equal(plain.settings.recordingsDir, undefined); // this computer's own folders stay behind
+
+  // Restored elsewhere: settings and lists come over, this computer's folder stays, the missing login is asked for.
+  const b = mk();
+  b.updateSettings({ recordingsDir: 'C:\Rec' });
+  const r = require('../src/core/backup').restoreBackup(b, JSON.parse(JSON.stringify(plain)));
+  assert.deepEqual(r.needLogin, ['WebTV']);
+  assert.equal(b.settings.prePadMin, 3);
+  assert.equal(b.settings.recordingsDir, 'C:\Rec');
+  assert.deepEqual(b.favLists.map((l) => l.name), ['Gary']);
+  assert.deepEqual(b.store.read('channelchoices').s1_7, undefined);
+  assert.deepEqual(b.store.read('channelchoices')['s1:7'], { favorite: true, alias: '6' });
+
+  // With logins: they travel (for a new computer with nothing set up).
+  const full = a.backup({ logins: true });
+  require('../src/core/backup').restoreBackup(b, JSON.parse(JSON.stringify(full)));
+  assert.equal(b.sources[0].config.password, 'pw123');
+  assert.equal(b.settings.tmdbKey, 'k123');
+  assert.throws(() => b.restore({ hello: 1 }), /isn't a GarysTV backup/);
+});

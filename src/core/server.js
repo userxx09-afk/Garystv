@@ -25,10 +25,10 @@ function send(res, code, body) {
   res.end(JSON.stringify(body ?? null));
 }
 
-function readBody(req) {
+function readBody(req, limit = 1e6) {
   return new Promise((resolve, reject) => {
     let data = '';
-    req.on('data', (c) => { data += c; if (data.length > 1e6) req.destroy(); });
+    req.on('data', (c) => { data += c; if (data.length > limit) req.destroy(); });
     req.on('end', () => { try { resolve(data ? JSON.parse(data) : {}); } catch (e) { reject(e); } });
   });
 }
@@ -235,6 +235,8 @@ function createServer(core) {
     ['POST', '/api/sources/:id/scan', (q, b, p) => core.scanSource(p.id).then((r) => ({ info: r.info }))],
     ['POST', '/api/sources/:id/antenna-scan', (q, b, p) => hdhomerun.startAntennaScan(core.sources.find((s) => s.id === p.id).config)],
     ['GET', '/api/sources/:id/antenna-scan', (q, b, p) => hdhomerun.antennaScanStatus(core.sources.find((s) => s.id === p.id).config)],
+    ['GET', '/api/backup', (q) => core.backup({ logins: q.logins === '1', version: VERSION })],
+    ['POST', '/api/backup', (q, b) => core.restore(b)],
     ['POST', '/api/channels/renumber', (q, b) => core.renumberChannels(b)],
     ['PUT', '/api/channels/:id', (q, b, p) => core.updateChannel(decodeURIComponent(p.id), b)],
     ['POST', '/api/guides', (q, b) => core.addGuide(b)],
@@ -326,7 +328,7 @@ function createServer(core) {
           const hit = r.method === req.method && r.re.exec(url.pathname);
           if (!hit) continue;
           const params = Object.fromEntries(r.keys.map((k, i) => [k, hit[i + 1]]));
-          const body = ['POST', 'PUT'].includes(req.method) ? await readBody(req) : {};
+          const body = ['POST', 'PUT'].includes(req.method) ? await readBody(req, url.pathname === '/api/backup' ? 50e6 : 1e6) : {}; // a backup can be big
           return send(res, 200, await r.fn(q, body, params));
         }
         return send(res, 404, { error: 'Not found' });

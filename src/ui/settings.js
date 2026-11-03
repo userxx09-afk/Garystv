@@ -6,7 +6,7 @@ const SettingsView = {
   section: 'sources',
   chFilter: '',
   hints: [['↑↓←→', 'Move'], ['OK', 'Select'], ['Tab', 'Next field'], ['Esc', 'Back']],
-  sections: [['sources', 'Antenna & Providers'], ['guide', 'Guide data'], ['channels', 'Channels & matching'], ['startup', 'When it starts'], ['recording', 'Recording'], ['media', 'Movies & Shows'], ['updates', 'Updates'], ['status', 'Status']],
+  sections: [['sources', 'Antenna & Providers'], ['guide', 'Guide data'], ['channels', 'Channels & matching'], ['startup', 'When it starts'], ['recording', 'Recording'], ['media', 'Movies & Shows'], ['updates', 'Updates'], ['backup', 'Backup & restore'], ['status', 'Status']],
 
   render(root) {
     root.innerHTML = `<div class="settings">
@@ -487,23 +487,84 @@ const SettingsView = {
   async windowsUpdates(pane, server) {
     let u;
     try { u = await api.get('/api/app-update'); } catch (e) { pane.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
-    const auto = App.state.settings.autoUpdate !== false;
+    const p = u.plan || { when: App.state.settings.autoUpdate === false ? 'ask' : 'scheduled', day: 'sun', h: 3, m: 0 };
+    const days = [['sun', 'Sundays'], ['mon', 'Mondays'], ['tue', 'Tuesdays'], ['wed', 'Wednesdays'], ['thu', 'Thursdays'], ['fri', 'Fridays'], ['sat', 'Saturdays'], ['daily', 'Every day']];
+    const clock = (h, m) => fmt.time(new Date(2000, 0, 1, h, m));
+    const slot = `${(days.find(([k]) => k === p.day) || days[0])[1]} at ${clock(p.h, p.m)}`;
+    const when = p.when === 'scheduled' ? `It installs ${slot.replace('Every day', 'every day')}, then GarysTV starts again.`
+      : p.when === 'anytime' ? (u.busy ? 'It installs as soon as nothing is recording or about to.' : 'It installs in a few minutes.') : 'Choose Restart and update now when it suits you.';
     const now = !u.supported ? esc(u.reason || 'Updates work in the installed app.')
-      : u.ready ? `✨ Version <b>${esc(u.available)}</b> is downloaded. ${auto ? (u.busy ? 'It installs as soon as nothing is recording or about to.' : 'It installs in a few minutes.') : 'Restart GarysTV to install it.'}`
+      : u.ready ? `✨ Version <b>${esc(u.available)}</b> is downloaded. ${when}`
         : u.available ? `Downloading version <b>${esc(u.available)}</b>${u.progress != null ? ` (${u.progress}%)` : ''}...`
           : u.error ? `⚠️ Couldn't check: ${esc(u.error)}`
             : u.checkedAt ? `✅ This is the newest version (checked ${fmt.when(u.checkedAt)}).` : 'Checking soon...';
     pane.innerHTML = `<div class="box"><h3>Updates</h3>
       <div>This app: <b>${esc(u.current || App.state.status.version)}</b></div>
       <div>${now}</div>
-      <div class="actions">${u.ready ? '<div class="btn nav primary" id="updNow">Restart and update now</div>' : ''}${u.supported ? '<div class="btn nav" id="updCheck">Check now</div>' : ''}</div>
-      <label class="check"><input type="checkbox" id="updAuto" ${auto ? 'checked' : ''}> Install updates automatically (only while nothing is recording or about to)</label>
-      <div class="s">Updates come from GarysTV's page on GitHub and are checked every few hours. Timers, recordings and settings are kept.</div></div>`;
-    const now2 = $('#updNow', pane);
-    if (now2) now2.onclick = async () => { try { await api.post('/api/app-update/install'); toast('Updating. GarysTV starts again in a moment.'); } catch (e) { toast(e.message); } };
-    const chk = $('#updCheck', pane);
-    if (chk) chk.onclick = async () => { await api.post('/api/app-update/check'); toast('Checking for updates...'); setTimeout(() => { if (this.section === 'updates') App.render(); }, 3000); };
-    $('#updAuto', pane).onchange = (e) => api.put('/api/settings', { autoUpdate: e.target.checked });
+      <div class="actions">${u.ready ? '<div class="btn nav primary" id="updNow" data-key="upd-now">Restart and update now</div>' : ''}${u.supported ? '<div class="btn nav" id="updCheck" data-key="upd-check">Check now</div>' : ''}</div>
+      <div class="s" style="margin-top:.6rem">GarysTV always checks for updates every few hours and tells you here. Choose when they go in:</div>
+      <div id="updRows" style="display:grid;gap:.5rem;margin:.5rem 0;max-width:40rem"></div>
+      <div class="s">Updates come from GarysTV's page on GitHub. They never go in while something is recording, about to record, or someone is watching live TV; it waits up to two hours after the time you pick, else tries again next time. Timers, recordings and settings are kept. The TVs aren't affected.</div></div>`;
+    const rows = $('#updRows', pane);
+    const put = (patch) => api.put('/api/settings', { autoUpdate: true, ...patch }).then(() => toast('Saved'));
+    const times = [];
+    for (let h = 0; h < 24; h++) for (const m of [0, 30]) times.push({ value: `${String(h).padStart(2, '0')}:${m ? '30' : '00'}`, label: clock(h, m) });
+    const whens = [{ value: 'scheduled', label: 'Automatically, at a set time' }, { value: 'anytime', label: 'Automatically, as soon as ready' }, { value: 'ask', label: 'Only when I say (just tell me)' }];
+    const at = (vals, v) => Math.max(0, vals.findIndex((x) => x.value === v));
+    const hm = `${String(p.h).padStart(2, '0')}:${String(p.m).padStart(2, '0')}`;
+    const dayRow = optionRow('Day', days.map(([value, label]) => ({ value, label })), at(days.map(([value]) => ({ value })), p.day), (v) => put({ updateDay: v }));
+    const timeRow = optionRow('Time', times, Math.max(0, times.findIndex((t) => t.value === hm)), (v) => put({ updateTime: v }));
+    const show = (w) => { dayRow.style.display = timeRow.style.display = w === 'scheduled' ? '' : 'none'; };
+    rows.append(optionRow('Install updates', whens, at(whens, p.when), (v) => { show(v); put({ updatePlan: v }); }), dayRow, timeRow);
+    [...rows.children].forEach((el, i) => { el.dataset.key = `upd-row${i}`; });
+    show(p.when);
+  },
+
+  // ---------- backup & restore ----------
+  // Everything you set up, in one file: to move GarysTV to another computer, or keep a copy.
+  backup(pane) {
+    const tv = !!window.GTV_SERVER;
+    pane.innerHTML = `<div class="box"><h3>Save a backup</h3>
+        <div class="s">Saves your providers, guide sources, channel choices (shown, pinned, your numbers, guide listings), favorites lists, timers and settings in one file. Recordings and the downloaded guide aren't in it.</div>
+        <label class="check"><input type="checkbox" id="bkLogins" class="nav" data-key="bk-logins"> Include IPTV logins and the TMDb key (for a new computer; keep the file private)</label>
+        <div class="actions"><div class="btn nav primary" id="bkSave" data-key="bk-save">Save a backup file</div></div></div>
+      <div class="box"><h3>Restore a backup</h3>
+        <div class="s">Replaces this GarysTV's setup with the one in the file. Recordings stay. Providers are scanned again and your channel choices are put back as the channels arrive (a few minutes for a big list). Logins left out of the file are kept from this computer when it has the same provider; otherwise add them in Antenna & Providers.</div>
+        <input type="file" id="bkFile" accept=".json,application/json" style="display:none">
+        <div class="actions"><div class="btn nav" id="bkLoad" data-key="bk-load">Choose a backup file...</div></div></div>
+      ${tv ? '<div class="s">On a TV, saving and choosing files may not work: use the GarysTV app on the PC, or a web browser on a computer pointed at this GarysTV.</div>' : ''}`;
+    const logins = $('#bkLogins', pane);
+    $('#bkSave', pane).onclick = async () => {
+      try {
+        const b = await api.get(`/api/backup?logins=${logins.checked ? 1 : 0}`);
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([JSON.stringify(b, null, 1)], { type: 'application/json' }));
+        a.download = `GarysTV-backup-${new Date().toISOString().slice(0, 10)}${b.logins ? '-with-logins' : ''}.json`;
+        document.body.append(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+        toast(`Saved ${a.download}`, 5000);
+      } catch (e) { toast(e.message); }
+    };
+    const file = $('#bkFile', pane);
+    $('#bkLoad', pane).onclick = () => file.click();
+    file.onchange = async () => {
+      const f = file.files[0];
+      file.value = '';
+      if (!f) return;
+      let b;
+      try { b = JSON.parse(await f.text()); } catch (_) { toast("That file can't be read as a GarysTV backup."); return; }
+      if (!b || b.garystv !== 'backup') { toast("That isn't a GarysTV backup file."); return; }
+      const what = `<div class="s">Made ${b.madeAt ? esc(new Date(b.madeAt).toLocaleString()) : 'at an unknown time'}${b.version ? ` by GarysTV ${esc(b.version)}` : ''}.<br>
+        ${(b.sources || []).length} providers (${esc((b.sources || []).map((x) => x.name).join(', '))}), ${(b.favlists || []).length} favorites lists, ${(b.rules || []).length} timers, choices for ${(b.channels || []).length} channels.
+        ${b.logins ? '<br>It includes logins.' : '<br>No logins in it.'}<br><br>This replaces what's set up here now.</div>`;
+      if (!await Modal.menu('Restore this backup?', what, [{ label: 'Restore', value: true, cls: 'danger' }, { label: 'Cancel', value: false }])) return;
+      try {
+        const r = await api.post('/api/backup', b);
+        await App.loadAll();
+        toast(r.needLogin.length ? `Restored. Add the login for ${r.needLogin.join(', ')} in Antenna & Providers.` : 'Restored. Channels and the guide are coming in now.', 8000);
+        App.render();
+      } catch (e) { toast(e.message); }
+    };
   },
 
   // ---------- status ----------
