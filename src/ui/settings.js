@@ -171,7 +171,7 @@ const SettingsView = {
         ...App.numberItem(c),
         { label: 'Change its guide listing...', run: () => this.matchDialog(c) },
         { label: c.hidden ? 'Show it in the guide' : 'Hide it from the guide', run: () => api.put(`/api/channels/${encodeURIComponent(c.id)}`, { hidden: !c.hidden }) },
-        { label: c.favorite ? '★ Stop keeping it at the top' : '☆ Keep it at the top of the guide', run: () => api.put(`/api/channels/${encodeURIComponent(c.id)}`, { favorite: !c.favorite }) },
+        { label: c.favorite ? '📌 Unpin it from the top of the guide' : '📌 Pin it to the top of the guide', run: () => api.put(`/api/channels/${encodeURIComponent(c.id)}`, { favorite: !c.favorite }) },
       ],
     };
   },
@@ -188,14 +188,14 @@ const SettingsView = {
     const conf = (c) => (c.mapMode === 'manual' ? ['man', 'Set by you'] : c.mapMode === 'none' ? ['lo', 'No guide'] : !c.guideId ? ['lo', 'No match'] : c.matchScore >= 90 ? ['hi', 'Sure'] : c.matchScore >= 50 ? ['md', 'Likely'] : ['lo', 'Check']);
     pane.innerHTML = `
       <div class="box"><h3>Match channels to the guide</h3>
-        <div class="s">${matched} of ${st.channels.length} channels have guide listings. GarysTV matches by channel number, call sign and name. Check any marked <span class="conf md">Likely</span> or <span class="conf lo">Check</span>, and hide channels you never watch. Click a channel number to give it your own, or use Renumber for many at once.</div>
+        <div class="s">${matched} of ${st.channels.length} channels have guide listings. GarysTV matches by channel number, call sign and name. Pin (📌) a channel to keep it at the top of the guide. Check any marked <span class="conf md">Likely</span> or <span class="conf lo">Check</span>, and hide channels you never watch. Click a channel number to give it your own, or use Renumber for many at once.</div>
         <div class="row"><div class="field" style="flex:1"><input id="chf" placeholder="Filter channels..." value="${esc(this.chFilter)}"></div><div class="btn nav" id="renumber">🔢 Renumber...</div><div class="btn nav" id="rematch">↻ Re-match automatically</div></div></div>
-      <table class="chs"><thead><tr><th>Show</th><th>★</th><th>Ch</th><th>Name</th><th>From</th><th>Guide listing</th><th></th></tr></thead><tbody>
+      <table class="chs"><thead><tr><th>Show</th><th title="Pinned to the top of the guide">📌</th><th>Ch</th><th>Name</th><th>From</th><th>Guide listing</th><th></th></tr></thead><tbody>
       ${list.slice(0, 400).map((c) => {
         const g = gById.get(c.guideId);
         const [cls, label] = conf(c);
         return `<tr data-ch="${esc(c.id)}"><td><input type="checkbox" data-k="show" ${c.hidden ? '' : 'checked'}></td>
-          <td><span class="nav" data-k="fav" style="cursor:pointer;color:${c.favorite ? 'var(--yellow)' : 'var(--dim)'}">★</span></td>
+          <td><span class="nav" data-k="fav" title="${c.favorite ? 'Pinned to the top of the guide' : 'Pin to the top of the guide'}" style="cursor:pointer;${c.favorite ? '' : 'opacity:.3;filter:grayscale(1)'}">📌</span></td>
           <td><span class="nav" data-k="num" style="cursor:pointer" title="Change the channel number"><b>${esc(c.number)}</b></span>${c.alias ? `<div class="s" style="font-size:.75rem">was ${esc(c.sourceNumber)}</div>` : ''}</td><td>${esc(c.name)}${c.group ? `<div class="s" style="font-size:.8rem">${esc(c.group)}</div>` : ''}</td><td class="s">${esc(srcName.get(c.sourceId) || '')}</td>
           <td>${g ? `${esc(g.names[0])} <span class="s">${esc(g.number || '')} · ${esc(g.providerName)}</span>` : '<span class="s">—</span>'}${c.matchReason && c.mapMode === 'auto' ? `<div class="s" style="font-size:.8rem">by ${esc(c.matchReason)}</div>` : ''}</td>
           <td style="white-space:nowrap"><span class="conf ${cls}">${label}</span> <span class="btn nav" data-k="change" style="padding:.25rem .7rem;font-size:.85rem">Change</span></td></tr>`;

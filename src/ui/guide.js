@@ -237,7 +237,7 @@ const GuideView = {
           ${p.subtitle ? `<div class="s">${esc(p.subtitle)}</div>` : ''}</div>`;
       }).join('');
       return `<div class="g-row ${ri === this.row ? 'sel' : ''}">
-        <div class="g-ch" data-ch="${esc(r.id)}"><span class="num">${esc(r.number)}</span>${r.logo ? `<img src="${esc(r.logo)}" alt="" referrerpolicy="no-referrer">` : ''}<span class="nm">${r.favorite || this.inAnyList(r.id) ? '<span class="fav">★</span> ' : ''}${esc(r.name)}</span></div>
+        <div class="g-ch" data-ch="${esc(r.id)}"><span class="num">${esc(r.number)}</span>${r.logo ? `<img src="${esc(r.logo)}" alt="" referrerpolicy="no-referrer">` : ''}<span class="nm">${r.favorite ? '<span class="fav">📌</span> ' : ''}${this.inAnyList(r.id) ? '<span class="fav">★</span> ' : ''}${esc(r.name)}</span></div>
         <div class="g-progs">${progs}</div></div>`;
     }).join('');
     $$('.g-p', body).forEach((el) => {
