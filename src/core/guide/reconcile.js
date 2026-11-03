@@ -19,7 +19,7 @@ function score(channel, g) {
   let total = 0;
   const reasons = [];
   if (channel.tvgId && channel.tvgId === g.rawId) return { total: 100, reasons: ['guide ID'] };
-  const num = normNumber(channel.number);
+  const num = normNumber(channel.sourceNumber ?? channel.number); // the provider's number, not one you gave it
   const gNums = [g.number, ...g.names].map(normNumber).filter(Boolean);
   if (num && gNums.includes(num)) { total += 50; reasons.push('channel number'); }
   const call = normCallsign(channel.callsign || channel.name);

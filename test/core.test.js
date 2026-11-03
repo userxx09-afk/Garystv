@@ -111,3 +111,20 @@ test('Favorites lists', () => {
   core.removeFavList(gary.id);
   assert.deepEqual(core.favLists.map((l) => l.name), ["Barbara's Favorites"]);
 });
+
+test('Your own channel numbers', () => {
+  const { DvrCore } = require('../src/core');
+  const dir = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'gtv-num-'));
+  const core = new DvrCore({ dataDir: dir });
+  core.store.write('sources', [{ id: 's', type: 'm3u', enabled: true, name: 'P', config: {} }]);
+  core.store.write('channels', ['A', 'B', 'C'].map((n, i) => ({ id: `s:${n}`, sourceId: 's', number: String(1000 + i), name: n })));
+  core.updateChannel('s:C', { alias: '007' });
+  assert.deepEqual(core.channels.find((c) => c.id === 's:C'), { id: 's:C', sourceId: 's', number: '7', sourceNumber: '1002', alias: '7', name: 'C' });
+  assert.deepEqual(core.visibleChannels().map((c) => c.name), ['C', 'A', 'B']); // the guide goes by your numbers
+  assert.throws(() => core.updateChannel('s:A', { alias: '12a' }), /digits/);
+  core.renumberChannels({ ids: ['s:B', 's:A'], start: 20 });
+  assert.deepEqual(core.visibleChannels().map((c) => `${c.number} ${c.name}`), ['7 C', '20 B', '21 A']);
+  core.renumberChannels({ ids: ['s:A', 's:B', 's:C'], clear: true });
+  assert.deepEqual(core.channels.map((c) => c.number), ['1000', '1001', '1002']);
+  assert.throws(() => core.renumberChannels({ ids: ['s:A'], start: 0 }), /first/);
+});

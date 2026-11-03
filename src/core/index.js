@@ -158,13 +158,13 @@ class DvrCore extends EventEmitter {
       throw e;
     }
     this.store.write('sources', this.sources.map((s) => (s.id === id ? { ...s, config: result.config, tunerCount: result.tunerCount, info: result.info, scannedAt: Date.now() } : s)));
-    // Keep the user's choices (hidden, favorite, manual guide match) across rescans.
+    // Keep the user's choices (hidden, favorite, manual guide match, their own number) across rescans.
     const old = new Map(this.channels.filter((c) => c.sourceId === id).map((c) => [c.id, c]));
     const fresh = result.channels.map((c) => {
       const cid = `${id}:${c.key}`;
       const prev = old.get(cid) || {};
       return {
-        id: cid, sourceId: id, number: c.number || '', name: c.name, callsign: c.callsign || '', tvgId: c.tvgId || '',
+        id: cid, sourceId: id, number: prev.alias || c.number || '', sourceNumber: c.number || '', alias: prev.alias || '', name: c.name, callsign: c.callsign || '', tvgId: c.tvgId || '',
         logo: c.logo || prev.logo || '', group: c.group || '', city: c.city || '', hd: !!c.hd, streamUrl: c.streamUrl,
         hidden: prev.hidden || false, favorite: prev.favorite || false,
         mapMode: prev.mapMode || 'auto', guideId: prev.guideId || null, matchScore: prev.matchScore || 0, matchReason: prev.matchReason || '',
@@ -184,12 +184,25 @@ class DvrCore extends EventEmitter {
   }
 
   updateChannel(id, patch) {
-    const allowed = ['hidden', 'favorite', 'guideId', 'mapMode', 'number', 'name'];
+    const allowed = ['hidden', 'favorite', 'guideId', 'mapMode', 'name'];
     const clean = Object.fromEntries(Object.entries(patch).filter(([k]) => allowed.includes(k)));
     if ('guideId' in clean && !('mapMode' in clean)) clean.mapMode = clean.guideId ? 'manual' : 'none';
-    this.store.write('channels', this.channels.map((c) => (c.id === id ? { ...c, ...clean } : c)));
+    const alias = 'alias' in patch ? channelAlias(patch.alias) : null;
+    this.store.write('channels', this.channels.map((c) => (c.id === id ? (alias == null ? { ...c, ...clean } : withAlias({ ...c, ...clean }, alias)) : c)));
     if (clean.mapMode === 'auto') this.reconcileChannels();
     this.changed('channels');
+  }
+
+  // Your own numbers for many channels at once: ids in the order wanted, numbered from start
+  // (1 apart). clear: back to the numbers the provider gave them.
+  renumberChannels({ ids, start, clear }) {
+    if (!Array.isArray(ids) || !ids.length) throw new Error('Pick some channels to number.');
+    const first = clear ? 0 : +channelAlias(start);
+    if (!clear && !(first > 0)) throw new Error('Give the first channel number.');
+    const at = new Map(ids.map((id, i) => [String(id), i]));
+    this.store.write('channels', this.channels.map((c) => (at.has(c.id) ? withAlias(c, clear ? '' : String(first + at.get(c.id))) : c)));
+    this.changed('channels');
+    return { count: at.size };
   }
 
   // ---------- favorites lists ----------
@@ -536,6 +549,18 @@ class DvrCore extends EventEmitter {
   describeTypes() {
     return { sources: sources.describe(), guides: GUIDES.map(({ type, label, fields, needsSource }) => ({ type, label, fields, needsSource })) };
   }
+}
+
+// A channel number you give a channel ("" puts the provider's back): digits, maybe one dot (5.1).
+function channelAlias(v) {
+  const n = String(v ?? '').trim();
+  if (n && !/^\d{1,5}(\.\d{1,3})?$/.test(n)) throw new Error('A channel number is digits, like 205 or 5.1.');
+  return n.replace(/^0+(?=\d)/, '');
+}
+// Channels saved before numbers could be changed have only "number": that's the provider's.
+function withAlias(c, alias) {
+  const sourceNumber = c.sourceNumber ?? c.number;
+  return { ...c, sourceNumber, alias, number: alias || sourceNumber };
 }
 
 module.exports = { DvrCore, episodeKey };

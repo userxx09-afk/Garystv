@@ -235,6 +235,7 @@ function createServer(core) {
     ['POST', '/api/sources/:id/scan', (q, b, p) => core.scanSource(p.id).then((r) => ({ info: r.info }))],
     ['POST', '/api/sources/:id/antenna-scan', (q, b, p) => hdhomerun.startAntennaScan(core.sources.find((s) => s.id === p.id).config)],
     ['GET', '/api/sources/:id/antenna-scan', (q, b, p) => hdhomerun.antennaScanStatus(core.sources.find((s) => s.id === p.id).config)],
+    ['POST', '/api/channels/renumber', (q, b) => core.renumberChannels(b)],
     ['PUT', '/api/channels/:id', (q, b, p) => core.updateChannel(decodeURIComponent(p.id), b)],
     ['POST', '/api/guides', (q, b) => core.addGuide(b)],
     ['PUT', '/api/guides/:id', (q, b, p) => { core.updateGuide(p.id, b); if (b.config) core.refreshSoon(); }],

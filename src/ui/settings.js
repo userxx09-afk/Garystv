@@ -1,6 +1,6 @@
 // Settings: tuners & IPTV providers, guide sources, matching channels to the
 // guide, recording options and status.
-/* global App, Updates, GTVAndroid */
+/* global App, Updates, GTVAndroid, categoryOf, CATEGORY_RULES */
 const SettingsView = {
   title: 'Settings',
   section: 'sources',
@@ -166,20 +166,21 @@ const SettingsView = {
     const gById = new Map(st.guideChannels.map((g) => [g.id, g]));
     const srcName = new Map(st.sources.map((s) => [s.id, s.name]));
     const f = this.chFilter.toLowerCase();
-    const list = st.channels.filter((c) => !f || `${c.number} ${c.name} ${c.group}`.toLowerCase().includes(f));
+    const list = st.channels.filter((c) => !f || `${c.number} ${c.name} ${c.group} ${srcName.get(c.sourceId) || ''}`.toLowerCase().includes(f))
+      .sort(byNumber);
     const matched = st.channels.filter((c) => c.guideId).length;
     const conf = (c) => (c.mapMode === 'manual' ? ['man', 'Set by you'] : c.mapMode === 'none' ? ['lo', 'No guide'] : !c.guideId ? ['lo', 'No match'] : c.matchScore >= 90 ? ['hi', 'Sure'] : c.matchScore >= 50 ? ['md', 'Likely'] : ['lo', 'Check']);
     pane.innerHTML = `
       <div class="box"><h3>Match channels to the guide</h3>
-        <div class="s">${matched} of ${st.channels.length} channels have guide listings. GarysTV matches by channel number, call sign and name. Check any marked <span class="conf md">Likely</span> or <span class="conf lo">Check</span>, and hide channels you never watch.</div>
-        <div class="row"><div class="field" style="flex:1"><input id="chf" placeholder="Filter channels..." value="${esc(this.chFilter)}"></div><div class="btn nav" id="rematch">↻ Re-match automatically</div></div></div>
+        <div class="s">${matched} of ${st.channels.length} channels have guide listings. GarysTV matches by channel number, call sign and name. Check any marked <span class="conf md">Likely</span> or <span class="conf lo">Check</span>, and hide channels you never watch. Click a channel number to give it your own, or use Renumber for many at once.</div>
+        <div class="row"><div class="field" style="flex:1"><input id="chf" placeholder="Filter channels..." value="${esc(this.chFilter)}"></div><div class="btn nav" id="renumber">🔢 Renumber...</div><div class="btn nav" id="rematch">↻ Re-match automatically</div></div></div>
       <table class="chs"><thead><tr><th>Show</th><th>★</th><th>Ch</th><th>Name</th><th>From</th><th>Guide listing</th><th></th></tr></thead><tbody>
       ${list.slice(0, 400).map((c) => {
         const g = gById.get(c.guideId);
         const [cls, label] = conf(c);
         return `<tr data-ch="${esc(c.id)}"><td><input type="checkbox" data-k="show" ${c.hidden ? '' : 'checked'}></td>
           <td><span class="nav" data-k="fav" style="cursor:pointer;color:${c.favorite ? 'var(--yellow)' : 'var(--dim)'}">★</span></td>
-          <td><b>${esc(c.number)}</b></td><td>${esc(c.name)}${c.group ? `<div class="s" style="font-size:.8rem">${esc(c.group)}</div>` : ''}</td><td class="s">${esc(srcName.get(c.sourceId) || '')}</td>
+          <td><span class="nav" data-k="num" style="cursor:pointer" title="Change the channel number"><b>${esc(c.number)}</b></span>${c.alias ? `<div class="s" style="font-size:.75rem">was ${esc(c.sourceNumber)}</div>` : ''}</td><td>${esc(c.name)}${c.group ? `<div class="s" style="font-size:.8rem">${esc(c.group)}</div>` : ''}</td><td class="s">${esc(srcName.get(c.sourceId) || '')}</td>
           <td>${g ? `${esc(g.names[0])} <span class="s">${esc(g.number || '')} · ${esc(g.providerName)}</span>` : '<span class="s">—</span>'}${c.matchReason && c.mapMode === 'auto' ? `<div class="s" style="font-size:.8rem">by ${esc(c.matchReason)}</div>` : ''}</td>
           <td style="white-space:nowrap"><span class="conf ${cls}">${label}</span> <span class="btn nav" data-k="change" style="padding:.25rem .7rem;font-size:.85rem">Change</span></td></tr>`;
       }).join('')}</tbody></table>
@@ -187,6 +188,7 @@ const SettingsView = {
     const fin = $('#chf', pane);
     let t;
     fin.oninput = () => { clearTimeout(t); t = setTimeout(() => { this.chFilter = fin.value; this.channels(pane); const i = $('#chf'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 300); };
+    $('#renumber', pane).onclick = () => this.renumberDialog(list, this.chFilter.trim());
     $('#rematch', pane).onclick = async () => {
       for (const c of st.channels.filter((x) => x.mapMode !== 'auto')) await api.put(`/api/channels/${encodeURIComponent(c.id)}`, { mapMode: 'auto' });
       await api.post('/api/guides/refresh');
@@ -199,6 +201,96 @@ const SettingsView = {
       $('[data-k="show"]', tr).onchange = (e) => put({ hidden: !e.target.checked });
       $('[data-k="fav"]', tr).onclick = () => put({ favorite: !c.favorite });
       $('[data-k="change"]', tr).onclick = () => this.matchDialog(c);
+      $('[data-k="num"]', tr).onclick = () => this.numberDialog(c);
+    });
+  },
+
+  // Your own number for one channel; "Use the provider's" puts theirs back.
+  numberDialog(c) {
+    const theirs = c.sourceNumber ?? c.number;
+    return Modal.open((m, close) => {
+      m.innerHTML = `<div class="title">Channel number for ${esc(c.name)}</div>
+        <div class="field"><label>Your number (the provider's is ${esc(theirs || 'none')})</label><input id="nnum" class="nav" inputmode="decimal" maxlength="9" value="${esc(c.alias || '')}" placeholder="${esc(theirs)}"></div>
+        <div class="s" id="nwarn" style="min-height:1.2em"></div>
+        <div class="actions"><div class="btn nav primary" id="nok">Save</div>${c.alias ? `<div class="btn nav" id="nback">Use the provider's (${esc(theirs)})</div>` : ''}<div class="btn nav" id="nno">Cancel</div></div>`;
+      const input = $('#nnum', m);
+      const warn = () => {
+        const v = input.value.trim(), other = v && App.state.channels.find((x) => x.id !== c.id && !x.hidden && String(x.number) === v);
+        $('#nwarn', m).textContent = other ? `${other.name} has ${v} too; they'll sit side by side.` : '';
+      };
+      const save = async (alias) => {
+        try {
+          await api.put(`/api/channels/${encodeURIComponent(c.id)}`, { alias });
+          toast(alias ? `${c.name} is now channel ${alias}` : `${c.name} is back on ${theirs}`);
+          close(true);
+        } catch (e) { toast(e.message); }
+      };
+      input._onFocus = () => input.focus();
+      input.oninput = warn;
+      input.addEventListener('keydown', (e) => { // stopped here so the screen underneath doesn't get it too
+        if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); save(input.value.trim()); }
+        if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); input.blur(); Nav.focus($('#nok', m)); }
+      });
+      $('#nok', m).onclick = () => save(input.value.trim());
+      if (c.alias) $('#nback', m).onclick = () => save('');
+      $('#nno', m).onclick = () => close(null);
+      warn();
+    });
+  },
+
+  // Number many channels at once: the ones the filter shows, one provider's, or all of them,
+  // in the order you pick, from a starting number. Hidden channels are left alone.
+  renumberDialog(shown, filterText) {
+    const st = App.state;
+    const visible = (cs) => cs.filter((c) => !c.hidden);
+    const sets = [];
+    if (filterText) sets.push({ key: 'shown', label: `The ones matching "${filterText}"`, list: visible(shown) });
+    for (const src of st.sources) {
+      const cs = visible(st.channels.filter((c) => c.sourceId === src.id));
+      if (cs.length) sets.push({ key: `src:${src.id}`, label: `Everything from ${src.name}`, list: cs });
+    }
+    sets.push({ key: 'all', label: 'Every channel', list: visible(st.channels) });
+    const rows = new Map((App.guideRows || []).map((r) => [r.id, r])); // the guide's rows know what's on, for channels with no group
+    const rank = (c) => { const i = CATEGORY_RULES.findIndex(([n]) => n === categoryOf(rows.get(c.id) || c)); return i < 0 ? 99 : i; };
+    const theirs = (c) => parseFloat(c.sourceNumber ?? c.number) || 1e9;
+    const orders = {
+      now: ['As they are now', byNumber],
+      name: ['A to Z by name', (a, b) => byName(a, b)],
+      cat: ['By category (Sports, News, Kids...), then name', (a, b) => rank(a) - rank(b) || (a.group || '').localeCompare(b.group || '', undefined, { numeric: true }) || byName(a, b)],
+      provider: ["The provider's order", (a, b) => theirs(a) - theirs(b)],
+    };
+    return Modal.open((m, close) => {
+      m.innerHTML = `<div class="title">Renumber channels</div>
+        <div class="field"><label>Which channels</label><select id="rset" class="nav">${sets.map((x) => `<option value="${esc(x.key)}">${esc(x.label)} (${x.list.length})</option>`).join('')}</select></div>
+        <div class="field"><label>In this order</label><select id="rord" class="nav">${Object.entries(orders).map(([k, [label]]) => `<option value="${k}">${esc(label)}</option>`).join('')}</select></div>
+        <div class="field"><label>Starting at</label><input id="rstart" class="nav" inputmode="numeric" maxlength="5" value="1"></div>
+        <div class="s" id="rsum" style="min-height:2.4em"></div>
+        <div class="actions"><div class="btn nav primary" id="rgo">Renumber</div><div class="btn nav" id="rback">Use the provider's numbers</div><div class="btn nav" id="rno">Cancel</div></div>`;
+      const pick = () => {
+        const set = sets.find((x) => x.key === $('#rset', m).value);
+        return { set, list: [...set.list].sort(orders[$('#rord', m).value][1]), start: parseInt($('#rstart', m).value, 10) };
+      };
+      const sum = () => {
+        const { list, start } = pick();
+        if (!(start > 0)) { $('#rsum', m).textContent = 'Give the first channel number.'; return; }
+        const ids = new Set(list.map((c) => c.id)), end = start + list.length - 1;
+        const clash = visible(st.channels).filter((c) => !ids.has(c.id) && parseFloat(c.number) >= start && parseFloat(c.number) <= end).length;
+        $('#rsum', m).innerHTML = `${list.length === 1 ? '1 channel becomes' : `${list.length} channels become`} ${start}${end > start ? ` to ${end}` : ''}: ${esc(list.slice(0, 3).map((c, i) => `${start + i} ${c.name}`).join(', '))}${list.length > 3 ? '...' : ''}`
+          + (clash ? `<br><span style="color:var(--yellow)">${clash} other channels already use numbers in that range; they'll sit side by side.</span>` : '');
+      };
+      const send = async (body, done) => {
+        try { const r = await api.post('/api/channels/renumber', body); toast(done(r.count), 5000); close(true); } catch (e) { toast(e.message); }
+      };
+      $('#rset', m).onchange = sum;
+      $('#rord', m).onchange = sum;
+      const start = $('#rstart', m);
+      start.oninput = sum;
+      start._onFocus = () => start.focus();
+      start.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); start.blur(); Nav.focus($('#rgo', m)); } });
+      $('#rgo', m).onclick = () => { const { list, start: n } = pick(); send({ ids: list.map((c) => c.id), start: n }, (k) => `Renumbered ${k} channel${k === 1 ? '' : 's'} from ${n}.`); };
+      $('#rback', m).onclick = () => { const { set } = pick(); send({ ids: set.list.map((c) => c.id), clear: true }, (k) => `${k} channel${k === 1 ? ' is' : 's are'} back on the provider's numbers.`); };
+      $('#rno', m).onclick = () => close(null);
+      sum();
     });
   },
 
@@ -384,3 +476,8 @@ const SettingsView = {
     });
   },
 };
+
+// Lowest channel number first (5.1 before 12), then by name.
+function byNumber(a, b) { return (parseFloat(a.number) || 1e9) - (parseFloat(b.number) || 1e9) || byName(a, b); }
+// Names with numbers in order: PPV 2 before PPV 10.
+function byName(a, b) { return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }); }
