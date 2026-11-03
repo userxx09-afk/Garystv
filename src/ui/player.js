@@ -188,7 +188,12 @@ const Player = {
     const scr = $('#screen');
     scr.className = mode === 'off' ? '' : mode;
     scr.style.cssText = '';
-    if (mode === 'pip') this.placePip();
+    if (mode === 'pip') {
+      this.placePip();
+      // Some TV web views keep the picture where it was until the video is redrawn.
+      const v = $('#video');
+      requestAnimationFrame(() => { v.style.visibility = 'hidden'; requestAnimationFrame(() => { v.style.visibility = ''; }); });
+    }
   },
 
   // OK, Back or G while watching live: the guide, on this channel, with it still playing in the

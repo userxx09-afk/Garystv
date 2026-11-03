@@ -108,8 +108,9 @@ const Nav = {
       let primary, secondary;
       if (dir === 'up') { if (b.bottom > a.top + 2) continue; primary = -dy; secondary = Math.abs(dx); }
       if (dir === 'down') { if (b.top < a.bottom - 2) continue; primary = dy; secondary = Math.abs(dx); }
-      if (dir === 'left') { if (b.right > a.left + 2) continue; primary = -dx; secondary = Math.abs(dy); }
-      if (dir === 'right') { if (b.left < a.right - 2) continue; primary = dx; secondary = Math.abs(dy); }
+      // Left/right from the near edges, so a wide box beside you beats a small button far above.
+      if (dir === 'left') { if (b.right > a.left + 2) continue; primary = Math.max(0, a.left - b.right); secondary = Math.abs(dy); }
+      if (dir === 'right') { if (b.left < a.right - 2) continue; primary = Math.max(0, b.left - a.right); secondary = Math.abs(dy); }
       const score = primary + secondary * 2.5;
       if (score < bestScore) { bestScore = score; best = el; }
     }

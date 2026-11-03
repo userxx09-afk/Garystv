@@ -200,7 +200,7 @@ pre.log { margin: 0; font-size: .8rem; color: var(--muted); white-space: pre-wra
 /* ---------- player ---------- */
 #screen { position: fixed; background: #000; z-index: 40; display: none; overflow: hidden; }
 #screen.full { inset: 0; display: block; }
-#screen.pip { display: block; border-radius: .6rem; }
+#screen.pip { display: block; overflow: visible; } /* no rounded clipping: Android TVs draw the video black inside one */
 #screen video { width: 100%; height: 100%; object-fit: contain; background: #000; }
 .osd { position: absolute; left: 0; right: 0; bottom: 0; padding: 2rem 3rem 2.2rem; background: linear-gradient(transparent, #000d 45%); display: flex; flex-direction: column; gap: .5rem; transition: opacity .3s; }
 .osd.hide { opacity: 0; }

@@ -241,7 +241,7 @@ const SettingsView = {
           close({ number: alias || theirs });
         } catch (e) { toast(e.message); }
       };
-      input._onFocus = () => input.focus();
+      input.onclick = () => input.focus(); // OK on it brings up the keyboard; just landing on it doesn't
       input.oninput = warn;
       input.addEventListener('keydown', (e) => { // stopped here so the screen underneath doesn't get it too
         if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); save(input.value.trim()); }
@@ -301,7 +301,7 @@ const SettingsView = {
       $('#rord', m).onchange = sum;
       const start = $('#rstart', m);
       start.oninput = sum;
-      start._onFocus = () => start.focus();
+      start.onclick = () => start.focus();
       start.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); start.blur(); Nav.focus($('#rgo', m)); } });
       $('#rgo', m).onclick = () => { const { list, start: n } = pick(); send({ ids: list.map((c) => c.id), start: n }, (k) => `Renumbered ${k} channel${k === 1 ? '' : 's'} from ${n}.`); };
       $('#rback', m).onclick = () => { const { set } = pick(); send({ ids: set.list.map((c) => c.id), clear: true }, (k) => `${k} channel${k === 1 ? ' is' : 's are'} back on the provider's numbers.`); };
@@ -333,7 +333,7 @@ const SettingsView = {
         try { await api.put(`/api/channels/${encodeURIComponent(c.id)}`, { alias }); toast(alias ? `${c.name} is now channel ${alias}` : `${c.name} is on ${theirs}`); close(true); } catch (e) { toast(e.message); }
       };
       const num = $('#mnum', m);
-      num._onFocus = () => num.focus();
+      num.onclick = () => num.focus(); // OK on it brings up the keyboard; just landing on it doesn't
       num.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); saveNum(num.value.trim()); }
         if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); num.blur(); Nav.focus($('#ml .nav', m) || $('[data-v]', m)); }
@@ -358,21 +358,21 @@ const SettingsView = {
   // Kept on this TV only, so each TV (and each person's) can start its own way.
   startup(pane) {
     const s = startChoice(), lists = App.state.favLists || [];
-    const opt = (v, label, on) => `<option value="${esc(v)}"${on ? ' selected' : ''}>${esc(label)}</option>`;
+    const opens = [{ value: 'home', label: 'The Home screen' }, { value: 'guide', label: 'The Guide' }, { value: 'live', label: 'The last channel watched, playing' }];
+    const shows = [{ value: 'last', label: 'Whatever was showing last time' }, { value: '', label: 'All channels' },
+      ...(lists.length > 1 ? [{ value: '*', label: '★ All favorites' }] : []), ...lists.map((l) => ({ value: l.id, label: `★ ${l.name}` }))];
+    const last = App.lastChannel && App.state.channels.find((c) => c.id === App.lastChannel);
     pane.innerHTML = `<div class="box"><h3>When GarysTV starts on this TV</h3>
-      <div class="s">Saved on this TV only, so every TV can start its own way.</div>
-      <div class="field"><label>Open</label><select id="stOpen" class="nav">
-        ${opt('home', 'The Home screen', s.open === 'home')}${opt('guide', 'The Guide', s.open === 'guide')}${opt('live', 'The last channel watched, playing', s.open === 'live')}</select></div>
-      <div class="field"><label>Channels shown in the Guide</label><select id="stList" class="nav">
-        ${opt('last', 'Whatever was showing last time', s.list === 'last')}${opt('', 'All channels', s.list === '')}
-        ${lists.length > 1 ? opt('*', '★ All favorites', s.list === '*') : ''}${lists.map((l) => opt(l.id, `★ ${l.name}`, s.list === l.id)).join('')}</select></div>
-      <div class="s">${App.lastChannel ? `Last channel watched here: ${esc((App.state.channels.find((c) => c.id === App.lastChannel) || {}).name || 'unknown')}` : 'No channel watched on this TV yet; until then it opens the Guide.'}</div></div>`;
-    const save = () => {
-      try { localStorage.setItem('gtv.start', JSON.stringify({ open: $('#stOpen', pane).value, list: $('#stList', pane).value })); } catch (_) { /* private mode */ }
-      toast('Saved for this TV');
-    };
-    $('#stOpen', pane).onchange = save;
-    $('#stList', pane).onchange = save;
+      <div class="s">Saved on this TV only, so every TV can start its own way. Use ← → (or OK) to change each one.</div>
+      <div id="stRows" style="display:grid;gap:.5rem;margin:.8rem 0;max-width:40rem"></div>
+      <div class="s">${last ? `Last channel watched here: ${esc(last.number)} ${esc(last.name)}` : 'No channel watched on this TV yet; until then it opens the Guide.'}</div></div>`;
+    const cur = { ...s };
+    const save = () => { try { localStorage.setItem('gtv.start', JSON.stringify(cur)); } catch (_) { /* private mode */ } };
+    const at = (vals, v) => Math.max(0, vals.findIndex((x) => x.value === v));
+    const rows = $('#stRows', pane);
+    rows.append(optionRow('Open', opens, at(opens, s.open), (v) => { cur.open = v; save(); }));
+    rows.append(optionRow('Guide shows', shows, at(shows, s.list), (v) => { cur.list = v; save(); }));
+    rows.firstChild.dataset.key = 'st-open'; rows.lastChild.dataset.key = 'st-list';
   },
 
   // ---------- recording ----------
