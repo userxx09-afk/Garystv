@@ -285,3 +285,11 @@ html.tv .osd-btns { display: none; } /* the remote's buttons do these on the TV 
 .pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: .5rem; }
 .pad-key { justify-content: center; font-size: 1.6rem; font-weight: 700; padding: .7rem 0; }
 .pad-modal .actions .btn { flex: 1; justify-content: center; }
+.poster { position: relative; }
+.poster .pfav { position: absolute; top: .35rem; right: .45rem; z-index: 1; color: var(--yellow); font-size: 1.3rem; text-shadow: 0 1px 4px #000; }
+.cat-modal { width: min(52rem, 94vw); }
+.cat-cols { display: grid; grid-template-columns: 1fr 1.3fr; gap: 1rem; min-height: 0; }
+.cat-cols .menu-list { max-height: 58vh; overflow-y: auto; margin: 0; padding: .2rem; }
+.cat-cols .btn { justify-content: space-between; }
+.cat-cols .cnt { color: var(--muted); font-size: .9rem; margin-left: .8rem; }
+.cat-cols .btn.focus .cnt { color: #3b4a63; }

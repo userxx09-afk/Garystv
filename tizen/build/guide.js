@@ -12,7 +12,7 @@ const GuideView = {
   inBar: false, // the remote is on the bar above the guide
 
   get list() { return ((App.state && App.state.favLists) || []).find((l) => l.id === this.listId) || null; },
-  get title() { return ['Guide', this.list && this.list.name, this.filter].filter(Boolean).join(' › '); },
+  get title() { return ['Guide', this.list && this.list.name, this.filterLabel].filter(Boolean).join(' › '); },
   hints: [['↑↓←→', 'Move'], ['OK', 'Options'], ['R', 'Record', 'k-red'], ['M', 'Menu'], ['PgUp/PgDn', 'Page'], ['[ ]', 'Day'], ['#', 'Channel #'], ['Esc', 'Back']],
 
   // Show one favorites list (or all channels with null). Watching from it, channel up/down stays in it.
@@ -29,36 +29,69 @@ const GuideView = {
 
   applyList() {
     const l = this.list, f = this.filter;
-    this.rows = this.all.filter((r) => (!l || l.channelIds.includes(r.id)) && (!f || channelTags(r).includes(f)));
+    this.rows = this.all.filter((r) => (!l || l.channelIds.includes(r.id)) && (!f || inFilter(r, f)));
     App.guideRows = this.rows;
   },
 
-  // ---------- filters: the groups the provider puts channels in (US, Sports, News...) ----------
-  // -> [[name, channels], ...], most used first
-  tagCounts() {
-    const n = new Map();
-    for (const r of this.all) for (const t of channelTags(r)) n.set(t, (n.get(t) || 0) + 1);
-    return [...n].filter(([, c]) => c >= 2 || n.size < 12).sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0])).slice(0, 30);
-  },
+  // ---------- categories: Sports, News, Movies... and, inside each, the provider's own groups ----------
+  // filter: a category name ("Sports"), or "group:" + one provider group ("group:US| ESPN PLUS").
+  get filterLabel() { return !this.filter ? '' : this.filter.startsWith('group:') ? groupLabel(this.filter.slice(6)) : this.filter; },
 
-  setFilter(tag) {
-    this.filter = tag || null;
+  setFilter(f) {
+    this.filter = f || null;
     try { if (this.filter) localStorage.setItem('gtv.filter', this.filter); else localStorage.removeItem('gtv.filter'); } catch (_) { /* private mode */ }
     this.setList(this.listId);
   },
 
-  async filterMenu() {
-    const tags = this.tagCounts();
-    if (!tags.length) { toast("Your channels don't come with groups to filter by."); return; }
-    const v = await Modal.menu('Filter channels', '<div class="s">Show only the channels in one group. Works with a favorites list too.</div>', [
-      { label: `All channels${this.filter ? '' : '  ✓'}`, value: '', cls: this.filter ? '' : 'primary' },
-      ...tags.map(([t, c]) => ({ label: `${t} (${c})${t === this.filter ? '  ✓' : ''}`, value: t, cls: t === this.filter ? 'primary' : '' })),
-      { label: 'Cancel', value: null },
-    ]);
-    if (v != null) this.setFilter(v || null);
+  // -> [{ name, n, groups: [{ raw, label, n }] }], biggest first (within the favorites list shown)
+  categoryTree() {
+    const l = this.list;
+    const cats = new Map();
+    for (const r of this.all) {
+      if (l && !l.channelIds.includes(r.id)) continue;
+      const name = categoryOf(r);
+      if (!cats.has(name)) cats.set(name, { name, n: 0, groups: new Map() });
+      const c = cats.get(name);
+      c.n++;
+      if (r.group) c.groups.set(r.group, (c.groups.get(r.group) || 0) + 1);
+    }
+    return [...cats.values()].sort((a, b) => (a.name === 'Other') - (b.name === 'Other') || b.n - a.n)
+      .map((c) => ({ ...c, groups: [...c.groups].map(([raw, n]) => ({ raw, n, label: groupLabel(raw) })).sort((a, b) => b.n - a.n) }));
   },
 
-  // The bar above the guide: every channel, each favorites list, and the filter.
+  // The Categories button: categories down the left; the highlighted one's groups on the right.
+  categoryPicker() {
+    const tree = this.categoryTree();
+    const total = tree.reduce((s, c) => s + c.n, 0);
+    const cur = this.filter;
+    return Modal.open((m, close) => {
+      m.classList.add('cat-modal');
+      m.innerHTML = `<div class="title">Categories${this.list ? ` in ${esc(this.list.name)}` : ''}</div>
+        <div class="s">Pick a category, or → for the provider's groups inside it.</div>
+        <div class="cat-cols"><div class="menu-list" id="catL"></div><div class="menu-list" id="catR"></div></div>`;
+      const left = $('#catL', m), right = $('#catR', m);
+      const item = (html, on, attrs) => `<div class="btn nav${on ? ' primary' : ''}" ${attrs}>${html}</div>`;
+      const count = (n) => `<span class="cnt">${n}</span>`;
+      left.innerHTML = item(`All channels ${count(total)}`, !cur, 'data-key="cat-all" data-cat=""')
+        + tree.map((c) => item(`${esc(c.name)} ${count(c.n)}`, cur === c.name, `data-key="cat-${esc(c.name)}" data-cat="${esc(c.name)}"`)).join('');
+      const showGroups = (name) => {
+        const c = tree.find((x) => x.name === name);
+        right.innerHTML = !c ? '<div class="s">Every channel, in every category.</div>'
+          : item(`All ${esc(c.name)} ${count(c.n)}`, cur === c.name, `data-cat="${esc(c.name)}"`)
+            + c.groups.map((g) => item(`${esc(g.label)} ${count(g.n)}`, cur === `group:${g.raw}`, `data-group="${esc(g.raw)}"`)).join('');
+        $$('[data-cat]', right).forEach((el) => { el.onclick = () => close(el.dataset.cat); });
+        $$('[data-group]', right).forEach((el) => { el.onclick = () => close(`group:${el.dataset.group}`); });
+      };
+      $$('[data-cat]', left).forEach((el) => {
+        el.onclick = () => close(el.dataset.cat);
+        el._onFocus = () => showGroups(el.dataset.cat);
+      });
+      const curCat = !cur ? '' : cur.startsWith('group:') ? categoryOf({ group: cur.slice(6) }) : cur;
+      setTimeout(() => Nav.focus($(`[data-cat="${CSS.escape(curCat)}"]`, left) || $('[data-cat]', left)), 0);
+    }).then((v) => { if (v != null) this.setFilter(v || null); });
+  },
+
+  // The bar above the guide: every channel, each favorites list, categories, a channel number.
   paintBar() {
     const bar = $('#gbar');
     if (!bar) return;
@@ -66,12 +99,12 @@ const GuideView = {
     const chip = (key, on, label, attr = '') => `<span class="chip nav${on ? ' on' : ''}" data-key="${key}" ${attr}>${label}</span>`;
     bar.innerHTML = chip('gb-all', !this.list, 'All channels', 'data-list=""')
       + lists.map((l) => chip(`gb-${esc(l.id)}`, this.listId === l.id, `★ ${esc(l.name)}`, `data-list="${esc(l.id)}"`)).join('')
+      + chip('gb-cats', !!this.filter, `▦ ${this.filter ? esc(this.filterLabel) : 'Categories'}`, 'id="gcats"')
+      + (this.filter ? chip('gb-clear', false, '✕', 'id="gclear" title="Show every category"') : '')
       + '<span class="spacer"></span>'
-      + chip('gb-pad', false, '🔢 Channel #', 'id="gpad"')
-      + chip('gb-filter', !!this.filter, `⏷ ${this.filter ? esc(this.filter) : 'Filter'}`, 'id="gfilter"')
-      + (this.filter ? chip('gb-clear', false, '✕ Clear', 'id="gclear"') : '');
+      + chip('gb-pad', false, '🔢 Channel #', 'id="gpad"');
     $$('[data-list]', bar).forEach((el) => { el.onclick = () => { this.setList(el.dataset.list || null); this.refocusBar(); }; });
-    $('#gfilter', bar).onclick = () => this.filterMenu().then(() => this.refocusBar());
+    $('#gcats', bar).onclick = () => this.categoryPicker().then(() => this.refocusBar());
     $('#gpad', bar).onclick = () => this.pad();
     const clr = $('#gclear', bar);
     if (clr) clr.onclick = () => { this.setFilter(null); this.refocusBar(); };
@@ -137,7 +170,7 @@ const GuideView = {
     $('#gtimes').innerHTML = [0, 1, 2].map((i) => `<span style="left:${(i * 100) / 3}%">${fmt.time(this.ws + i * SLOT)}</span>`).join('') +
       (now >= this.ws && now < this.ws + SPAN ? `<div class="g-now" style="left:${((now - this.ws) / SPAN) * 100}%"></div>` : '');
     if (!this.rows.length && this.filter) {
-      body.innerHTML = `<div class="g-empty">No channels${this.list ? ` in <b>${esc(this.list.name)}</b>` : ''} are in <b>${esc(this.filter)}</b>. Pick another filter on the bar above, or clear it.</div>`;
+      body.innerHTML = `<div class="g-empty">No channels${this.list ? ` in <b>${esc(this.list.name)}</b>` : ''} are in <b>${esc(this.filterLabel)}</b>. Pick another category on the bar above, or clear it.</div>`;
       this.paintInfo(null, null);
       return;
     }
@@ -264,23 +297,11 @@ const GuideView = {
     if (r) items.push({ label: `▶ Watch ${r.number} ${r.name}`, run: () => Player.play('live', r.id), cls: 'primary' });
     items.push({ label: '🔢 Go to a channel number...', run: () => this.pad() });
     if (r) items.push(...App.recordItems(r, p).map((c) => ({ ...c, run: () => Promise.resolve(c.run()).then(() => this.refresh()) })));
-    if (r) {
-      for (const l of lists) {
-        const on = l.channelIds.includes(r.id);
-        items.push({
-          label: on ? `★ Take ${r.name} off ${l.name}` : `☆ Add ${r.name} to ${l.name}`,
-          run: async () => {
-            const res = await api.post(`/api/favlists/${l.id}/toggle`, { channelId: r.id });
-            toast(res.on ? `★ Added ${r.name} to ${l.name}` : `Took ${r.name} off ${l.name}`);
-            await after();
-          },
-        });
-      }
-    }
+    if (r) items.push(...App.channelFavItems(r, after));
     for (const l of lists) if (!cur || l.id !== cur.id) items.push({ label: `▦ Show ${l.name} (${l.channelIds.length})`, run: () => this.setList(l.id) });
     if (cur) items.push({ label: '▦ Show all channels', run: () => this.setList(null) });
-    items.push({ label: this.filter ? `⏷ Filter: ${this.filter}...` : '⏷ Filter channels (US, Sports, News...)', run: () => this.filterMenu() });
-    if (this.filter) items.push({ label: '✕ Clear the filter', run: () => this.setFilter(null) });
+    items.push({ label: this.filter ? `▦ Categories: ${this.filterLabel}...` : '▦ Categories (Sports, News, Movies...)', run: () => this.categoryPicker() });
+    if (this.filter) items.push({ label: '✕ Show every category', run: () => this.setFilter(null) });
     if (this.ws > align(now)) items.push({ label: '⏱ Back to now', run: () => { this.ws = align(now); this.t = now; this.paint(); } });
     items.push({
       label: '＋ New favorites list...',
@@ -327,12 +348,26 @@ const GuideView = {
     this.paint();
   },
 
+  // Hold ←: back to the first channel, now.
+  toTop() {
+    this.inBar = false;
+    Nav.focus(null);
+    this.row = 0; this.top = 0;
+    this.ws = align(Date.now()); this.t = Date.now();
+    this.load().then(() => this.paint());
+    return true;
+  },
+
   // Synchronous so the key handler knows right away whether the key was used.
   onKey(e) {
     const k = e.key;
+    if (this.inBar && Nav.current && Nav.current.closest('#topnav')) { // the buttons along the top
+      if (k === 'ArrowDown') { this.refocusBar(); return true; }
+      return ['ArrowLeft', 'ArrowRight', 'Enter'].includes(k) && Nav.handle(e);
+    }
     if (this.inBar) { // on the bar above the guide: ←→ along it, OK picks, ↓ back to the shows
       if (k === 'ArrowDown') { this.inBar = false; Nav.focus(null); this.paint(); return true; }
-      if (k === 'ArrowUp') return true;
+      if (k === 'ArrowUp') { Nav.focus($('#topnav .nav')); return true; }
       if (k === 'ArrowLeft' || k === 'ArrowRight') { // in order, even when a narrow screen wraps the bar
         const chips = $$('#gbar .chip'), i = chips.indexOf(Nav.current);
         Nav.focus(chips[Math.max(0, Math.min(chips.length - 1, i + (k === 'ArrowRight' ? 1 : -1)))]);
@@ -364,26 +399,40 @@ const GuideView = {
   },
 };
 
-// A channel's groups as filter names: "USA | Sports" -> US and Sports. Shows' categories count
-// too when most of a channel's listings share one (a sports channel the provider didn't group).
-const SAME = { usa: 'US', us: 'US', 'united states': 'US', 'u.s.': 'US', uk: 'UK', 'united kingdom': 'UK', movie: 'Movies', film: 'Movies', films: 'Movies', kid: 'Kids', children: 'Kids', sport: 'Sports' };
-function channelTags(r) {
-  if (r._tags) return r._tags;
-  const tags = new Set();
-  const add = (t) => {
-    t = String(t || '').trim().replace(/\s+/g, ' ');
-    if (!t || t.length > 24 || /^\d+$/.test(t)) return;
-    const low = t.toLowerCase();
-    tags.add(SAME[low] || (t === t.toUpperCase() && t.length > 3 ? t[0] + low.slice(1) : t));
-  };
-  // "US: Sports", "USA | News", "EN - Kids", "Sports / Live"
-  String(r.group || '').split(/\s*[|:/,;•–—]\s*|\s+-\s+/).forEach(add);
-  const progs = (r.programs || []).filter((p) => !p.filler);
-  const seen = new Map();
-  for (const p of progs) for (const c of new Set(p.categories || [])) seen.set(c, (seen.get(c) || 0) + 1);
-  for (const [c, n] of seen) if (progs.length >= 2 && n >= progs.length / 2) add(c);
-  r._tags = [...tags];
-  return r._tags;
+// A channel's broad category, from the provider's group ("US| ESPN PLUS" -> Sports), or for a
+// channel without one, from what most of its listings are. The first rule that matches wins,
+// so "SPORTS NETWORK" is Sports and "NBC NETWORK" is Local & networks.
+const CATEGORY_RULES = [
+  ['Sports', /sport|espn|\bnfl|\bnba|wnba|\bnhl|\bmlb|milb|\bmls\b|ncaa|soccer|fifa|tennis|dazn|golf|racing|\bf1\b|\bb1g|\bbtn|fite|\bflo\b|nfhs|victory\+|\bwwe|\bufc|boxing|deportes|outdoor|ppv|\bstan\b/i],
+  ['News', /news|weather/i],
+  ['Kids', /\bkid|famil|cartoon|junior|children/i],
+  ['Entertainment', /tv shows|series|entertain/i],
+  ['Movies', /movie|cinema|hollywood|\bfilm/i],
+  ['Faith', /biblic|relig|faith|gospel/i],
+  ['Music', /music/i],
+  ['Documentaries', /\bpbs\b|documentar|history|science|nature/i],
+  ['Local & networks', /\b(abc|nbc|cbs|fox|cw|my network|telemundo|spectrum|locals?)\b/i],
+];
+function categoryOf(r) {
+  if (r._cat) return r._cat;
+  const match = (t) => (CATEGORY_RULES.find(([, re]) => re.test(t)) || [])[0];
+  let cat = r.group ? match(r.group) || 'Entertainment' : null;
+  if (!cat) {
+    const progs = (r.programs || []).filter((p) => !p.filler);
+    const seen = new Map();
+    for (const p of progs) for (const c of new Set((p.categories || []).map(match).filter(Boolean))) seen.set(c, (seen.get(c) || 0) + 1);
+    const [best] = [...seen].sort((a, b) => b[1] - a[1]);
+    cat = best && best[1] >= progs.length / 2 ? best[0] : 'Other';
+  }
+  if (r.programs) r._cat = cat;
+  return cat;
+}
+function inFilter(r, f) { return f.startsWith('group:') ? r.group === f.slice(6) : categoryOf(r) === f; }
+
+// "US| CINEMANIA TV SHOWS" -> "Cinemania TV Shows"; "TV ᴿᴬᵂ ⁶⁰ᶠᵖˢ" -> "TV RAW 60fps".
+function groupLabel(raw) {
+  return String(raw).normalize('NFKC').replace(/^\s*(US|USA|UK|CA|EN)\s*[|:-]\s*/i, '').replace(/\s+/g, ' ').trim()
+    .split(' ').map((w) => (/^[A-Z]{5,}$/.test(w) ? w[0] + w.slice(1).toLowerCase() : w)).join(' ') || raw;
 }
 
 function timerIcon(p) {

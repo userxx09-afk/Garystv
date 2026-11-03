@@ -316,7 +316,7 @@ const TimersView = {
   },
 
   onKey(e) {
-    if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && Nav.current && !Nav.current.classList.contains('tab')) {
+    if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && Nav.current && !Nav.current.classList.contains('tab') && !Nav.current.closest('#topnav')) {
       this.tab = this.tab === 'rules' ? 'schedule' : 'rules';
       App.render();
       return true;
@@ -367,6 +367,7 @@ const SearchView = {
     this.paint();
     const v = await vod;
     if (seq !== this.seq) return;
+    if (!MoviesView.info) { try { MoviesView.info = ShowsView.info = await api.get('/api/vod'); } catch (_) { /* favorites show as not set */ } }
     this.vodWaiting = false;
     Object.assign(this.res, v);
     this.paint();
@@ -380,7 +381,7 @@ const SearchView = {
         key: `c-${c.id}`,
         html: `<div class="main"><div class="t">${c.logo ? `<img class="slogo" src="${esc(c.logo)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}${esc(c.number)} ${esc(c.name)}</div><div class="s">${esc(c.group || 'Channel')}</div></div><div class="m">Watch</div>`,
         open: () => Player.play('live', c.id),
-        more: [...App.recordItems(c, null), { label: '▦ Find it in the Guide', run: () => { GuideView.filter = null; GuideView.setList(null, c.id); App.go('guide'); } }],
+        more: [...App.channelFavItems(c), ...App.recordItems(c, null), { label: '▦ Find it in the Guide', run: () => { GuideView.filter = null; GuideView.setList(null, c.id); App.go('guide'); } }],
       }));
     }
     if (kind === 'programs') {
@@ -412,7 +413,7 @@ const SearchView = {
       html: `${v.poster ? `<img class="sposter" src="${esc(v.poster)}" alt="" loading="lazy" onerror="this.remove()">` : ''}<div class="main"><div class="t">${esc(v.name)}</div>
         <div class="s">${esc([kind === 'movies' ? 'Movie' : 'Show', v.year, v.rating ? `★ ${v.rating}` : ''].filter(Boolean).join(' · '))}</div></div><div class="m">${kind === 'movies' ? 'Watch' : 'Episodes'}</div>`,
       open: () => lib.open(v),
-      more: [],
+      more: [lib.favItem(v)],
     }));
   },
 

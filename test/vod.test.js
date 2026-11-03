@@ -77,6 +77,14 @@ test('Movies and shows from an IPTV provider', async () => {
     assert.deepEqual((await vod.search('movies', 'man')).map((m) => m.name), ['The Amazing Spider-Man', 'Spider-Man (2002)']); // not Batman, no adult titles
     assert.deepEqual((await vod.search('shows', 'show')).map((s) => s.name), ['A Show']);
 
+    // Favorites: kept with what a poster needs, newest first; only movies and shows.
+    vod.setFavorite('m~src1~4~mp4', true, { name: 'The Amazing Spider-Man', poster: 'http://p/4.jpg' });
+    vod.setFavorite('s~src1~44', true, { name: 'A Show' });
+    assert.deepEqual(vod.favoriteList().map((f) => f.name), ['A Show', 'The Amazing Spider-Man']);
+    vod.setFavorite('s~src1~44', false);
+    assert.deepEqual(vod.favoriteList().map((f) => f.id), ['m~src1~4~mp4']);
+    assert.throws(() => vod.setFavorite('e~src1~902~mp4', true), /movie or a show/);
+
     // Where you stopped: kept part way through, dropped near the end.
     vod.saveProgress('m~src1~2~mp4', { position: 600, duration: 5400, title: 'New Movie' });
     assert.equal(vod.continueList()[0].position, 600);

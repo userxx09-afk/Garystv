@@ -213,7 +213,8 @@ function createServer(core) {
     ['DELETE', '/api/favlists/:id', (q, b, p) => core.removeFavList(p.id)],
     ['POST', '/api/favlists/:id/toggle', (q, b, p) => core.toggleFavChannel(p.id, String(b.channelId || ''), b.on)],
     // Movies and shows from IPTV providers (core/vod.js). kind: movies | shows
-    ['GET', '/api/vod', () => ({ providers: vod.providers().length, continue: vod.continueList() })],
+    ['GET', '/api/vod', () => ({ providers: vod.providers().length, continue: vod.continueList(), favorites: vod.favoriteList() })],
+    ['PUT', '/api/vod/favorite/:id', (q, b, p) => vod.setFavorite(decodeURIComponent(p.id), b.on !== false, b.item)],
     ['GET', '/api/vod/search', (q) => Promise.all(['movies', 'shows'].map((k) => vod.search(k, q.q))).then(([movies, shows]) => ({ movies, shows }))],
     ['GET', '/api/vod/movie/:id', (q, b, p) => vod.movie(decodeURIComponent(p.id))],
     ['GET', '/api/vod/show/:id', (q, b, p) => vod.show(decodeURIComponent(p.id))],

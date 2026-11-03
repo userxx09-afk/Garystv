@@ -136,6 +136,18 @@ class Vod {
     return { saved: !done };
   }
   continueList() { return Object.entries(this.progress).map(([id, p]) => ({ id, ...p })).sort((a, b) => b.at - a.at); }
+
+  // Favorite movies (m~) and shows (s~), newest first, with what the posters need.
+  get favorites() { return this.core.store.read('vodfavs', {}); }
+  setFavorite(id, on, item = {}) {
+    if (!/^[ms]~[^~]+~\d+/.test(String(id))) throw new Error('Only a movie or a show can be a favorite.');
+    const all = { ...this.favorites };
+    if (on) all[id] = { name: String(item.name || ''), poster: String(item.poster || ''), year: String(item.year || ''), rating: item.rating || null, at: Math.max(Date.now(), ...Object.values(all).map((f) => f.at + 1)) }; // newest first, even within a millisecond
+    else delete all[id];
+    this.core.store.write('vodfavs', all);
+    return { on: !!on };
+  }
+  favoriteList() { return Object.entries(this.favorites).map(([id, f]) => ({ id, ...f })).sort((a, b) => b.at - a.at); }
 }
 
 const listAction = (kind) => (kind === 'shows' ? 'get_series' : 'get_vod_streams');

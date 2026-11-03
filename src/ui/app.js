@@ -23,6 +23,15 @@ const App = {
     this.render(focus);
   },
 
+  // Hold ←: to the top of the list you're in (the guide: the first channel). A screen can
+  // have its own toTop(); otherwise the first item of the list holding the highlight.
+  toTop() {
+    if (!Modal.top() && this.view && this.view.toTop && this.view.toTop()) return;
+    const box = Nav.current && Nav.current.closest('.list, .menu-list, .posters, .cards, .tiles, .seasons, .pad, .g-bar, .menu, .tabs');
+    if (box) box.scrollTop = 0;
+    Nav.focus((box && $('.nav', box)) || Nav.items()[0]);
+  },
+
   // The logo: straight to Home from anywhere, closing whatever is open.
   home() {
     while (Modal.closeTop());
@@ -88,6 +97,24 @@ const App = {
     });
     toast(`● Will record ${p.title}`);
     await this.loadAll();
+  },
+
+  // Favorites choices for a channel: in or out of each list; with no list yet, one called
+  // Favorites is made. after(): what to do once it's changed (the guide redraws).
+  channelFavItems(ch, after = () => this.loadAll()) {
+    const lists = this.state.favLists || [];
+    const toggle = async (l, on) => {
+      const res = await api.post(`/api/favlists/${l.id}/toggle`, { channelId: ch.id, ...(on != null ? { on } : {}) });
+      toast(res.on ? `★ Added ${ch.name} to ${l.name}` : `Took ${ch.name} off ${l.name}`);
+      await after();
+    };
+    if (!lists.length) {
+      return [{ label: `★ Add ${ch.name} to Favorites`, run: async () => { const l = await api.post('/api/favlists', { name: 'Favorites' }); await toggle(l, true); } }];
+    }
+    return lists.map((l) => {
+      const on = l.channelIds.includes(ch.id);
+      return { label: on ? `★ Take ${ch.name} off ${l.name}` : `☆ Add ${ch.name} to ${l.name}`, run: () => toggle(l) };
+    });
   },
 
   // Recording choices for a channel and the show on it, for the hold-OK menus.
@@ -285,6 +312,19 @@ const App = {
 };
 
 // ---------- keys ----------
+// Holding ← (the remote repeats it while held; a key-up isn't always sent): after a moment,
+// jump to the top. Key repeats (or presses very close together) count as one hold.
+const held = { start: 0, last: 0, fired: 0 };
+function heldLeft(e) {
+  if (e.key !== 'ArrowLeft') { held.start = 0; return false; }
+  const now = Date.now();
+  if (!held.start || (!e.repeat && now - held.last > 120)) Object.assign(held, { start: now, fired: 0 }); // quick taps stay taps
+  held.last = now;
+  if (!held.fired && now - held.start > 700) held.fired = 1;
+  return held.fired > 0;
+}
+document.addEventListener('keyup', (e) => { if (e.key === 'ArrowLeft') held.start = 0; });
+
 document.addEventListener('keydown', (e) => {
   const a = document.activeElement;
   const typing = a && ['INPUT', 'SELECT', 'TEXTAREA'].includes(a.tagName);
@@ -293,7 +333,8 @@ document.addEventListener('keydown', (e) => {
     else if (e.key === 'Escape') { a.blur(); App.back(); e.preventDefault(); }
     return;
   }
-  if (Player.onKey(e)) { e.preventDefault(); return; }
+  if (Player.onKey(e)) { e.preventDefault(); return; } // while watching, holding ← keeps rewinding
+  if (heldLeft(e)) { if (held.fired === 1) { held.fired = 2; App.toTop(); } e.preventDefault(); return; }
   if (Modal.top()) {
     const pad = $('.modal-bg:last-of-type .pad-modal');
     if (pad && /^[0-9.]$|^Backspace$/.test(e.key)) { pad.dispatchEvent(new CustomEvent('pad-key', { detail: e.key === 'Backspace' ? '⌫' : e.key })); e.preventDefault(); return; }

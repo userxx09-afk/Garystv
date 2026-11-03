@@ -67,7 +67,13 @@ function toast(msg, ms = 3500) {
 const Nav = {
   current: null,
   scope() { return $('.modal-bg:last-of-type .modal') || $('#view'); },
-  items() { return $$('.nav', this.scope()).filter((el) => el.offsetParent !== null); },
+  // The screen's items, then (with no dialog open) the buttons along the top, reached with ↑.
+  items() {
+    const modal = $('.modal-bg:last-of-type .modal');
+    const list = $$('.nav', modal || $('#view'));
+    if (!modal) list.push(...$$('#topnav .nav'));
+    return list.filter((el) => el.offsetParent !== null);
+  },
   focus(el, { scroll = true } = {}) {
     if (this.current) this.current.classList.remove('focus');
     this.current = el || null;
@@ -79,13 +85,18 @@ const Nav = {
   restore(key) {
     const items = this.items();
     const match = key && items.find((el) => el.dataset.key === key);
-    this.focus(match || items[0]);
+    this.focus(match || items.find((el) => !el.closest('#topnav')) || items[0]);
   },
   key() { return this.current && this.current.dataset.key; },
   move(dir) {
     const items = this.items();
-    const cur = this.current && items.includes(this.current) ? this.current : null;
-    if (!cur) { this.focus(items[0]); return true; }
+    let cur = this.current && items.includes(this.current) ? this.current : null;
+    // Redrawn under the highlight (posters arriving, a list refreshing): carry on from its copy.
+    if (!cur && this.current && this.current.dataset.key) {
+      cur = items.find((el) => el.dataset.key === this.current.dataset.key) || null;
+      if (cur) this.focus(cur, { scroll: false });
+    }
+    if (!cur) { this.focus(items.find((el) => !el.closest('#topnav')) || items[0]); return true; }
     const a = cur.getBoundingClientRect();
     const ax = a.left + a.width / 2, ay = a.top + a.height / 2;
     let best = null, bestScore = Infinity;
@@ -121,7 +132,7 @@ const Nav = {
 
 document.addEventListener('mouseover', (e) => {
   const el = e.target.closest && e.target.closest('.nav');
-  if (el && el !== Nav.current && Nav.scope().contains(el)) Nav.focus(el, { scroll: false });
+  if (el && el !== Nav.current && (Nav.scope().contains(el) || (!Modal.top() && el.closest('#topnav')))) Nav.focus(el, { scroll: false });
 });
 
 // ---------- dialogs ----------

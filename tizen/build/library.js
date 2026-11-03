@@ -52,13 +52,28 @@ function libraryView(kind) {
     // What's saved for this screen: a movie (m~) or an episode (e~).
     continueItems() { return (this.info ? this.info.continue : []).filter((c) => c.id.startsWith(movies ? 'm~' : 'e~')); },
 
+    // Favorite movies (m~) or shows (s~).
+    favItems() { return ((this.info && this.info.favorites) || []).filter((f) => f.id.startsWith(movies ? 'm~' : 's~')); },
+    isFav(id) { return ((this.info && this.info.favorites) || []).some((f) => f.id === id); },
+    async toggleFav(v) {
+      const on = !this.isFav(v.id);
+      await api.put(`/api/vod/favorite/${encodeURIComponent(v.id)}`, { on, item: { name: v.name, poster: v.poster, year: v.year, rating: v.rating } });
+      this.info = await api.get('/api/vod');
+      (movies ? ShowsView : MoviesView).info = this.info;
+      toast(on ? `★ Added ${v.name} to your favorite ${kind}` : `Took ${v.name} off your favorites`);
+      if (App.view === this && !this.show) { if (this.catId === 'favorites' && !this.favItems().length) this.catId = null; App.render(); }
+    },
+    favItem(v) { return { label: this.isFav(v.id) ? '★ Take off favorites' : '☆ Add to favorites', run: () => this.toggleFav(v) }; },
+
     async render(root) {
       if (!this.cats) root.innerHTML = '<div class="empty">Loading...</div>';
       try {
         // Where things were stopped changes as you watch, so that's read every time.
         [this.info, this.cats] = await Promise.all([api.get('/api/vod'), this.cats || api.get(`/api/vod/${kind}/categories`)]);
       } catch (e) { root.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
-      if (!this.catId || (this.catId === 'continue' && !this.continueItems().length)) this.catId = this.continueItems().length ? 'continue' : (this.cats[0] || {}).id;
+      if (!this.catId || (this.catId === 'continue' && !this.continueItems().length) || (this.catId === 'favorites' && !this.favItems().length)) {
+        this.catId = this.continueItems().length ? 'continue' : this.favItems().length ? 'favorites' : (this.cats[0] || {}).id;
+      }
       if (this.show) return this.renderShow(root);
       if (!this.info.providers) {
         root.innerHTML = `<div class="empty">${this.title} come from an IPTV provider. Add yours in Settings &gt; Sources (IPTV provider: server, username &amp; password).</div>`;
@@ -66,7 +81,7 @@ function libraryView(kind) {
       }
       if (!this.cats.length) { root.innerHTML = `<div class="empty">Your IPTV provider didn't list any ${kind}. It may not include them, or it didn't answer; try again later.</div>`; return; }
       const cont = this.continueItems();
-      const cats = [...(cont.length ? [{ id: 'continue', name: '▶ Continue watching' }] : []), ...this.cats];
+      const cats = [...(cont.length ? [{ id: 'continue', name: '▶ Continue watching' }] : []), ...(this.favItems().length ? [{ id: 'favorites', name: '★ Favorites' }] : []), ...this.cats];
       root.innerHTML = `
         <div class="library">
           <div class="list cats">${cats.map((c) => `<div class="item nav${c.id === this.catId ? ' picked' : ''}" data-key="c-${esc(c.id)}" data-cat="${esc(c.id)}"><div class="main"><div class="t">${esc(c.name)}</div></div></div>`).join('')}</div>
@@ -78,13 +93,14 @@ function libraryView(kind) {
         // Highlighting a category shows it after a moment, so scrolling down the list stays quick.
         el._onFocus = () => { clearTimeout(this.loadTimer); this.loadTimer = setTimeout(() => this.pick(el.dataset.cat), 450); };
       });
-      if (this.catId === 'continue' || this.items[this.catId]) this.paintPosters(); else this.pick(this.catId);
+      if (this.catId === 'continue' || this.catId === 'favorites' || this.items[this.catId]) this.paintPosters(); else this.pick(this.catId);
     },
 
     async pick(catId, focusFirst) {
+      if (catId === this.catId && $('#posters').dataset.cat === catId) { if (focusFirst) Nav.focus($('#posters .nav')); return; }
       if (catId !== this.catId) { this.catId = catId; this.shown = PAGE; }
       $$('[data-cat]').forEach((el) => el.classList.toggle('picked', el.dataset.cat === catId));
-      if (catId !== 'continue' && !this.items[catId]) {
+      if (catId !== 'continue' && catId !== 'favorites' && !this.items[catId]) {
         $('#posters').innerHTML = '<div class="empty">Loading...</div>';
         try { this.items[catId] = await api.get(`/api/vod/${kind}/category/${encodeURIComponent(catId)}`); } catch (e) { $('#posters').innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
         if (this.catId !== catId || App.view !== this) return; // moved on meanwhile
@@ -96,6 +112,7 @@ function libraryView(kind) {
     paintPosters() {
       const box = $('#posters');
       if (!box) return;
+      box.dataset.cat = this.catId;
       if (this.catId === 'continue') {
         box.innerHTML = this.continueItems().map((c) => `<div class="poster nav" data-key="p-${esc(c.id)}" data-cont="${esc(c.id)}">${img(c.poster, c.title)}
           <div class="pt">${esc(c.title)}</div><div class="ps">${esc(c.subtitle || '')}${c.subtitle ? ' · ' : ''}${fmt.clock(c.position)}</div>
@@ -107,10 +124,10 @@ function libraryView(kind) {
         });
         return;
       }
-      const all = this.items[this.catId];
+      const all = this.catId === 'favorites' ? this.favItems() : this.items[this.catId];
       if (!all) return;
       if (!all.length) { box.innerHTML = '<div class="empty">Nothing in this category.</div>'; return; }
-      box.innerHTML = all.slice(0, this.shown).map((v) => `<div class="poster nav" data-key="p-${esc(v.id)}" data-item="${esc(v.id)}">${img(v.poster, v.name)}
+      box.innerHTML = all.slice(0, this.shown).map((v) => `<div class="poster nav" data-key="p-${esc(v.id)}" data-item="${esc(v.id)}">${this.isFav(v.id) ? '<span class="pfav">★</span>' : ''}${img(v.poster, v.name)}
           <div class="pt">${esc(v.name)}</div><div class="ps">${[v.year, v.rating ? `★ ${v.rating}` : ''].filter(Boolean).join(' · ')}</div></div>`).join('')
         + (all.length > this.shown ? `<div class="poster more nav" data-key="more" id="more"><div class="pt">More (${all.length - this.shown} left)</div></div>` : '');
       $$('[data-item]', box).forEach((el) => {
@@ -151,7 +168,7 @@ function libraryView(kind) {
       const choices = saved
         ? [{ label: `▶  Resume from ${fmt.clock(saved.position)}`, value: 'resume', cls: 'primary' }, { label: '⟲  Start over', value: 'play' }]
         : [{ label: '▶  Watch', value: 'play', cls: 'primary' }];
-      choices.push({ label: 'Close', value: null });
+      choices.push({ label: this.isFav(v.id) ? '★ Take off favorites' : '☆ Add to favorites', value: 'fav' }, { label: 'Close', value: null });
       const body = `<div class="vod-info">${m.poster ? `<img src="${esc(m.poster)}" alt="">` : ''}<div>
         <div class="meta" style="color:var(--muted)">${esc([m.year, m.genre, m.duration ? fmt.dur(m.duration * 1000) : '', m.rating ? `★ ${m.rating}` : ''].filter(Boolean).join(' · '))}</div>
         <div class="s" style="color:#c4d1e6;line-height:1.5">${esc(m.plot || '')}</div>
@@ -160,6 +177,7 @@ function libraryView(kind) {
       const item = { title: m.name, subtitle: m.year || '', duration: m.duration || 0, poster: m.poster || '' };
       if (c === 'resume') Player.play('vod', v.id, { offset: saved.position, item });
       if (c === 'play') Player.play('vod', v.id, { item });
+      if (c === 'fav') this.toggleFav({ ...v, poster: v.poster || m.poster, year: v.year || m.year });
     },
 
     async resumeMenu(c) {
@@ -184,7 +202,7 @@ function libraryView(kind) {
             <h2><span class="btn nav" data-key="up" id="upBtn">‹ ${esc(this.title)}</span> ${esc(s.name)}</h2>
             <div class="meta">${esc([s.year, s.genre, s.rating ? `★ ${s.rating}` : '', `${s.seasons.length} season${s.seasons.length === 1 ? '' : 's'}`].filter(Boolean).join(' · '))}</div>
             <div class="desc">${esc(s.plot || '')}</div>
-            <div class="seasons">${s.seasons.map((x) => `<span class="btn nav${x === season ? ' picked' : ''}" data-key="s-${x.season}" data-season="${x.season}">Season ${x.season}</span>`).join('')}</div>
+            <div class="seasons"><span class="btn nav" data-key="favshow" id="favShow">${this.isFav(s.id) ? '★ Favorite' : '☆ Add to favorites'}</span>${s.seasons.map((x) => `<span class="btn nav${x === season ? ' picked' : ''}" data-key="s-${x.season}" data-season="${x.season}">Season ${x.season}</span>`).join('')}</div>
           </div></div>
           <div class="list" id="eps">${season ? season.episodes.map((e) => {
             const at = saved.get(e.id);
@@ -193,6 +211,7 @@ function libraryView(kind) {
           }).join('') : '<div class="empty">No episodes listed.</div>'}</div>
         </div>`;
       $('#upBtn', root).onclick = () => this.closeShow();
+      $('#favShow', root).onclick = async () => { await this.toggleFav({ id: s.id, name: s.name, poster: s.poster, year: s.year, rating: s.rating }); App.render('favshow'); };
       $$('[data-season]', root).forEach((el) => { el.onclick = () => { this.season = +el.dataset.season; App.render(`s-${el.dataset.season}`); }; });
       $$('[data-ep]', root).forEach((el) => {
         el.onclick = () => {
@@ -216,6 +235,17 @@ function libraryView(kind) {
       return true;
     },
 
+    // → from a category goes into ITS posters straight away (not the ones a category passed
+    // on the way had started loading, which then replaced them under the highlight).
+    onKey(e) {
+      const cat = e.key === 'ArrowRight' && Nav.current && Nav.current.dataset.cat;
+      if (!cat) return false;
+      clearTimeout(this.loadTimer);
+      if (cat === this.catId && $('#posters').dataset.cat === cat) return false; // already showing: just move across
+      this.pick(cat, true);
+      return true;
+    },
+
     // Hold OK / M / a long press on a poster or an episode.
     menu() {
       const d = (Nav.current && Nav.current.dataset) || {};
@@ -223,17 +253,18 @@ function libraryView(kind) {
       const all = this.items[this.catId] || [];
       const v = d.item && all.find((x) => x.id === d.item);
       const c = d.cont && this.continueItems().find((x) => x.id === d.cont);
-      if (v) items.push({ label: movies ? '▶ Watch...' : '▦ Episodes', run: () => this.open(v), cls: 'primary' });
+      const fv = v || (d.item && this.favItems().find((x) => x.id === d.item));
+      if (fv) items.push({ label: movies ? '▶ Watch...' : '▦ Episodes', run: () => this.open(fv), cls: 'primary' }, this.favItem(fv));
       if (c) {
         items.push({ label: `▶ Resume from ${fmt.clock(c.position)}`, run: () => Player.play('vod', c.id, { offset: c.position, item: c }), cls: 'primary' });
         if (c.showId) items.push({ label: 'All episodes', run: () => this.open({ id: c.showId, name: c.title, poster: c.poster }) });
         items.push({ label: '✕ Take off Continue watching', run: async () => { await api.put(`/api/vod/progress/${encodeURIComponent(c.id)}`, { position: 0 }); App.render(); } });
       }
       if (d.ep) items.push({ label: '▶ Play this episode', run: () => Nav.current.click(), cls: 'primary' });
-      if (this.show) items.push({ label: `‹ All ${this.title.toLowerCase()}`, run: () => this.closeShow() });
+      if (this.show) items.push(this.favItem({ id: this.show.id, name: this.show.name, poster: this.show.poster, year: this.show.year }), { label: `‹ All ${this.title.toLowerCase()}`, run: () => this.closeShow() });
       items.push({ label: `⌕ Search ${this.title.toLowerCase()}`, run: () => { SearchView.kind = kind; App.go('search'); } });
       items.push({ label: '⟳ Reload the list', run: () => { this.cats = null; this.items = {}; App.render(); } });
-      const name = v ? v.name : c ? c.title : this.show ? this.show.name : this.title;
+      const name = fv ? fv.name : c ? c.title : this.show ? this.show.name : this.title;
       return { title: name, items };
     },
   };

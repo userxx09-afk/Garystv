@@ -315,6 +315,8 @@ const Player = {
     choices.push({ label: '● More ways to record...', value: 'recordMenu' });
     if (this.behind() >= LIVE_S) choices.push({ label: '⏩ Back to live', value: 'live' });
     choices.push({ label: $('#video').paused ? '▶ Play' : '❚❚ Pause', value: 'pause' });
+    const favs = App.channelFavItems(ch);
+    favs.forEach((f, i) => choices.push({ label: f.label, value: `fav${i}` }));
     choices.push({ label: '🔢 Go to a channel number', value: 'pad' });
     choices.push({ label: '▦ Guide', value: 'guide' });
     choices.push({ label: '■ Stop watching', value: 'stopWatching' });
@@ -339,6 +341,7 @@ const Player = {
       else if (v === 'stopWatching') { this.stop(); App.render(); }
       else if (v === 'home') App.home();
       else if (v === 'pad') this.pad();
+      else if (typeof v === 'string' && v.startsWith('fav')) await favs[+v.slice(3)].run();
       else if (v === 'vlc') this.openVlc('live', ch.id);
     } catch (e) { toast(e.message); }
   },
