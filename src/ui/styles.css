@@ -304,3 +304,4 @@ html.tv .osd-btns { display: none; } /* the remote's buttons do these on the TV 
 /* Short directions at the top of a Settings page. */
 .howto { margin: .6rem 0 .8rem; padding-left: 1.2rem; display: grid; gap: .25rem; color: #c4d1e6; font-size: .95rem; }
 .howto b { color: var(--text); margin-right: .4rem; }
+input[type=checkbox].nav.focus { outline: 3px solid var(--focus-bg); outline-offset: 3px; }

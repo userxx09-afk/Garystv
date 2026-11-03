@@ -198,19 +198,21 @@ const SettingsView = {
           <li><b>Filter</b> Type part of a name, number, group or provider to find channels.</li>
           <li><b>★ Favorites</b> lists (Gary, Barb...) are set in the guide: hold OK on a channel there.</li>
         </ul>
-        <div class="row"><div class="field" style="flex:1"><input id="chf" placeholder="Filter channels..." value="${esc(this.chFilter)}"></div><div class="btn nav" id="renumber">🔢 Renumber...</div><div class="btn nav" id="rematch">↻ Re-match automatically</div></div></div>
+        <div class="row"><div class="field" style="flex:1"><input id="chf" class="nav" data-key="chf" placeholder="Filter channels..." value="${esc(this.chFilter)}"></div><div class="btn nav" id="renumber">🔢 Renumber...</div><div class="btn nav" id="rematch">↻ Re-match automatically</div></div></div>
       <table class="chs"><thead><tr><th>Show</th><th title="Pinned to the top of the guide">📌</th><th>Ch</th><th>Name</th><th>From</th><th>Guide listing</th><th></th></tr></thead><tbody>
       ${list.slice(0, 400).map((c) => {
         const g = gById.get(c.guideId);
         const [cls, label] = conf(c);
-        return `<tr data-ch="${esc(c.id)}"><td><input type="checkbox" data-k="show" ${c.hidden ? '' : 'checked'}></td>
-          <td><span class="nav" data-k="fav" title="${c.favorite ? 'Pinned to the top of the guide' : 'Pin to the top of the guide'}" style="cursor:pointer;${c.favorite ? '' : 'opacity:.3;filter:grayscale(1)'}">📌</span></td>
-          <td><span class="nav" data-k="num" style="cursor:pointer" title="Change the channel number"><b>${esc(c.number)}</b></span>${c.alias ? `<div class="s" style="font-size:.75rem">was ${esc(c.sourceNumber)}</div>` : ''}</td><td>${esc(c.name)}${c.group ? `<div class="s" style="font-size:.8rem">${esc(c.group)}</div>` : ''}</td><td class="s">${esc(srcName.get(c.sourceId) || '')}</td>
+        return `<tr data-ch="${esc(c.id)}"><td><input type="checkbox" class="nav" data-key="show-${esc(c.id)}" data-k="show" ${c.hidden ? '' : 'checked'}></td>
+          <td><span class="nav" data-key="pin-${esc(c.id)}" data-k="fav" title="${c.favorite ? 'Pinned to the top of the guide' : 'Pin to the top of the guide'}" style="cursor:pointer;${c.favorite ? '' : 'opacity:.3;filter:grayscale(1)'}">📌</span></td>
+          <td><span class="nav" data-key="num-${esc(c.id)}" data-k="num" style="cursor:pointer" title="Change the channel number"><b>${esc(c.number)}</b></span>${c.alias ? `<div class="s" style="font-size:.75rem">was ${esc(c.sourceNumber)}</div>` : ''}</td><td>${esc(c.name)}${c.group ? `<div class="s" style="font-size:.8rem">${esc(c.group)}</div>` : ''}</td><td class="s">${esc(srcName.get(c.sourceId) || '')}</td>
           <td>${g ? `${esc(g.names[0])} <span class="s">${esc(g.number || '')} · ${esc(g.providerName)}</span>` : '<span class="s">—</span>'}${c.matchReason && c.mapMode === 'auto' ? `<div class="s" style="font-size:.8rem">by ${esc(c.matchReason)}</div>` : ''}</td>
-          <td style="white-space:nowrap"><span class="conf ${cls}">${label}</span> <span class="btn nav" data-k="change" style="padding:.25rem .7rem;font-size:.85rem">Change</span></td></tr>`;
+          <td style="white-space:nowrap"><span class="conf ${cls}">${label}</span> <span class="btn nav" data-key="chg-${esc(c.id)}" data-k="change" style="padding:.25rem .7rem;font-size:.85rem">Change</span></td></tr>`;
       }).join('')}</tbody></table>
       ${list.length > 400 ? `<div class="s">Showing 400 of ${list.length}. Use the filter to find others.</div>` : ''}`;
     const fin = $('#chf', pane);
+    fin.onclick = () => fin.focus(); // OK on it brings up the keyboard
+    fin.addEventListener('keydown', (e) => { if (e.key === 'ArrowDown' || e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); fin.blur(); Nav.move('down'); } });
     let t;
     fin.oninput = () => { clearTimeout(t); t = setTimeout(() => { this.chFilter = fin.value; this.channels(pane); const i = $('#chf'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 300); };
     $('#renumber', pane).onclick = () => this.renumberDialog(list, this.chFilter.trim());

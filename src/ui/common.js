@@ -97,24 +97,36 @@ const Nav = {
       if (cur) this.focus(cur, { scroll: false });
     }
     if (!cur) { this.focus(items.find((el) => !el.closest('#topnav')) || items[0]); return true; }
+    // Like reading: ←→ along the row you're on (at its end, on to the next row's first item in
+    // the same group); ↑↓ to the nearest row above or below, in the same column when there's one.
     const a = cur.getBoundingClientRect();
-    const ax = a.left + a.width / 2, ay = a.top + a.height / 2;
-    let best = null, bestScore = Infinity;
-    for (const el of items) {
-      if (el === cur) continue;
-      const b = el.getBoundingClientRect();
-      const bx = b.left + b.width / 2, by = b.top + b.height / 2;
-      const dx = bx - ax, dy = by - ay;
-      let primary, secondary;
-      if (dir === 'up') { if (b.bottom > a.top + 2) continue; primary = -dy; secondary = Math.abs(dx); }
-      if (dir === 'down') { if (b.top < a.bottom - 2) continue; primary = dy; secondary = Math.abs(dx); }
-      // Left/right from the near edges, so a wide box beside you beats a small button far above.
-      if (dir === 'left') { if (b.right > a.left + 2) continue; primary = Math.max(0, a.left - b.right); secondary = Math.abs(dy); }
-      if (dir === 'right') { if (b.left < a.right - 2) continue; primary = Math.max(0, b.left - a.right); secondary = Math.abs(dy); }
-      const score = primary + secondary * 2.5;
-      if (score < bestScore) { bestScore = score; best = el; }
+    const others = items.filter((el) => el !== cur).map((el) => ({ el, b: el.getBoundingClientRect() }));
+    const cx = (r) => r.left + r.width / 2;
+    const sameRow = (b) => Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > Math.min(a.height, b.height) / 3;
+    const sameCol = (b) => Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0;
+    const pick = (list, score) => list.reduce((best, o) => (!best || score(o) < score(best) ? o : best), null);
+    let best = null;
+    if (dir === 'left' || dir === 'right') {
+      const right = dir === 'right';
+      const row = others.filter(({ b }) => sameRow(b) && (right ? b.left >= a.right - 2 : b.right <= a.left + 2));
+      best = pick(row, ({ b }) => (right ? b.left - a.right : a.left - b.right));
+      if (!best) { // end of the row: the next row's first item (or the previous row's last) in this group
+        const group = (el) => el.closest('.modal, #topnav, .menu, .tabs, .g-bar, .actions, .row, .list, .menu-list, .posters, .cards, .tiles, .seasons, table, .box, .pad');
+        const g = group(cur);
+        const order = items.filter((el) => group(el) === g).map((el) => ({ el, b: el.getBoundingClientRect() }))
+          .sort((p, q) => (Math.abs(p.b.top - q.b.top) < Math.min(p.b.height, q.b.height) / 2 ? p.b.left - q.b.left : p.b.top - q.b.top));
+        const i = order.findIndex((o) => o.el === cur);
+        best = g && order[i + (right ? 1 : -1)];
+      }
+    } else {
+      const down = dir === 'down';
+      const gap = ({ b }) => (down ? b.top - a.bottom : a.top - b.bottom);
+      const ahead = others.filter((o) => gap(o) >= -2);
+      const pool = ahead.some(({ b }) => sameCol(b)) ? ahead.filter(({ b }) => sameCol(b)) : ahead;
+      const nearest = pick(pool, gap);
+      if (nearest) best = pick(pool.filter((o) => gap(o) <= gap(nearest) + nearest.b.height / 2), ({ b }) => Math.abs(cx(b) - cx(a)));
     }
-    if (best) this.focus(best);
+    if (best) this.focus(best.el);
     return !!best;
   },
   handle(e) {
