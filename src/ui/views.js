@@ -147,7 +147,7 @@ const DvrView = {
     $('#dvrDetail').innerHTML = `<div class="title">${esc(r.title)}</div>
       <div class="sub">${esc([fmt.se(r), r.subtitle].filter(Boolean).join('  ·  '))}</div>
       <div class="meta"><span>${esc(r.channelNumber)} ${esc(r.channelName)}</span><span>${fmt.when(r.start)}</span><span>${fmt.dur(r.end - r.start)}</span><span>${fmt.size(r.size)}</span>
-        <span class="status-pill st-${r.status}">${r.status === 'recording' ? '● Recording' : r.status}</span>${r.simulated ? '<span class="tag">PRACTICE</span>' : ''}</div>
+        <span class="status-pill st-${r.status}">${r.status === 'recording' ? '● Recording' : r.status}</span>${r.simulated ? '<span class="tag">PRACTICE</span>' : ''}${r.at ? `<span class="tag">AT ${esc(r.at.toUpperCase())}</span>` : ''}</div>
       ${r.error ? `<div class="s" style="color:var(--yellow)">${esc(r.error)}</div>` : ''}
       <div class="desc">${esc(r.desc || '')}</div>
       ${r.position > 30 ? `<div class="s">Stopped at ${fmt.clock(r.position)}</div>` : ''}`;
@@ -158,7 +158,7 @@ const DvrView = {
     const choices = [];
     if (r.position > 30 && !r.watched) choices.push({ label: `▶  Resume from ${fmt.clock(r.position)}`, value: 'resume', cls: 'primary' });
     choices.push({ label: r.position > 30 ? '⟲  Start over' : '▶  Play', value: 'play', cls: r.position > 30 ? '' : 'primary' });
-    if (r.status === 'recording') choices.push({ label: '■  Stop recording', value: 'stop' });
+    if (r.status === 'recording' && !r.at) choices.push({ label: '■  Stop recording', value: 'stop' }); // one at the other place is stopped there
     choices.push({ label: r.watched ? 'Mark as not watched' : 'Mark as watched', value: 'watched' });
     choices.push({ label: '🗑  Delete', value: 'delete', cls: 'danger' }, { label: 'Cancel', value: null });
     const v = await Modal.menu(r.title, `<div class="s">${esc([fmt.se(r), r.subtitle, fmt.when(r.start)].filter(Boolean).join('  ·  '))}</div>`, choices);

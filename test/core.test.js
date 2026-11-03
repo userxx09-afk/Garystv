@@ -281,3 +281,51 @@ test('Linked GarysTVs: link with the password, then manage one through the other
     for (const x of [home, work]) { x.srv.close(); x.core.timeshift.stopAll(); }
   }
 });
+
+test('Home and work sharing: plans in use, lists, channel numbers and recordings', async () => {
+  const { DvrCore } = require('../src/core');
+  const { createServer } = require('../src/core/server');
+  const mk = async (name, sid) => {
+    const core = new DvrCore({ dataDir: require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'gtv-share-')) });
+    core.updateSettings({ serverName: name, recordingsDir: core.store.dir });
+    core.store.write('sources', [{ id: sid, type: 'xtream', enabled: true, name: 'Plan 1', tunerCount: 1, config: { servers: 'http://p.example', username: 'u1', password: 'pw' } }]);
+    core.store.write('channels', [{ id: `${sid}:7`, sourceId: sid, number: '1007', name: 'KAAL', streamUrl: 'http://p/7' }]);
+    const srv = createServer(core);
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    return { core, srv, base: `http://127.0.0.1:${srv.address().port}` };
+  };
+  const home = await mk('Home', 'h1');
+  const work = await mk('Work', 'w1');
+  const until = async (ok) => { for (let i = 0; i < 50 && !ok(); i++) await new Promise((r) => setTimeout(r, 50)); assert.ok(ok()); };
+  try {
+    work.core.auth.setPassword('workpass1');
+    await fetch(`${home.base}/api/peers`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: work.base, password: 'workpass1', share: true }) });
+    // Changed at home: copied to work (its own ids for the same plan's channels).
+    home.core.updateChannel('h1:7', { alias: '6' });
+    const list = home.core.addFavList({ name: 'Gary' });
+    home.core.toggleFavChannel(list.id, 'h1:7');
+    await home.core.sharing.beat();
+    await until(() => work.core.favLists.length === 1 && work.core.channels[0].number === '6');
+    assert.deepEqual(work.core.favLists[0].channelIds, ['w1:7']);
+    // Watching on the one-stream plan at home: work can't use it, and says why.
+    home.core.tuners.acquire('h1:7', 'live', 'KAAL');
+    await home.core.sharing.beat();
+    assert.throws(() => work.core.tuners.acquire('w1:7', 'live'), /watching KAAL at Home/);
+    // A recording at work asks home to let go of the plan.
+    let told = '';
+    home.core.tuners.uses.clear();
+    home.core.tuners.acquire('h1:7', 'live', 'KAAL', (why) => { told = why; });
+    await home.core.sharing.beat();
+    let err;
+    try { work.core.tuners.acquire('w1:7', 'rec', 'News'); } catch (e) { err = e; }
+    work.core.sharing.askToYield(err.ask, 'News');
+    await until(() => told);
+    assert.match(told, /Stopped so "News" could record at Work/);
+    // Work lists home's recordings too.
+    home.core.store.write('recordings', [{ id: 'r1', title: 'Old Movie', start: 5, file: '/x.ts', status: 'complete' }]);
+    const recs = await (await fetch(`${work.base}/api/recordings`)).json();
+    assert.deepEqual(recs.map((r) => [r.id, r.at, r.file]), [[`~${home.core.peers.me.id}~r1`, 'Home', undefined]]);
+  } finally {
+    for (const x of [home, work]) { x.srv.close(); x.core.timeshift.stopAll(); x.core.sharing.stop(); }
+  }
+});

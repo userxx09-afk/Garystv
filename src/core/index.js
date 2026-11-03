@@ -195,6 +195,7 @@ class DvrCore extends EventEmitter {
     this.store.write('channels', this.channels.map((c) => (c.id === id ? (alias == null ? { ...c, ...clean } : withAlias({ ...c, ...clean }, alias)) : c)));
     if (clean.mapMode === 'auto') this.reconcileChannels();
     this.changed('channels');
+    this.emit('choices'); // a linked place that shares copies it (sharing.js)
   }
 
   // Your own numbers for many channels at once: ids in the order wanted, numbered from start
@@ -206,6 +207,7 @@ class DvrCore extends EventEmitter {
     const at = new Map(ids.map((id, i) => [String(id), i]));
     this.store.write('channels', this.channels.map((c) => (at.has(c.id) ? withAlias(c, clear ? '' : String(first + at.get(c.id))) : c)));
     this.changed('channels');
+    this.emit('choices');
     return { count: at.size };
   }
 
@@ -436,6 +438,7 @@ class DvrCore extends EventEmitter {
       programsFor: (c) => this.programsFor(c),
       tunerCount: (sid) => tuners.get(sid) || 1,
       choices: (job) => { try { return this.tuners.choices(job.channelId); } catch (_) { return null; } },
+      reserved: (sid) => (this.sharing ? this.sharing.reserved(sid) : []), // the other place's timers on the same plan
       recordedKeys: new Set(this.recordings.filter((r) => r.status !== 'failed' && r.episodeKey).map((r) => r.episodeKey)),
       skipped: new Set(this.skipped),
       active: new Set(this.active.keys()),
@@ -471,7 +474,11 @@ class DvrCore extends EventEmitter {
     try {
       lease = this.tuners.acquire(job.viaChannelId || job.channelId, 'rec', job.title);
     } catch (e) {
-      if (!(this.busyNoted ||= new Set()).has(job.id)) { this.busyNoted.add(job.id); this.note(`${job.title}: waiting for a free plan: ${e.message}`); }
+      if (!(this.busyNoted ||= new Set()).has(job.id)) {
+        this.busyNoted.add(job.id);
+        this.note(`${job.title}: waiting for a free plan: ${e.message}`);
+        if (e.ask && e.ask.length && this.sharing) this.sharing.askToYield(e.ask, job.title);
+      }
       return; // tried again at the next tick
     }
     const channel = lease.channel;

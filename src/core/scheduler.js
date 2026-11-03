@@ -124,7 +124,7 @@ function resolveConflicts(jobs, ctx) {
     .sort((a, b) => (active.has(b.id) - active.has(a.id)) || a.priority - b.priority || a.start - b.start);
   const accepted = {};
   const fits = (job, sourceId) => {
-    const list = (accepted[sourceId] ||= []);
+    const list = (accepted[sourceId] ||= [...(ctx.reserved ? ctx.reserved(sourceId) : [])]);
     const cap = ctx.tunerCount ? ctx.tunerCount(sourceId) : 2;
     const overlapping = list.filter((o) => o.recStart < job.recEnd && job.recStart < o.recEnd);
     // Peak concurrency within the overlap: check at each start point.

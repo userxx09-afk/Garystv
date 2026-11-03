@@ -15,6 +15,7 @@ const { Tmdb } = require('./tmdb');
 const { ToolInstaller } = require('./installer');
 const { Auth } = require('./auth');
 const { Peers } = require('./peers');
+const { Sharing, remoteRecording } = require('./sharing');
 
 const UI_DIR = path.join(__dirname, '..', 'ui');
 const VERSION = require('../../package.json').version;
@@ -185,6 +186,15 @@ function createServer(core) {
   const tools = core.tools = new ToolInstaller(core);
   const auth = core.auth = new Auth(core);
   const peers = core.peers = new Peers(core, auth);
+  const sharing = core.sharing = new Sharing(core, peers);
+  const peerOnly = (req) => { if (!req.who.peer) throw new Error('Only for a linked GarysTV.'); return req.who.peer; };
+  // A recording at the other place (sharing.js): changes go to it.
+  const atPeer = (id, method, body) => {
+    const at = remoteRecording(decodeURIComponent(id));
+    if (!at) return null;
+    sharing.forget(at.peerId);
+    return peers.call(peers.find(at.peerId), method, `/api/recordings/${encodeURIComponent(at.recId)}`, body);
+  };
   const timeshift = core.timeshift = new Timeshift({
     ffmpeg: () => findFfmpeg(core.settings),
     dir: () => path.join(core.settings.recordingsDir, '.live-buffer'),
@@ -220,9 +230,13 @@ function createServer(core) {
     })],
     // Linked GarysTVs at other locations (peers.js).
     ['GET', '/api/peers', () => peers.overview()],
-    ['POST', '/api/peers', (q, b, p, req) => peers.link(req, b)],
-    ['DELETE', '/api/peers/:id', (q, b, p) => peers.unlink(p.id)],
-    ['DELETE', '/api/peer/self', (q, b, p, req) => { if (!req.who.peer) throw new Error('Only for a linked GarysTV.'); peers.dropped(req.who.peer); }],
+    ['POST', '/api/peers', async (q, b, p, req) => { const them = await peers.link(req, b); if (b.share) sharing.linked(); return them; }],
+    ['DELETE', '/api/peers/:id', async (q, b, p) => { await peers.unlink(p.id); core.tuners.remote.delete(p.id); sharing.forget(p.id); }],
+    ['DELETE', '/api/peer/self', (q, b, p, req) => { const peer = peerOnly(req); peers.dropped(peer); core.tuners.remote.delete(peer.id); sharing.forget(peer.id); }],
+    // Home and work sharing (sharing.js): plans in use and timers, lists and channel choices.
+    ['POST', '/api/peer/beat', (q, b, p, req) => sharing.receive(peerOnly(req), b)],
+    ['GET', '/api/peer/shared', (q, b, p, req) => { peerOnly(req); return sharing.shared(); }],
+    ['POST', '/api/peer/yield', (q, b, p, req) => sharing.yieldPlan(peerOnly(req), b)],
     // Other locations (auth.js): the password they sign in with, and the devices signed in.
     ['GET', '/api/remote', (q, b, p, req) => ({ ...auth.overview(), home: req.who.home, me: req.who.login ? req.who.login.id : null })],
     ['PUT', '/api/remote/password', (q, b) => auth.setPassword(b.password)],
@@ -245,7 +259,7 @@ function createServer(core) {
     ['GET', '/api/vod/:kind/category/:id', (q, b, p) => vod.items(p.kind, decodeURIComponent(p.id))],
     ['GET', '/api/guide', (q) => core.getGuide(+q.from || Date.now(), +q.to || Date.now() + 3 * 3600000)],
     ['GET', '/api/schedule', () => core.getSchedule()],
-    ['GET', '/api/recordings', () => core.getRecordings()],
+    ['GET', '/api/recordings', (q, b, p, req) => (req.who.peer ? core.getRecordings() : sharing.withShared(core.getRecordings()))],
     ['GET', '/api/search', (q) => core.search(q.q)],
     ['PUT', '/api/settings', (q, b) => core.updateSettings(b)],
     ['GET', '/api/discover', () => hdhomerun.discover()],
@@ -268,9 +282,9 @@ function createServer(core) {
     ['DELETE', '/api/rules/:id', (q, b, p) => core.removeRule(p.id)],
     ['POST', '/api/rules/:id/move', (q, b, p) => core.moveRule(p.id, b.delta)],
     ['POST', '/api/jobs/skip', (q, b) => core.skipJob(b.id, b.skip !== false)],
-    ['PUT', '/api/recordings/:id', (q, b, p) => core.patchRecording(p.id, { position: b.position, watched: b.watched })],
+    ['PUT', '/api/recordings/:id', (q, b, p) => atPeer(p.id, 'PUT', b) || core.patchRecording(p.id, { position: b.position, watched: b.watched })],
     ['POST', '/api/timeshift/release', (q, b) => timeshift.release(b.channelId, b.viewer)],
-    ['DELETE', '/api/recordings/:id', (q, b, p) => core.deleteRecording(p.id)],
+    ['DELETE', '/api/recordings/:id', (q, b, p) => atPeer(p.id, 'DELETE') || core.deleteRecording(p.id)],
     ['POST', '/api/tools/:name/install', (q, b, p) => tools.install(p.name)],
     // Updates: the Windows app's own (src/app-updates.js), or a home server's (core/server-updates.js).
     ['GET', '/api/app-update', () => (core.appUpdater ? core.appUpdater.status() : { supported: false })],
@@ -356,6 +370,13 @@ function createServer(core) {
             : { 'Content-Type': 'video/mp2t', 'Cache-Control': 'max-age=3600' });
           res.end(data);
         });
+      }
+      // A recording at the other place (sharing.js): played from there, through here.
+      const far = /^\/(direct|stream)\/rec\/(~[^/]+)$/.exec(url.pathname);
+      if (far) {
+        const at = remoteRecording(decodeURIComponent(far[2]));
+        if (!at) return send(res, 404, { error: 'Not found' });
+        return peers.proxy(req, res, at.peerId, `/${far[1]}/rec/${encodeURIComponent(at.recId)}${url.search}`);
       }
       const d = /^\/direct\/(live|rec|vod)\/([^/]+)$/.exec(url.pathname);
       if (d) {

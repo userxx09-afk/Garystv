@@ -73,7 +73,14 @@ class Tuners {
         if (watching) { this.bump(watching, `Stopped so "${what}" could record`); pick = c; break; }
       }
     }
-    if (!pick) throw Object.assign(new Error(this.busyMessage(list[0])), { status: 409 });
+    if (!pick) {
+      // Someone watching at the other place (sharing.js) can be asked to let a recording have the plan.
+      const ask = kind !== 'rec' ? [] : list.flatMap((c) => {
+        const key = planKey(this.source(c.sourceId));
+        return [...this.remote].filter(([, r]) => Date.now() - r.at <= REMOTE_FRESH_MS && r.uses.some((u) => u.plan === key && u.kind !== 'rec')).map(([peerId]) => ({ peerId, plan: key }));
+      });
+      throw Object.assign(new Error(this.busyMessage(list[0])), { status: 409, ask });
+    }
     const id = `t${++this.n}`;
     this.uses.set(id, { id, sourceId: pick.sourceId, channelId: pick.id, kind, what, since: Date.now(), onBump });
     this.core.emit('tuners');
