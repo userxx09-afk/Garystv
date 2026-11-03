@@ -38,7 +38,7 @@ const Player = {
     this.channel = kind === 'live' ? App.state.channels.find((c) => c.id === id) : null;
     if (kind === 'rec' && this.rec) this.duration = ((this.rec.finishedAt || Date.now()) - this.rec.recordedAt) / 1000;
     if (kind === 'vod') this.duration = this.rec.duration || 0; // 0: the provider didn't say
-    if (this.channel) App.lastChannel = id;
+    if (this.channel) { App.lastChannel = id; try { localStorage.setItem('gtv.lastChannel', id); } catch (_) { /* private mode */ } }
     if (kind === 'live') this.playLive(id);
     else this.playRec(kind, id, offset);
     this.setMode('full');
@@ -191,6 +191,18 @@ const Player = {
     if (mode === 'pip') this.placePip();
   },
 
+  // OK, Back or G while watching live: the guide, on this channel, with it still playing in the
+  // corner above. Back or Full screen there brings it back.
+  toGuide() {
+    const id = this.channel.id;
+    this.setMode('pip');
+    GuideView.inBar = false;
+    GuideView.setList(GuideView.listId, id);
+    if (GuideView.rows[GuideView.row] && GuideView.rows[GuideView.row].id === id) GuideView.t = Date.now();
+    App.go('guide');
+  },
+  full() { this.setMode('full'); this.showOsd(); },
+
   placePip() {
     const box = $('.preview');
     if (!box || this.mode !== 'pip') return;
@@ -205,6 +217,7 @@ const Player = {
   },
 
   showOsd(msg) {
+    if (this.mode === 'pip') { if (msg) toast(msg); GuideView.paintWatch(); return; } // the corner has no room for it
     const osd = $('#osd');
     let title = '', sub = '';
     if (this.rec) {
@@ -339,7 +352,7 @@ const Player = {
       else if (v === 'recordMenu') this.recordMenu();
       else if (v === 'live') this.goLive();
       else if (v === 'pause') this.togglePause();
-      else if (v === 'guide') { this.setMode('pip'); App.go('guide'); }
+      else if (v === 'guide') this.toGuide();
       else if (v === 'stopWatching') { this.stop(); App.render(); }
       else if (v === 'home') App.home();
       else if (v === 'pad') this.pad();
@@ -403,6 +416,7 @@ const Player = {
   onKey(e) {
     if (this.mode !== 'full' || Modal.top()) return false; // a menu over the video gets the keys
     const k = e.key;
+    if (this.channel && (k === 'Escape' || k === 'Backspace' || k === 'Enter')) { this.toGuide(); return true; }
     if (k === 'Escape' || k === 'Backspace') { this.stop(); App.render(); return true; }
     if (k === ' ' || k === 'MediaPlayPause') { this.togglePause(); return true; }
     if (k === 'ArrowLeft') { this.act('back'); return true; }
@@ -411,8 +425,8 @@ const Player = {
     if (this.rec && k === 'Enter' && this.breakNow()) { this.act('skip'); return true; }
     if (this.channel && k === 'ArrowUp') { this.surf(-1); return true; }
     if (this.channel && k === 'ArrowDown') { this.surf(1); return true; }
-    if (this.channel && (k === 'Enter' || /^[0-9.]$/.test(k) || k === '#')) { this.pad(/^[0-9.]$/.test(k) ? k : ''); return true; }
-    if (this.channel && (k === 'g' || k === 'G')) { this.setMode('pip'); App.go('guide'); return true; }
+    if (this.channel && (/^[0-9.]$/.test(k) || k === '#')) { this.pad(k === '#' ? '' : k); return true; }
+    if (this.channel && (k === 'g' || k === 'G')) { this.toGuide(); return true; }
     if (this.channel && (k === 'r' || k === 'R')) { this.recordMenu(); return true; }
     if (k === 'ContextMenu' || k === 'm' || k === 'M') { if (this.channel) this.optionsMenu(); else this.playbackMenu(); return true; }
     this.showOsd();
@@ -425,3 +439,5 @@ window.addEventListener('resize', () => Player.placePip());
 document.addEventListener('DOMContentLoaded', () => $('#screen').addEventListener('mousemove', () => {
   if (Player.mode === 'full' && $('#osd').classList.contains('hide')) Player.showOsd();
 }));
+// Clicking the picture in the guide's corner: full screen again.
+document.addEventListener('DOMContentLoaded', () => $('#screen').addEventListener('click', () => { if (Player.mode === 'pip') Player.full(); }));

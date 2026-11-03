@@ -450,8 +450,14 @@ function tickClock() {
   setInterval(() => { if (App.view === GuideView && !Modal.top()) GuideView.tick(); }, 60000);
   await window.GTV_READY; // TV app: wait until it has found the PC
   await App.loadAll();
-  App.viewName = VIEWS[location.hash.slice(1)] ? location.hash.slice(1) : 'home';
+  try { App.lastChannel = localStorage.getItem('gtv.lastChannel'); } catch (_) { /* private mode */ }
+  if (!App.state.channels.some((c) => c.id === App.lastChannel)) App.lastChannel = null;
+  // A reload keeps the screen you were on; a fresh start opens what Settings > When it starts says.
+  const fresh = !VIEWS[location.hash.slice(1)], start = startChoice();
+  if (start.list !== 'last') GuideView.setList(start.list || null);
+  App.viewName = !fresh ? location.hash.slice(1) : start.open === 'home' ? 'home' : 'guide';
   await App.render();
+  if (fresh && start.open === 'live' && App.lastChannel) Player.play('live', App.lastChannel);
   if (!window.GTV_SERVER) history.pushState({ gtv: 1 }, '', location.hash); // the TV apps have their own Back
   Updates.startCheck();
   connectEvents();

@@ -60,7 +60,7 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0
 @keyframes pulse { 50% { opacity: .35; } }
 
 /* ---------- info pane (top of guide) ---------- */
-.infopane { display: grid; grid-template-columns: 1fr auto; gap: 1.6rem; padding: .6rem 0 1rem; height: 31vh; min-height: 12rem; }
+.infopane { display: grid; grid-template-columns: 1fr auto auto; gap: 1.6rem; padding: .6rem 0 1rem; height: 31vh; min-height: 12rem; }
 .info { min-width: 0; display: flex; flex-direction: column; gap: .35rem; overflow: hidden; }
 .info .title { font-size: 2.1rem; font-weight: 700; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .info .sub { font-size: 1.2rem; color: #cfe0ff; }
@@ -72,6 +72,14 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0
 .progress { height: .3rem; background: #ffffff1c; border-radius: .2rem; max-width: 24rem; overflow: hidden; }
 .progress > i { display: block; height: 100%; background: var(--red2); }
 .preview { aspect-ratio: 16/9; height: 100%; border-radius: .6rem; background: #000 linear-gradient(160deg, #182c4e, #070c16); border: 1px solid var(--line); display: grid; place-items: center; text-align: center; color: var(--muted); overflow: hidden; position: relative; }
+/* Beside the details while a channel plays in the corner: what's on and buttons for it. */
+.watch { display: flex; flex-direction: column; gap: .3rem; width: 21rem; padding: .2rem 0; overflow: hidden; }
+.watch:empty { display: none; }
+.watch .wh { color: var(--muted); font-size: .85rem; text-transform: uppercase; letter-spacing: .08em; }
+.watch .wt { font-size: 1.35rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.watch .ws { color: #cfe0ff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.watch .wbtns { display: flex; flex-wrap: wrap; gap: .45rem; margin-top: .4rem; }
+@media (max-width: 1100px) { .watch { width: 15rem; } .watch .chip { font-size: .85rem; } }
 .preview .big { font-size: 2.2rem; font-weight: 800; color: var(--text); }
 
 /* ---------- guide grid ---------- */

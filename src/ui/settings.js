@@ -1,12 +1,12 @@
 // Settings: tuners & IPTV providers, guide sources, matching channels to the
 // guide, recording options and status.
-/* global App, Updates, GTVAndroid, categoryOf, CATEGORY_RULES */
+/* global App, Updates, GTVAndroid, categoryOf, CATEGORY_RULES, GuideView */
 const SettingsView = {
   title: 'Settings',
   section: 'sources',
   chFilter: '',
   hints: [['↑↓←→', 'Move'], ['OK', 'Select'], ['Tab', 'Next field'], ['Esc', 'Back']],
-  sections: [['sources', 'Antenna & Providers'], ['guide', 'Guide data'], ['channels', 'Channels & matching'], ['recording', 'Recording'], ['media', 'Movies & Shows'], ['updates', 'Updates'], ['status', 'Status']],
+  sections: [['sources', 'Antenna & Providers'], ['guide', 'Guide data'], ['channels', 'Channels & matching'], ['startup', 'When it starts'], ['recording', 'Recording'], ['media', 'Movies & Shows'], ['updates', 'Updates'], ['status', 'Status']],
 
   render(root) {
     root.innerHTML = `<div class="settings">
@@ -313,7 +313,11 @@ const SettingsView = {
   matchDialog(c) {
     const all = App.state.guideChannels;
     return Modal.open((m, close) => {
-      m.innerHTML = `<div class="title">Guide listing for ${esc(c.number)} ${esc(c.name)}</div>
+      const theirs = c.sourceNumber ?? c.number;
+      m.innerHTML = `<div class="title">${esc(c.number)} ${esc(c.name)}</div>
+        <div class="row" style="align-items:flex-end;gap:.6rem"><div class="field" style="margin:0"><label>Channel number (the provider's is ${esc(theirs || 'none')})</label><input id="mnum" class="nav" inputmode="decimal" maxlength="9" style="width:9rem" value="${esc(c.number)}"></div>
+          <div class="btn nav" id="mnumok">Save number</div>${c.alias ? `<div class="btn nav" id="mnumback">Use ${esc(theirs)}</div>` : ''}</div>
+        <div class="s" style="margin:.8rem 0 .3rem">Guide listing</div>
         <div class="field"><input id="mq" placeholder="Search guide channels (number, call sign, name)..."></div>
         <div class="list" id="ml" style="max-height:45vh"></div>
         <div class="actions"><div class="btn nav" data-v="auto">Match automatically</div><div class="btn nav" data-v="none">No guide for this channel</div><div class="btn nav" data-v="">Cancel</div></div>`;
@@ -323,6 +327,19 @@ const SettingsView = {
         $('#ml', m).innerHTML = hits.map((g) => `<div class="item nav" data-g="${esc(g.id)}"><div class="main"><div class="t">${esc(g.number || '')} ${esc(g.names[0])}</div><div class="s">${esc(g.names.slice(1).join(' · '))} · ${esc(g.providerName)}</div></div></div>`).join('') || '<div class="empty">No guide channels match.</div>';
         $$('[data-g]', m).forEach((el) => { el.onclick = async () => { await api.put(`/api/channels/${encodeURIComponent(c.id)}`, { guideId: el.dataset.g }); close(true); }; });
       };
+      // The number here too: just this channel; the provider's is kept.
+      const saveNum = async (v) => {
+        const alias = v === theirs ? '' : v;
+        try { await api.put(`/api/channels/${encodeURIComponent(c.id)}`, { alias }); toast(alias ? `${c.name} is now channel ${alias}` : `${c.name} is on ${theirs}`); close(true); } catch (e) { toast(e.message); }
+      };
+      const num = $('#mnum', m);
+      num._onFocus = () => num.focus();
+      num.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); saveNum(num.value.trim()); }
+        if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); num.blur(); Nav.focus($('#ml .nav', m) || $('[data-v]', m)); }
+      });
+      $('#mnumok', m).onclick = () => saveNum(num.value.trim());
+      if (c.alias) $('#mnumback', m).onclick = () => saveNum('');
       $('#mq', m).oninput = (e) => paint(e.target.value);
       paint(c.number || '');
       $('#mq', m).value = c.number || '';
@@ -335,6 +352,27 @@ const SettingsView = {
         };
       });
     });
+  },
+
+  // ---------- what this TV opens to ----------
+  // Kept on this TV only, so each TV (and each person's) can start its own way.
+  startup(pane) {
+    const s = startChoice(), lists = App.state.favLists || [];
+    const opt = (v, label, on) => `<option value="${esc(v)}"${on ? ' selected' : ''}>${esc(label)}</option>`;
+    pane.innerHTML = `<div class="box"><h3>When GarysTV starts on this TV</h3>
+      <div class="s">Saved on this TV only, so every TV can start its own way.</div>
+      <div class="field"><label>Open</label><select id="stOpen" class="nav">
+        ${opt('home', 'The Home screen', s.open === 'home')}${opt('guide', 'The Guide', s.open === 'guide')}${opt('live', 'The last channel watched, playing', s.open === 'live')}</select></div>
+      <div class="field"><label>Channels shown in the Guide</label><select id="stList" class="nav">
+        ${opt('last', 'Whatever was showing last time', s.list === 'last')}${opt('', 'All channels', s.list === '')}
+        ${lists.length > 1 ? opt('*', '★ All favorites', s.list === '*') : ''}${lists.map((l) => opt(l.id, `★ ${l.name}`, s.list === l.id)).join('')}</select></div>
+      <div class="s">${App.lastChannel ? `Last channel watched here: ${esc((App.state.channels.find((c) => c.id === App.lastChannel) || {}).name || 'unknown')}` : 'No channel watched on this TV yet; until then it opens the Guide.'}</div></div>`;
+    const save = () => {
+      try { localStorage.setItem('gtv.start', JSON.stringify({ open: $('#stOpen', pane).value, list: $('#stList', pane).value })); } catch (_) { /* private mode */ }
+      toast('Saved for this TV');
+    };
+    $('#stOpen', pane).onchange = save;
+    $('#stList', pane).onchange = save;
   },
 
   // ---------- recording ----------
@@ -497,3 +535,10 @@ const SettingsView = {
 function byNumber(a, b) { return (parseFloat(a.number) || 1e9) - (parseFloat(b.number) || 1e9) || byName(a, b); }
 // Names with numbers in order: PPV 2 before PPV 10.
 function byName(a, b) { return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }); }
+
+// What this TV opens to: { open: home | guide | live, list: last | "" (all) | * (all favorites) | a list's id }.
+function startChoice() {
+  let s = {};
+  try { s = JSON.parse(localStorage.getItem('gtv.start') || '{}') || {}; } catch (_) { /* private mode */ }
+  return { open: ['home', 'guide', 'live'].includes(s.open) ? s.open : 'home', list: typeof s.list === 'string' ? s.list : 'last' };
+}

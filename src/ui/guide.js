@@ -1,9 +1,12 @@
 // The program guide: channels down the side, 90 minutes across the top,
 // a details panel with a picture-in-picture preview above (DISH-style).
-/* global App, Player */
+/* global App, Player, toast */
 const SLOT = 30 * 60000;
 const SPAN = 3 * SLOT;
 const align = (t) => Math.floor(t / SLOT) * SLOT;
+// Every favorites list together (Gary's ESPN and Barb's Hallmark in one), when there's more than one.
+const ALL_FAVS = '*';
+const allFavorites = (lists) => ({ id: ALL_FAVS, name: 'All favorites', combined: true, channelIds: [...new Set(lists.flatMap((l) => l.channelIds))] });
 
 const GuideView = {
   ws: align(Date.now()), row: 0, top: 0, t: Date.now(), rows: [], all: [], loaded: [0, 0], visible: 7,
@@ -11,7 +14,11 @@ const GuideView = {
   filter: (() => { try { return localStorage.getItem('gtv.filter'); } catch (_) { return null; } })(), // one channel group, or all
   inBar: false, // the remote is on the bar above the guide
 
-  get list() { return ((App.state && App.state.favLists) || []).find((l) => l.id === this.listId) || null; },
+  get list() {
+    const lists = (App.state && App.state.favLists) || [];
+    if (this.listId === ALL_FAVS) return lists.length > 1 ? allFavorites(lists) : null;
+    return lists.find((l) => l.id === this.listId) || null;
+  },
   get title() { return ['Guide', this.list && this.list.name, this.filterLabel].filter(Boolean).join(' › '); },
   hints: [['↑↓←→', 'Move'], ['OK', 'Options'], ['R', 'Record', 'k-red'], ['M', 'Menu'], ['PgUp/PgDn', 'Page'], ['[ ]', 'Day'], ['#', 'Channel #'], ['Esc', 'Back']],
 
@@ -98,6 +105,7 @@ const GuideView = {
     const lists = (App.state && App.state.favLists) || [];
     const chip = (key, on, label, attr = '') => `<span class="chip nav${on ? ' on' : ''}" data-key="${key}" ${attr}>${label}</span>`;
     bar.innerHTML = chip('gb-all', !this.list, 'All channels', 'data-list=""')
+      + (lists.length > 1 ? chip('gb-allfav', this.listId === ALL_FAVS, '★ All favorites', `data-list="${ALL_FAVS}"`) : '')
       + lists.map((l) => chip(`gb-${esc(l.id)}`, this.listId === l.id, `★ ${esc(l.name)}`, `data-list="${esc(l.id)}"`)).join('')
       + chip('gb-cats', !!this.filter, `▦ ${this.filter ? esc(this.filterLabel) : 'Categories'}`, 'id="gcats"')
       + (this.filter ? chip('gb-clear', false, '✕', 'id="gclear" title="Show every category"') : '')
@@ -137,7 +145,7 @@ const GuideView = {
     await this.load();
     this.inBar = false;
     root.innerHTML = `
-      <div class="infopane"><div class="info" id="ginfo"></div><div class="preview" id="gprev"></div></div>
+      <div class="infopane"><div class="info" id="ginfo"></div><div class="watch" id="gwatch"></div><div class="preview" id="gprev"></div></div>
       <div class="g-bar" id="gbar"></div>
       <div class="guide">
         <div class="g-head"><div class="g-day" id="gday"></div><div class="g-times" id="gtimes"></div></div>
@@ -152,8 +160,37 @@ const GuideView = {
       else this.moveRow(e.deltaY > 0 ? 3 : -3);
     };
     this.paintBar();
+    this.paintWatch();
     this.paint();
     if (Player.mode === 'pip') Player.placePip();
+  },
+
+  // While a channel plays in the corner: what's on it and what you can do with it, beside the details.
+  paintWatch() {
+    const box = $('#gwatch');
+    if (!box || App.view !== this) return;
+    const ch = Player.mode === 'pip' && Player.channel;
+    const had = Nav.current && box.contains(Nav.current) ? Nav.current.dataset.key : null;
+    if (!ch) { box.innerHTML = ''; if (had) this.refocusBar(); return; }
+    const p = Player.currentProgram(), rec = Player.recording();
+    const chip = (k, label) => `<span class="chip nav" data-key="gw-${k}" data-w="${k}">${label}</span>`;
+    box.innerHTML = `<div class="wh">Now watching${rec ? ' <span class="tag rec">● REC</span>' : ''}</div>
+      <div class="wt">${esc(ch.number)} ${esc(ch.name)}</div>
+      <div class="ws">${p && !p.filler ? `${esc(p.title)} · until ${fmt.time(p.end)}` : '&nbsp;'}</div>
+      <div class="wbtns">${chip('full', '⛶ Full screen')}${chip('rec', rec ? '■ Stop recording' : '● Record now')}${chip('fav', '★ Favorites')}${chip('pad', '🔢 Change channel')}${chip('stop', '■ Stop')}</div>`;
+    const run = {
+      full: () => Player.full(),
+      rec: () => (rec ? Player.stopRecording(rec) : Player.recordMenu()).then(() => this.refresh()),
+      fav: async () => {
+        const items = App.channelFavItems(ch, async () => { await App.loadAll(); this.paintBar(); this.paint(); });
+        const v = await Modal.menu(`${ch.number} ${ch.name}`, '', [...items.map((i) => ({ label: i.label, value: i.run })), { label: 'Cancel', value: null }]);
+        if (v) try { await v(); } catch (e) { toast(e.message); }
+      },
+      pad: () => Player.pad(),
+      stop: () => { Player.stop(); this.paintWatch(); this.paint(); },
+    };
+    $$('[data-w]', box).forEach((el) => { el.onclick = () => run[el.dataset.w](); });
+    if (had) Nav.focus($(`[data-key="${had}"]`, box) || $('.chip', box));
   },
 
   focused() {
@@ -286,6 +323,7 @@ const GuideView = {
     if (this.listId && !this.list) this.setList(null); // deleted on another screen
     $('#crumb').textContent = this.title; // a list may have been renamed
     this.paintBar();
+    this.paintWatch();
     this.paint();
   },
 
@@ -299,7 +337,7 @@ const GuideView = {
     items.push({ label: '🔢 Go to a channel number...', run: () => this.pad() });
     if (r) items.push(...App.recordItems(r, p).map((c) => ({ ...c, run: () => Promise.resolve(c.run()).then(() => this.refresh()) })));
     if (r) items.push(...App.channelFavItems(r, after));
-    for (const l of lists) if (!cur || l.id !== cur.id) items.push({ label: `▦ Show ${l.name} (${l.channelIds.length})`, run: () => this.setList(l.id) });
+    for (const l of lists.length > 1 ? [allFavorites(lists), ...lists] : lists) if (!cur || l.id !== cur.id) items.push({ label: `▦ Show ${l.name} (${l.channelIds.length})`, run: () => this.setList(l.id) });
     if (cur) items.push({ label: '▦ Show all channels', run: () => this.setList(null) });
     items.push({ label: this.filter ? `▦ Categories: ${this.filterLabel}...` : '▦ Categories (Sports, News, Movies...)', run: () => this.categoryPicker() });
     if (this.filter) items.push({ label: '✕ Show every category', run: () => this.setFilter(null) });
@@ -315,7 +353,7 @@ const GuideView = {
         await after();
       },
     });
-    if (cur) {
+    if (cur && !cur.combined) {
       items.push({
         label: `✎ Rename ${cur.name}...`,
         run: async () => {
@@ -363,14 +401,16 @@ const GuideView = {
   onKey(e) {
     const k = e.key;
     if (this.inBar && Nav.current && Nav.current.closest('#topnav')) { // the buttons along the top
-      if (k === 'ArrowDown') { this.refocusBar(); return true; }
+      if (k === 'ArrowDown') { const w = $('#gwatch .chip'); if (w) Nav.focus(w); else this.refocusBar(); return true; }
       return ['ArrowLeft', 'ArrowRight', 'Enter'].includes(k) && Nav.handle(e);
     }
+    const inWatch = this.inBar && Nav.current && Nav.current.closest('#gwatch'); // the buttons for what's playing
     if (this.inBar) { // on the bar above the guide: ←→ along it, OK picks, ↓ back to the shows
+      if (k === 'ArrowDown' && inWatch) { this.refocusBar(); return true; }
       if (k === 'ArrowDown') { this.inBar = false; Nav.focus(null); this.paint(); return true; }
-      if (k === 'ArrowUp') { Nav.focus($('#topnav .nav')); return true; }
+      if (k === 'ArrowUp') { Nav.focus((!inWatch && $('#gwatch .chip')) || $('#topnav .nav')); return true; }
       if (k === 'ArrowLeft' || k === 'ArrowRight') { // in order, even when a narrow screen wraps the bar
-        const chips = $$('#gbar .chip'), i = chips.indexOf(Nav.current);
+        const chips = $$(inWatch ? '#gwatch .chip' : '#gbar .chip'), i = chips.indexOf(Nav.current);
         Nav.focus(chips[Math.max(0, Math.min(chips.length - 1, i + (k === 'ArrowRight' ? 1 : -1)))]);
         return true;
       }
@@ -397,6 +437,7 @@ const GuideView = {
 
   tick() {
     if (this.ws < align(Date.now())) { this.ws = align(Date.now()); this.load(true).then(() => this.paint()); } else this.paint();
+    this.paintWatch(); // what is on now, in the corner
   },
 };
 

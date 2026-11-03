@@ -28,7 +28,7 @@ const HomeView = {
             ['timers', 'Timers', `${App.state.rules.length} set`], ['search', 'Search', 'Find a show'], ['settings', 'Settings', 'Antenna, guide, channels']]
             .map(([k, l, s]) => `<div class="tile nav" data-key="${k}" data-go="${k}">${ICONS[k]}<div>${l}</div><small>${esc(s)}</small></div>`).join('')}
         </div>
-        <div class="strip"><h2>Favorites</h2><div class="cards">${(App.state.favLists || []).map((l) => `
+        <div class="strip"><h2>Favorites</h2><div class="cards">${((l) => (l.length > 1 ? [allFavorites(l), ...l] : l))(App.state.favLists || []).map((l) => `
           <div class="card nav" data-key="f-${esc(l.id)}" data-fav="${esc(l.id)}"><div class="t"><span class="fav">★</span>${esc(l.name)}</div>
           <div class="s">${l.channelIds.length} channel${l.channelIds.length === 1 ? '' : 's'}</div></div>`).join('')}
           <div class="card nav" data-key="f-new" data-favnew="1"><div class="t">＋ New favorites list</div><div class="s">For example, Gary's Favorites</div></div></div></div>
