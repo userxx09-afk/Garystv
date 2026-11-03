@@ -208,3 +208,18 @@ test('scheduler: a full plan records the same channel on another plan', () => {
   const movie = jobs.find((j) => j.title === 'Movie');
   assert.deepEqual([movie.status, movie.viaChannelId], ['scheduled', 'b:2']);
 });
+
+test('Updates: when they may go in, and which version is newer', () => {
+  const { due, newer, lastSlot, plan } = require('../src/core/update-plan');
+  const sun330 = new Date(2026, 10, 1, 3, 30); // a Sunday
+  assert.equal(due({}, sun330), true); // Sundays 3:00 by default, for two hours
+  assert.equal(due({}, new Date(2026, 10, 1, 5, 30)), false);
+  assert.equal(due({}, new Date(2026, 10, 2, 3, 30)), false); // Monday
+  assert.equal(due({ updateDay: 'daily', updateTime: '23:30' }, new Date(2026, 10, 3, 0, 15)), true); // just past midnight
+  assert.equal(due({ updatePlan: 'ask' }, sun330), false);
+  assert.equal(due({ updatePlan: 'anytime' }, new Date(2026, 10, 4, 14)), true);
+  assert.equal(lastSlot(plan({ updateDay: 'mon' }), sun330), null);
+  assert.equal(newer('0.2.31', '0.2.9'), true);
+  assert.equal(newer('0.2.9', '0.2.31'), false);
+  assert.equal(newer('0.2.31', '0.2.31'), false);
+});

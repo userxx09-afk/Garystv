@@ -448,9 +448,15 @@ const SettingsView = {
   // ---------- updates ----------
   async updates(pane) {
     const st = App.state.status;
-    const server = `<div class="s">${window.GTV_SERVER ? 'The GarysTV this screen is connected to' : 'This GarysTV'} is version <b>${esc(st.version)}</b>${st.platform === 'linux' ? ' on the home server, which is updated by hand' : ''}.</div>`;
-    if (Updates.android) return this.androidUpdates(pane, server);
-    if (Updates.windowsApp) return this.windowsUpdates(pane, server);
+    const linux = st.platform === 'linux'; // a home server: it updates itself too, set here
+    const server = `<div class="s">${window.GTV_SERVER ? 'The GarysTV this screen is connected to' : 'This GarysTV'} is version <b>${esc(st.version)}</b>${linux ? ' on the home server' : ''}.</div>`;
+    if (Updates.android) {
+      pane.innerHTML = '<div id="updApp"></div><div id="updServer"></div>';
+      this.androidUpdates($('#updApp', pane), linux ? '' : server);
+      if (linux) this.windowsUpdates($('#updServer', pane), '');
+      return;
+    }
+    if (Updates.windowsApp || linux) return this.windowsUpdates(pane, server);
     pane.innerHTML = `<div class="box"><h3>Updates</h3>${server}
       <div>This screen comes from that GarysTV, so it changes whenever that is updated: there's nothing to install here.</div></div>`;
   },
@@ -493,18 +499,20 @@ const SettingsView = {
     const slot = `${(days.find(([k]) => k === p.day) || days[0])[1]} at ${clock(p.h, p.m)}`;
     const when = p.when === 'scheduled' ? `It installs ${slot.replace('Every day', 'every day')}, then GarysTV starts again.`
       : p.when === 'anytime' ? (u.busy ? 'It installs as soon as nothing is recording or about to.' : 'It installs in a few minutes.') : 'Choose Restart and update now when it suits you.';
-    const now = !u.supported ? esc(u.reason || 'Updates work in the installed app.')
-      : u.ready ? `✨ Version <b>${esc(u.available)}</b> is downloaded. ${when}`
-        : u.available ? `Downloading version <b>${esc(u.available)}</b>${u.progress != null ? ` (${u.progress}%)` : ''}...`
-          : u.error ? `⚠️ Couldn't check: ${esc(u.error)}`
-            : u.checkedAt ? `✅ This is the newest version (checked ${fmt.when(u.checkedAt)}).` : 'Checking soon...';
-    pane.innerHTML = `<div class="box"><h3>Updates</h3>
-      <div>This app: <b>${esc(u.current || App.state.status.version)}</b></div>
-      <div>${now}</div>
-      <div class="actions">${u.ready ? '<div class="btn nav primary" id="updNow" data-key="upd-now">Restart and update now</div>' : ''}${u.supported ? '<div class="btn nav" id="updCheck" data-key="upd-check">Check now</div>' : ''}</div>
+    // The home server (u.server) has nothing to download first: its helper fetches the update as it installs.
+    const now = !u.supported ? esc(u.reason || (App.state.status.platform === 'linux' ? 'This home server was set up before it could update itself. Run the installer once more (sudo ./install/install-linux.sh) to switch it on.' : 'Updates work in the installed app.'))
+      : u.installing ? `Installing version <b>${esc(u.available)}</b>. GarysTV starts again by itself in a minute or two.`
+        : u.ready ? `✨ Version <b>${esc(u.available)}</b> is ${u.server ? 'out' : 'downloaded'}. ${when}`
+          : u.available ? `Downloading version <b>${esc(u.available)}</b>${u.progress != null ? ` (${u.progress}%)` : ''}...`
+            : u.error ? `⚠️ Couldn't check: ${esc(u.error)}`
+              : u.checkedAt ? `✅ This is the newest version (checked ${fmt.when(u.checkedAt)}).` : 'Checking soon...';
+    pane.innerHTML = `<div class="box"><h3>${u.server ? 'Home server updates' : 'Updates'}</h3>
+      <div>${u.server ? 'The home server' : 'This app'}: <b>${esc(u.current || App.state.status.version)}</b></div>
+      <div>${now}</div>${u.lastProblem ? `<div class="s" style="color:var(--yellow)">⚠️ ${esc(u.lastProblem)}</div>` : ''}
+      <div class="actions">${u.ready && !u.installing ? `<div class="btn nav primary" id="updNow" data-key="upd-now">${u.server ? 'Update the home server now' : 'Restart and update now'}</div>` : ''}${u.supported ? '<div class="btn nav" id="updCheck" data-key="upd-check">Check now</div>' : ''}</div>
       <div class="s" style="margin-top:.6rem">GarysTV always checks for updates every few hours and tells you here. Choose when they go in:</div>
       <div id="updRows" style="display:grid;gap:.5rem;margin:.5rem 0;max-width:40rem"></div>
-      <div class="s">Updates come from GarysTV's page on GitHub. They never go in while something is recording, about to record, or someone is watching live TV; it waits up to two hours after the time you pick, else tries again next time. Timers, recordings and settings are kept. The TVs aren't affected.</div></div>`;
+      <div class="s">Updates come from GarysTV's page on GitHub. They never go in while something is recording, about to record, or someone is watching; it waits up to two hours after the time you pick, else tries again next time. Timers, recordings and settings are kept. ${u.server ? 'The TVs lose the picture for a minute while it restarts, then carry on; if the new version doesn\'t start, the one before is put back.' : 'The TVs aren\'t affected.'}</div></div>${server}`;
     const rows = $('#updRows', pane);
     const put = (patch) => api.put('/api/settings', { autoUpdate: true, ...patch }).then(() => toast('Saved'));
     const times = [];
@@ -518,6 +526,11 @@ const SettingsView = {
     rows.append(optionRow('Install updates', whens, at(whens, p.when), (v) => { show(v); put({ updatePlan: v }); }), dayRow, timeRow);
     [...rows.children].forEach((el, i) => { el.dataset.key = `upd-row${i}`; });
     show(p.when);
+    const again = () => { if (document.body.contains(pane)) this.windowsUpdates(pane, server); };
+    const go = $('#updNow', pane);
+    if (go) go.onclick = () => api.post('/api/app-update/install').then(() => { toast(u.server ? 'Updating. The home server starts again in a minute or two.' : 'Updating. GarysTV starts again by itself.', 6000); setTimeout(again, 1500); }).catch((e) => toast(e.message));
+    const chk = $('#updCheck', pane);
+    if (chk) chk.onclick = () => { toast('Checking...'); api.post('/api/app-update/check').then(again).catch((e) => toast(e.message)); };
   },
 
   // ---------- backup & restore ----------

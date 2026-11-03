@@ -24,8 +24,17 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: npm ci
       - run: npm test
-      - name: Check the Linux installer script
-        run: bash -n install/install-linux.sh && shellcheck install/install-linux.sh
+      - name: Check the Linux installer scripts
+        run: bash -n install/install-linux.sh && bash -n install/update-linux.sh && shellcheck install/install-linux.sh install/update-linux.sh
+      # What a home server downloads to update itself (install/update-linux.sh).
+      - name: Home server files
+        run: |
+          npm version "$GTV_VERSION" --no-git-tag-version --allow-same-version
+          tar -czf GarysTV-linux.tar.gz src headless.js package.json package-lock.json install
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GarysTV-linux
+          path: GarysTV-linux.tar.gz
 
   firetv:
     name: Fire TV app (APK)
@@ -122,7 +131,9 @@ jobs:
           mkdir rel
           cp out/GarysTV-FireTV-apk/*.apk rel/GarysTV.apk
           cp out/GarysTV-Windows-installer/* rel/
-          echo "{\"version\":\"$GTV_VERSION\",\"code\":$CODE,\"apk\":\"GarysTV.apk\"}" > rel/version.json
+          cp out/GarysTV-linux/GarysTV-linux.tar.gz rel/
+          SUM="$(sha256sum rel/GarysTV-linux.tar.gz | cut -d' ' -f1)"
+          echo "{\"version\":\"$GTV_VERSION\",\"code\":$CODE,\"apk\":\"GarysTV.apk\",\"linux\":\"GarysTV-linux.tar.gz\",\"linuxSha256\":\"$SUM\"}" > rel/version.json
           # A re-run of the same build replaces its Release.
           gh release delete "v$GTV_VERSION" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
           gh release create "v$GTV_VERSION" rel/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "GarysTV $GTV_VERSION" --notes "${NOTES:-Update}" --latest

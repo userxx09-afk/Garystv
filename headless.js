@@ -1,10 +1,12 @@
 // The DVR engine without the Windows window or tray, for an always-on home server
 // (Linux, run by systemd). TVs, tablets and the Windows app use its screens over
 // the home network.
-//   node headless.js --data=/var/lib/garystv [--recordings=DIR] [--port=5480] [--demo]
+//   node headless.js --data=/var/lib/garystv [--recordings=DIR] [--port=5480] [--update-dir=DIR] [--demo]
+// --update-dir: where it asks the root helper to install an update (install-linux.sh sets it up).
 const path = require('path');
 const { DvrCore } = require('./src/core');
 const { createServer } = require('./src/core/server');
+const { setupServerUpdates } = require('./src/core/server-updates');
 
 const args = process.argv.slice(2);
 const flag = (name) => { const a = args.find((x) => x.startsWith(`--${name}`)); return a ? (a.split('=')[1] ?? true) : null; };
@@ -51,6 +53,7 @@ async function main() {
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '0.0.0.0', resolve); });
   core.note(`GarysTV engine listening on port ${port} (data: ${dataDir}, recordings: ${core.settings.recordingsDir})`);
   await applySecrets(core);
+  if (flag('update-dir')) setupServerUpdates(core, { dir: flag('update-dir'), version: require('./package.json').version });
 
   // systemd stop / Ctrl-C: let recordings finish writing, then exit.
   let stopping = false;

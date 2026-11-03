@@ -258,10 +258,10 @@ function createServer(core) {
     ['POST', '/api/timeshift/release', (q, b) => timeshift.release(b.channelId, b.viewer)],
     ['DELETE', '/api/recordings/:id', (q, b, p) => core.deleteRecording(p.id)],
     ['POST', '/api/tools/:name/install', (q, b, p) => tools.install(p.name)],
-    // The Windows app's own updates (src/app-updates.js); the home server is updated by hand.
+    // Updates: the Windows app's own (src/app-updates.js), or a home server's (core/server-updates.js).
     ['GET', '/api/app-update', () => (core.appUpdater ? core.appUpdater.status() : { supported: false })],
     ['POST', '/api/app-update/check', () => (core.appUpdater ? core.appUpdater.check() : null)],
-    ['POST', '/api/app-update/install', () => { if (!core.appUpdater) throw new Error('Updates are for the Windows app.'); return core.appUpdater.install(); }],
+    ['POST', '/api/app-update/install', () => { if (!core.appUpdater) throw new Error('This GarysTV has no updater.'); return core.appUpdater.install(); }],
     ['POST', '/api/external-play', async (q, b) => {
       const vlc = findVlc(core.settings);
       if (!vlc) throw new Error('VLC is not installed.');

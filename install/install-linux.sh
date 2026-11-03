@@ -5,6 +5,8 @@
 #   sudo ./install/install-linux.sh                 # install or update
 #   sudo ./install/install-linux.sh --uninstall     # remove the service (keeps settings and recordings)
 #
+# After that it updates itself from GitHub when Settings > Updates says (update-linux.sh).
+#
 # Options: --recordings DIR (default /var/lib/garystv/recordings), --port N (default 5480).
 set -euo pipefail
 
@@ -32,17 +34,21 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 if [ "$UNINSTALL" -eq 1 ]; then
-    systemctl disable --now garystv.service 2>/dev/null || true
-    rm -f /etc/systemd/system/garystv.service
+    systemctl disable --now garystv.service garystv-update.path 2>/dev/null || true
+    rm -f /etc/systemd/system/garystv.service /etc/systemd/system/garystv-update.path /etc/systemd/system/garystv-update.service
+    rm -rf /usr/local/lib/garystv
     systemctl daemon-reload
     rm -rf "$APP_DIR"
     echo "Removed the GarysTV service. Settings and recordings are still in $DATA_DIR."
     exit 0
 fi
 
-echo "==> Installing packages"
-apt-get update -qq
-apt-get install -y -qq nodejs npm ffmpeg
+# An update has these already; a first install fetches them.
+if ! command -v node >/dev/null || ! command -v npm >/dev/null || ! command -v ffmpeg >/dev/null || ! command -v curl >/dev/null; then
+    echo "==> Installing packages"
+    apt-get update -qq
+    apt-get install -y -qq nodejs npm ffmpeg curl
+fi
 node_major="$(node -p 'process.versions.node.split(".")[0]')"
 if [ "$node_major" -lt 18 ]; then
     echo "GarysTV needs Node.js 18 or newer (found $(node -v))." >&2
@@ -62,6 +68,7 @@ cp -r "$REPO_DIR/src" "$REPO_DIR/headless.js" "$REPO_DIR/package.json" "$REPO_DI
 (cd "$APP_DIR" && npm ci --omit=dev --ignore-scripts --no-audit --no-fund --loglevel=error)
 install -d -m 755 -o "$SERVICE_USER" -g "$SERVICE_USER" "$DATA_DIR"
 install -d -m 775 -o "$SERVICE_USER" -g "$SERVICE_USER" "$RECORDINGS"
+install -d -m 755 -o "$SERVICE_USER" -g "$SERVICE_USER" "$DATA_DIR/update"
 
 # IPTV logins live here, on this machine only (never in the code). Readable by root and the service.
 SECRETS=/etc/garystv/secrets.env
@@ -105,12 +112,36 @@ Wants=network-online.target
 User=$SERVICE_USER
 WorkingDirectory=$APP_DIR
 EnvironmentFile=-$SECRETS
-ExecStart=/usr/bin/node $APP_DIR/headless.js --data=$DATA_DIR/data --recordings=$RECORDINGS --port=$PORT
+ExecStart=/usr/bin/node $APP_DIR/headless.js --data=$DATA_DIR/data --recordings=$RECORDINGS --port=$PORT --update-dir=$DATA_DIR/update
 # Stopping lets recordings finish writing first.
 KillSignal=SIGTERM
 TimeoutStopSec=15
 Restart=always
 RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Updates: GarysTV (a limited user) leaves a cue; this root helper does the install.
+echo "==> Setting up updates"
+install -d -m 755 /usr/local/lib/garystv
+install -m 755 "$REPO_DIR/install/update-linux.sh" /usr/local/lib/garystv/update-linux.sh
+cat > /etc/systemd/system/garystv-update.service <<EOF
+[Unit]
+Description=Install the newest GarysTV from GitHub (asked for by GarysTV, Settings > Updates)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/garystv/update-linux.sh
+EOF
+cat > /etc/systemd/system/garystv-update.path <<EOF
+[Unit]
+Description=Watch for GarysTV asking to be updated
+
+[Path]
+PathExists=$DATA_DIR/update/ready
+Unit=garystv-update.service
 
 [Install]
 WantedBy=multi-user.target
@@ -123,6 +154,7 @@ fi
 
 systemctl daemon-reload
 systemctl enable garystv.service
+systemctl enable --now garystv-update.path
 systemctl restart garystv.service
 
 ip_addr="$(hostname -I | awk '{print $1}')"
