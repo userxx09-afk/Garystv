@@ -245,3 +245,39 @@ test('Other locations: home just works, elsewhere signs in once', () => {
   auth.setPassword(''); // off: everyone from away is signed out
   assert.equal(auth.check(req('100.64.0.7', cookie)).ok, false);
 });
+
+test('Linked GarysTVs: link with the password, then manage one through the other', async () => {
+  const { DvrCore } = require('../src/core');
+  const { createServer } = require('../src/core/server');
+  const mk = async (name) => {
+    const core = new DvrCore({ dataDir: require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'gtv-peer-')) });
+    core.updateSettings({ serverName: name, recordingsDir: core.store.dir });
+    const srv = createServer(core);
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    return { core, srv, base: `http://127.0.0.1:${srv.address().port}` };
+  };
+  const home = await mk('Home');
+  const work = await mk('Work');
+  try {
+    const post = (base, path, body) => fetch(base + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    let r = await post(home.base, '/api/peers', { url: work.base, password: 'x', share: true });
+    assert.match((await r.json()).error, /doesn't allow other locations/); // Work has no password yet
+    work.core.auth.setPassword('workpass1');
+    r = await post(home.base, '/api/peers', { url: work.base, password: 'workpass1', share: true });
+    assert.deepEqual(await r.json(), { id: work.core.peers.me.id, name: 'Work' });
+    assert.equal(work.core.peers.list[0].name, 'Home'); // both sides know each other
+    // Home's screens can now manage Work through Home.
+    work.core.addFavList({ name: 'Work list' });
+    const id = home.core.peers.list[0].id;
+    const st = await (await fetch(`${home.base}/peer/${id}/api/state`)).json();
+    assert.deepEqual(st.favLists.map((l) => l.name), ['Work list']);
+    // Without the key, Work turns callers from elsewhere away (here everything is 127.0.0.1, so fake a wrong key).
+    r = await fetch(`${work.base}/api/state`, { headers: { 'x-garystv-peer': `${home.core.peers.me.id} wrongkey` } });
+    assert.equal(r.status, 401);
+    // Unlinking tells the other one.
+    await fetch(`${home.base}/api/peers/${id}`, { method: 'DELETE' });
+    assert.equal(work.core.peers.list.length, 0);
+  } finally {
+    for (const x of [home, work]) { x.srv.close(); x.core.timeshift.stopAll(); }
+  }
+});

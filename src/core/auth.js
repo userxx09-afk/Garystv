@@ -67,19 +67,25 @@ class Auth {
     return { home: false, ok: true, login };
   }
 
-  // Sign in from another location. -> the Set-Cookie header to send.
-  signIn(req, { password, device }) {
+  // Throws unless it's the password for other locations (a few wrong tries per address, then a wait).
+  verify(req, password) {
     const ip = remoteIp(req);
     const recent = (this.fails.get(ip) || []).filter((t) => Date.now() - t < TRIES_MS);
     if (recent.length >= TRIES) throw Object.assign(new Error('Too many wrong passwords. Wait ten minutes and try again.'), { status: 429 });
     const p = this.password;
-    if (!p) throw Object.assign(new Error('This GarysTV doesn\'t allow other locations. At home, set a password in Settings > Other locations.'), { status: 403 });
+    if (!p) throw Object.assign(new Error('That GarysTV doesn\'t allow other locations yet. There, set a password in Settings > Other locations.'), { status: 403 });
     const given = hashPassword(password || '', p.salt).hash;
     if (!crypto.timingSafeEqual(Buffer.from(given, 'hex'), Buffer.from(p.hash, 'hex'))) {
       this.fails.set(ip, [...recent, Date.now()]);
       throw Object.assign(new Error('That password is not right.'), { status: 401 });
     }
     this.fails.delete(ip);
+  }
+
+  // Sign in from another location. -> the Set-Cookie header to send.
+  signIn(req, { password, device }) {
+    this.verify(req, password);
+    const ip = remoteIp(req);
     const token = crypto.randomBytes(32).toString('hex');
     const login = { id: crypto.randomBytes(5).toString('hex'), token: sha(token), device: String(device || 'A device').slice(0, 60), created: Date.now(), lastSeen: Date.now(), ip };
     this.core.store.write('logins', [...this.logins, login]);

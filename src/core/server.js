@@ -14,6 +14,7 @@ const { Vod } = require('./vod');
 const { Tmdb } = require('./tmdb');
 const { ToolInstaller } = require('./installer');
 const { Auth } = require('./auth');
+const { Peers } = require('./peers');
 
 const UI_DIR = path.join(__dirname, '..', 'ui');
 const VERSION = require('../../package.json').version;
@@ -183,6 +184,7 @@ function createServer(core) {
   const clients = new Set();
   const tools = core.tools = new ToolInstaller(core);
   const auth = core.auth = new Auth(core);
+  const peers = core.peers = new Peers(core, auth);
   const timeshift = core.timeshift = new Timeshift({
     ffmpeg: () => findFfmpeg(core.settings),
     dir: () => path.join(core.settings.recordingsDir, '.live-buffer'),
@@ -216,6 +218,11 @@ function createServer(core) {
       channels: core.channels, guideChannels: core.guideData.channels.map(({ id, names, number, providerName }) => ({ id, names, number, providerName })),
       rules: core.rules, status: { ...core.status(), tools: tools.status(), platform: process.platform, version: VERSION }, favLists: core.favLists,
     })],
+    // Linked GarysTVs at other locations (peers.js).
+    ['GET', '/api/peers', () => peers.overview()],
+    ['POST', '/api/peers', (q, b, p, req) => peers.link(req, b)],
+    ['DELETE', '/api/peers/:id', (q, b, p) => peers.unlink(p.id)],
+    ['DELETE', '/api/peer/self', (q, b, p, req) => { if (!req.who.peer) throw new Error('Only for a linked GarysTV.'); peers.dropped(req.who.peer); }],
     // Other locations (auth.js): the password they sign in with, and the devices signed in.
     ['GET', '/api/remote', (q, b, p, req) => ({ ...auth.overview(), home: req.who.home, me: req.who.login ? req.who.login.id : null })],
     ['PUT', '/api/remote/password', (q, b) => auth.setPassword(b.password)],
@@ -290,6 +297,10 @@ function createServer(core) {
     // At home: as always. From another location: a linked GarysTV's key, or a device that signed in (auth.js).
     const who = (core.peers && core.peers.check(req)) || auth.check(req);
     req.who = who;
+    // Another GarysTV linking with this one (from wherever it is): checked with this one's password (peers.js).
+    if (url.pathname === '/api/peer/link' && req.method === 'POST' && !req.headers.origin) {
+      try { return send(res, 200, peers.accept(req, await readBody(req))); } catch (e) { return send(res, e.status || 400, { error: e.message }); }
+    }
     if (!who.home) {
       const origin = req.headers.origin;
       let sameSite = !origin;
@@ -318,6 +329,12 @@ function createServer(core) {
       }
     }
     try {
+      // Managing a linked GarysTV: everything for it is passed on (not by a linked one: no chains).
+      const pm = /^\/peer\/([a-f0-9]+)(\/.*)$/.exec(url.pathname);
+      if (pm) {
+        if (who.peer) return send(res, 403, { error: 'Not allowed' });
+        return peers.proxy(req, res, pm[1], pm[2] + url.search);
+      }
       if (url.pathname === '/events') {
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
         res.write(': hello\n\n');

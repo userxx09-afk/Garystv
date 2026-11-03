@@ -6,7 +6,24 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 
 // The PC running GarysTV. Empty on the PC itself (same origin); the TV app sets
 // window.GTV_SERVER (e.g. "http://192.168.1.20:5480") before these scripts run.
-const server = (p) => (window.GTV_SERVER || '') + p;
+// Managing a linked GarysTV at another location (Settings > Other locations): everything for it
+// goes through this one, which passes it on (core/peers.js). Until "Back" (or the app is restarted).
+const MANAGING = (() => { try { return JSON.parse(sessionStorage.getItem('gtv.manage') || 'null'); } catch (_) { return null; } })();
+const server = (p) => (window.GTV_SERVER || '') + (MANAGING ? `/peer/${MANAGING.id}` : '') + p;
+function manageGarysTV(peer) {
+  try { if (peer) sessionStorage.setItem('gtv.manage', JSON.stringify({ id: peer.id, name: peer.name })); else sessionStorage.removeItem('gtv.manage'); } catch (_) { /* private mode */ }
+  location.hash = '';
+  location.reload();
+}
+if (MANAGING) {
+  document.addEventListener('DOMContentLoaded', () => {
+    const bar = document.createElement('div');
+    bar.className = 'managing';
+    bar.innerHTML = `<span>You're managing <b>${esc(MANAGING.name)}</b> at another location.</span><span class="btn nav" data-key="manage-back">‹ Back to this GarysTV</span>`;
+    bar.querySelector('.btn').onclick = () => manageGarysTV(null);
+    document.body.prepend(bar);
+  });
+}
 
 const api = {
   async call(method, url, body) {

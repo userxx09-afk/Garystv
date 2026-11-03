@@ -10,7 +10,7 @@
 const MAX_RETRIES = 6;
 const LIVE_S = 8; // this close to the live edge counts as live
 const VIEWER = Math.random().toString(36).slice(2); // tells the engine which buffer viewers are still here
-const serverBase = () => window.GTV_SERVER || location.origin;
+const serverBase = () => (window.GTV_SERVER || location.origin) + (MANAGING ? `/peer/${MANAGING.id}` : '');
 
 const Player = {
   mode: 'off', // off | full | pip

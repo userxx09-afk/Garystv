@@ -477,7 +477,50 @@ const SettingsView = {
     }
     const all = $('#rmAll', pane);
     if (all) all.onclick = () => api.del('/api/remote/logins').then(again).catch((e) => toast(e.message));
-    $('[data-out]', pane).forEach((el) => { el.onclick = () => api.del(`/api/remote/logins/${encodeURIComponent(el.dataset.out)}`).then(again).catch((e) => toast(e.message)); });
+    $$('[data-out]', pane).forEach((el) => { el.onclick = () => api.del(`/api/remote/logins/${encodeURIComponent(el.dataset.out)}`).then(again).catch((e) => toast(e.message)); });
+    this.linked(pane, again);
+  },
+
+  // Other GarysTVs linked with this one (core/peers.js): manage them from here; home and work also share plans.
+  async linked(pane, again) {
+    let o;
+    try { o = await api.get('/api/peers'); } catch (e) { return; }
+    const box = document.createElement('div');
+    box.className = 'box';
+    const rows = o.peers.map((p) => `<div style="display:flex;gap:.8rem;align-items:center;margin:.3rem 0;flex-wrap:wrap"><div style="flex:1;min-width:14rem"><b>${esc(p.name)}</b> <span class="s">${esc(p.url.replace(/^https?:\/\//, ''))} · ${p.share ? 'shares plans, lists and recordings' : 'manage only'}${p.seen ? ` · last heard from ${fmt.when(p.seen)}` : ''}</span></div>
+      <span class="btn nav primary" data-manage="${esc(p.id)}" data-key="pe-m-${esc(p.id)}">Manage</span><span class="btn nav" data-unlink="${esc(p.id)}" data-key="pe-u-${esc(p.id)}">Unlink</span></div>`).join('');
+    box.innerHTML = `<h3>Your other GarysTVs</h3>
+      <div class="s">This one is called <b>${esc(o.me.name)}</b>. Link another GarysTV (at work, at your parents') to manage it from here: its guide, channels, lists, timers and settings, as if you were there. Home and work can also share: then they never both use a one-stream plan, and each lists the other's recordings.</div>
+      ${rows || '<div class="s" style="margin:.5rem 0">None linked yet.</div>'}
+      <div class="actions"><div class="btn nav" id="peAdd" data-key="pe-add">Link another GarysTV</div><div class="btn nav" id="peName" data-key="pe-name">Rename this one</div></div>
+      <div class="s">To link, the other GarysTV needs a password set under its own Other locations, and this one must reach it (both on your Tailscale / headscale network). Type its Tailscale address, like 100.64.0.5.</div>`;
+    pane.append(box);
+    $('#peAdd', box).onclick = async () => {
+      const url = await Modal.prompt('Link another GarysTV', 'Its address (its Tailscale address, like 100.64.0.5)', '', 'Next');
+      if (!url) return;
+      const password = await Modal.prompt('Link another GarysTV', 'Its password (from its Settings > Other locations)', '', 'Next');
+      if (!password) return;
+      const share = await Modal.menu('Share with it?', '<div class="s">Share when both places use the same IPTV plans (home and work): they take turns with each plan and list each other\'s recordings. Don\'t share with a GarysTV that has its own plans (your parents\'): you can still manage it.</div>',
+        [{ label: 'Manage only', value: 'no' }, { label: 'Share plans and recordings', value: 'yes' }]);
+      if (!share) return;
+      toast('Linking...');
+      try { const p = await api.post('/api/peers', { url, password, share: share === 'yes' }); toast(`Linked with ${p.name}.`, 5000); again(); } catch (e) { toast(e.message, 8000); }
+    };
+    $('#peName', box).onclick = async () => {
+      const name = await Modal.prompt('Rename this GarysTV', 'Name (for example, Home or Work)', o.me.name);
+      if (!name) return;
+      await api.put('/api/settings', { serverName: name }).catch((e) => toast(e.message));
+      again();
+    };
+    $$('[data-manage]', box).forEach((el) => { el.onclick = () => manageGarysTV(o.peers.find((p) => p.id === el.dataset.manage)); });
+    $$('[data-unlink]', box).forEach((el) => {
+      el.onclick = async () => {
+        const p = o.peers.find((x) => x.id === el.dataset.unlink);
+        if (!await Modal.confirm(`Unlink ${p.name}?`, 'You can link it again later with its password.', 'Unlink')) return;
+        await api.del(`/api/peers/${encodeURIComponent(p.id)}`).catch((e) => toast(e.message));
+        again();
+      };
+    });
   },
 
   // ---------- updates ----------

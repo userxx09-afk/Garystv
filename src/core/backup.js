@@ -7,7 +7,7 @@
 // Logins (IPTV usernames and passwords, the TMDb key) go in only when asked for; without them
 // the new computer keeps the logins it already has for the same provider, or asks for them.
 
-const MACHINE = ['recordingsDir', 'ffmpegPath', 'vlcPath', 'port', 'allowNetwork', 'closeAction', 'vlcAutoTried', 'tmdbKey'];
+const MACHINE = ['recordingsDir', 'ffmpegPath', 'vlcPath', 'port', 'allowNetwork', 'closeAction', 'vlcAutoTried', 'tmdbKey', 'serverName'];
 const CHANNEL_CHOICES = ['hidden', 'favorite', 'alias', 'mapMode', 'guideId', 'matchScore', 'matchReason'];
 const LOGIN_KEYS = ['username', 'password'];
 
