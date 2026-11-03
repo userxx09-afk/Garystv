@@ -186,9 +186,15 @@ function createServer(core) {
     dir: () => path.join(core.settings.recordingsDir, '.live-buffer'),
     minutes: () => core.settings.timeshiftMinutes || 30,
     note: (m) => core.note(m),
-    input: async (channelId) => {
+    // Watching uses a plan like recording does; the same channel on another plan if this one is busy.
+    claim: (channelId, onBump) => {
+      const ch = core.channels.find((c) => c.id === channelId);
+      return ch && ch.streamUrl ? core.tuners.acquire(channelId, 'live', ch.name, onBump) : null;
+    },
+    unclaim: (lease) => core.tuners.release(lease.id),
+    input: async (channelId, s) => {
       if (!findFfmpeg(core.settings)) throw new Error('ffmpeg is not installed, so the built-in player is unavailable.');
-      const input = playerInput(core, 'live', channelId);
+      const input = playerInput(core, 'live', s && s.lease ? s.lease.channel.id : channelId);
       const key = input.url;
       if (input.url && /\.m3u8(\?|$)/i.test(input.url)) Object.assign(input, { url: await bestVariant(input.url), hls: true });
       const plan = await videoPlan(core, input, key);
@@ -309,7 +315,8 @@ function createServer(core) {
       }
       const d = /^\/direct\/(live|rec|vod)\/([^/]+)$/.exec(url.pathname);
       if (d) {
-        const input = d[1] === 'vod' ? await vod.input(decodeURIComponent(d[2])) : playerInput(core, d[1], decodeURIComponent(d[2]));
+        const lease = leaseFor(core, req, d[1], decodeURIComponent(d[2]));
+        const input = d[1] === 'vod' ? await vod.input(decodeURIComponent(d[2])) : playerInput(core, d[1], lease && lease.channel ? lease.channel.id : decodeURIComponent(d[2]));
         if (!input.url) return send(res, 404, { error: 'Practice channels have no real video.' });
         if (d[1] === 'rec') return sendFile(req, res, input.url);
         if (/\.m3u8(\?|$)/i.test(input.url)) { res.writeHead(302, { Location: input.url }); return res.end(); }
@@ -317,7 +324,8 @@ function createServer(core) {
       }
       const m = /^\/stream\/(live|rec|vod)\/([^/]+)$/.exec(url.pathname);
       if (m) {
-        const input = m[1] === 'vod' ? await vod.input(decodeURIComponent(m[2])) : playerInput(core, m[1], decodeURIComponent(m[2]));
+        const lease = leaseFor(core, req, m[1], decodeURIComponent(m[2]));
+        const input = m[1] === 'vod' ? await vod.input(decodeURIComponent(m[2])) : playerInput(core, m[1], lease && lease.channel ? lease.channel.id : decodeURIComponent(m[2]));
         const key = input.url;
         if (input.url && /\.m3u8(\?|$)/i.test(input.url)) Object.assign(input, { url: await bestVariant(input.url), hls: true });
         return streamVideo(core, req, res, input, { live: m[1] === 'live', seek: +q.t || 0, key });
@@ -344,9 +352,24 @@ function createServer(core) {
         res.end(data);
       });
     } catch (e) {
-      send(res, 400, { error: e.message });
+      send(res, e.status || 400, { error: e.message });
     }
   });
+}
+
+// A plan for a channel or movie that isn't through the live buffer (VLC, movies, the older
+// player), given back when the stream ends. Recordings and practice channels need none.
+function leaseFor(core, req, kind, id) {
+  let lease = null;
+  if (kind === 'vod') {
+    lease = core.tuners.acquireSource(String(id).split('~')[1], 'a movie', () => req.destroy());
+  } else if (kind === 'live') {
+    const ch = core.channels.find((c) => c.id === id);
+    if (!ch || !ch.streamUrl) return null;
+    lease = core.tuners.acquire(id, 'live', ch.name, () => req.destroy());
+  } else return null;
+  req.on('close', () => core.tuners.release(lease.id));
+  return lease;
 }
 
 module.exports = { createServer, sourceTypes };

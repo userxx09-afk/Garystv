@@ -57,7 +57,14 @@ const Player = {
     const hls = this.hls = new Hls({ liveSyncDurationCount: 3, liveDurationInfinity: true, maxBufferLength: 20, backBufferLength: 60,
       manifestLoadingTimeOut: 25000, manifestLoadingMaxRetry: 3, levelLoadingMaxRetry: 8, fragLoadingMaxRetry: 8 });
     hls.on(Hls.Events.ERROR, (ev, d) => {
-      if (session !== this.session || !d.fatal) return;
+      if (session !== this.session) return;
+      // Every plan with this channel is in use (or a recording took this one): say what's using it.
+      if (d.response && d.response.code === 409) {
+        hls.stopLoad();
+        fetch(url).then((r) => r.json()).then((j) => { if (session === this.session) { this.showOsd(j.error); toast(j.error, 8000); } }).catch(() => {});
+        return;
+      }
+      if (!d.fatal) return;
       if (d.type === Hls.ErrorTypes.MEDIA_ERROR) { hls.recoverMediaError(); return; }
       if (this.retries++ >= MAX_RETRIES) { this.showOsd('Could not play this channel. Check the tuner or stream, then try again.'); return; }
       this.showOsd('Signal lost. Reconnecting...');

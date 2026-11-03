@@ -165,3 +165,46 @@ test('Backup and restore', () => {
   assert.equal(b.settings.tmdbKey, 'k123');
   assert.throws(() => b.restore({ hello: 1 }), /isn't a GarysTV backup/);
 });
+
+test('Plans: one stream each, the same channel on another plan when one is busy', () => {
+  const { DvrCore } = require('../src/core');
+  const core = new DvrCore({ dataDir: require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'gtv-plan-')) });
+  const plan = (id, user) => ({ id, type: 'xtream', enabled: true, name: `Plan ${id}`, tunerCount: 1, config: { servers: 'http://p.example', username: user } });
+  core.store.write('sources', [plan('a', 'u1'), plan('b', 'u2'), { id: 'f', type: 'free', enabled: true, name: 'Free', tunerCount: 6, config: {} }]);
+  core.store.write('channels', [
+    { id: 'a:1', sourceId: 'a', number: '1', name: 'ESPN HD', guideId: 'g|espn', streamUrl: 'http://a/1' },
+    { id: 'b:1', sourceId: 'b', number: '2', name: 'ESPN', guideId: 'g|espn', streamUrl: 'http://b/1' },
+    { id: 'a:2', sourceId: 'a', number: '3', name: 'Hallmark', streamUrl: 'http://a/2' },
+    { id: 'f:1', sourceId: 'f', number: '4', name: 'News', streamUrl: 'http://f/1' },
+  ]);
+  const t = core.tuners;
+  const one = t.acquire('a:1', 'live', 'ESPN');
+  assert.equal(one.channel.id, 'a:1');
+  assert.equal(t.acquire('a:1', 'live', 'ESPN').channel.id, 'b:1'); // plan a busy: ESPN on plan b
+  assert.throws(() => t.acquire('a:2', 'live', 'Hallmark'), (e) => e.status === 409 && /Plan a is in use.*watching ESPN/.test(e.message));
+  for (let i = 0; i < 8; i++) t.acquire('f:1', 'live'); // free channels have no limit
+  // A recording takes the plan from someone watching here; they're told why.
+  let told = '';
+  t.release(one.id);
+  t.acquire('a:2', 'live', 'Hallmark', (why) => { told = why; });
+  assert.equal(t.acquire('a:2', 'rec', 'Movie').channel.id, 'a:2');
+  assert.match(told, /Stopped so "Movie" could record/);
+  // The same plan in use at a linked location counts too (by plan key, not login).
+  assert.equal(t.report().some((u) => JSON.stringify(u).includes('u1')), false);
+  t.uses.clear();
+  t.remote.set('work', { at: Date.now(), name: 'Work', uses: [{ plan: require('../src/core/tuners').planKey(plan('a', 'u1')), kind: 'live', what: 'CNN' }] });
+  assert.throws(() => t.acquire('a:2', 'live'), /watching CNN at Work/);
+});
+
+test('scheduler: a full plan records the same channel on another plan', () => {
+  const now = Date.UTC(2026, 9, 27, 12);
+  const ch = [{ id: 'a:1', sourceId: 'a', name: 'ESPN' }, { id: 'a:2', sourceId: 'a', name: 'TNT' }, { id: 'b:2', sourceId: 'b', name: 'TNT' }];
+  const show = (title) => [{ start: now + 3600000, end: now + 7200000, title }];
+  const jobs = buildSchedule({
+    rules: [{ id: 'r1', type: 'series', title: 'Game' }, { id: 'r2', type: 'series', title: 'Movie', channelId: 'a:2' }],
+    channels: ch.slice(0, 2), programsFor: (c) => show(c.id === 'a:1' ? 'Game' : 'Movie'), now,
+    tunerCount: () => 1, choices: (job) => (job.channelId === 'a:2' ? [ch[1], ch[2]] : [ch[0]]),
+  });
+  const movie = jobs.find((j) => j.title === 'Movie');
+  assert.deepEqual([movie.status, movie.viaChannelId], ['scheduled', 'b:2']);
+});

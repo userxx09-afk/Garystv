@@ -590,6 +590,8 @@ const SettingsView = {
         ${window.GTVAndroid ? `<div>${GTVAndroid.hasVlc && GTVAndroid.hasVlc() ? '✅ The VLC app is on this TV, for when the built-in player has trouble.' : 'The VLC app is not on this TV. It is a backup player: get it from the app store, or choose Play in VLC (hold OK while watching) to be taken there.'}</div>` : ''}
         <div>💾 ${st.diskFree != null ? `${fmt.size(st.diskFree)} free in the recordings folder` : 'Disk space unknown'}</div>
         <div>⏺ ${st.recordingNow} recording right now</div></div>
+      ${(st.plans || []).length ? `<div class="box"><h3>Plans in use right now</h3>${st.plans.map((p) => `<div><b>${esc(p.name)}</b> <span class="s">${p.using.length} of ${p.capacity}</span>${p.using.length ? `: ${esc(p.using.join(', '))}` : ''}</div>`).join('')}
+        <div class="s">Watching and recording each use one stream of a plan. When a plan is full, GarysTV uses the same channel on another plan.</div></div>` : ''}
       ${here}<div class="box"><h3>Activity log</h3><pre class="log">${esc(st.log.join('\n')) || 'Nothing yet.'}</pre></div>`;
     if (here) {
       $('#switchPc', pane).onclick = () => window.GTV_SWITCH();

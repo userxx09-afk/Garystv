@@ -114,26 +114,34 @@ function buildSchedule(ctx) {
   return [...jobs.values()].sort((a, b) => a.start - b.start || a.priority - b.priority);
 }
 
-// Greedy by priority: a job gets a tuner if, during its whole recording
-// window, fewer than tunerCount already-accepted jobs on that source overlap it.
+// Greedy by priority: a job gets a tuner if, during its whole recording window, fewer than
+// tunerCount already-accepted jobs on that source overlap it. When its own plan is full, the
+// same channel on another plan with room is used (ctx.choices; job.viaChannelId says which).
 function resolveConflicts(jobs, ctx) {
   const active = ctx.active || new Set();
   const order = jobs
     .filter((j) => j.status === 'scheduled')
     .sort((a, b) => (active.has(b.id) - active.has(a.id)) || a.priority - b.priority || a.start - b.start);
   const accepted = {};
-  for (const job of order) {
-    const list = (accepted[job.sourceId] ||= []);
-    const cap = ctx.tunerCount ? ctx.tunerCount(job.sourceId) : 2;
+  const fits = (job, sourceId) => {
+    const list = (accepted[sourceId] ||= []);
+    const cap = ctx.tunerCount ? ctx.tunerCount(sourceId) : 2;
     const overlapping = list.filter((o) => o.recStart < job.recEnd && job.recStart < o.recEnd);
     // Peak concurrency within the overlap: check at each start point.
     const points = [job.recStart, ...overlapping.map((o) => o.recStart).filter((t) => t > job.recStart && t < job.recEnd)];
     const peak = Math.max(0, ...points.map((t) => overlapping.filter((o) => o.recStart <= t && t < o.recEnd).length));
-    if (peak >= cap) {
-      job.status = 'conflict';
-      job.reason = `All ${cap} tuner${cap === 1 ? '' : 's'} busy`;
+    return peak < cap ? list : null;
+  };
+  for (const job of order) {
+    const options = (ctx.choices && ctx.choices(job)) || [{ id: job.channelId, sourceId: job.sourceId }];
+    const pick = options.find((c) => fits(job, c.sourceId)) || null;
+    if (pick) {
+      accepted[pick.sourceId].push(job);
+      if (pick.id !== job.channelId) Object.assign(job, { viaChannelId: pick.id, viaSourceId: pick.sourceId });
     } else {
-      list.push(job);
+      const cap = ctx.tunerCount ? ctx.tunerCount(job.sourceId) : 2;
+      job.status = 'conflict';
+      job.reason = options.length > 1 ? 'Every plan with this channel is busy' : `All ${cap} tuner${cap === 1 ? '' : 's'} busy`;
     }
   }
 }

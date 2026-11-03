@@ -14,6 +14,7 @@ const { buildSchedule, episodeKey, normTitle } = require('./scheduler');
 const { startRecording, recordingPath } = require('./recorder');
 const { findFfmpeg, findVlc } = require('./tools');
 const commercials = require('./commercials');
+const { Tuners, capacity } = require('./tuners');
 
 const GUIDES = [require('./guide/xmltv'), require('./guide/hdhomerun-guide'), require('./guide/demo-guide')];
 const guideType = (t) => GUIDES.find((g) => g.type === t) || (() => { throw new Error(`Unknown guide type ${t}`); })();
@@ -42,6 +43,7 @@ class DvrCore extends EventEmitter {
     this.demo = demo;
     this.active = new Map(); // jobId -> { handle, recId }
     this.log = [];
+    this.tuners = new Tuners(this); // which plan each stream is using (tuners.js)
   }
 
   // ---------- persistence helpers ----------
@@ -427,12 +429,13 @@ class DvrCore extends EventEmitter {
 
   getSchedule() {
     if (this.schedule && Date.now() - this.scheduleAt < 30000) return this.schedule;
-    const tuners = new Map(this.sources.map((s) => [s.id, s.tunerCount || 1]));
+    const tuners = new Map(this.sources.map((s) => [s.id, capacity(s)]));
     this.schedule = buildSchedule({
       rules: this.rules,
       channels: this.visibleChannels(),
       programsFor: (c) => this.programsFor(c),
       tunerCount: (sid) => tuners.get(sid) || 1,
+      choices: (job) => { try { return this.tuners.choices(job.channelId); } catch (_) { return null; } },
       recordedKeys: new Set(this.recordings.filter((r) => r.status !== 'failed' && r.episodeKey).map((r) => r.episodeKey)),
       skipped: new Set(this.skipped),
       active: new Set(this.active.keys()),
@@ -461,15 +464,23 @@ class DvrCore extends EventEmitter {
   }
 
   startJob(job) {
-    const channel = this.channels.find((c) => c.id === job.channelId);
     const src = this.sources.find((s) => s.id === job.sourceId);
-    if (!channel || !src) return;
+    if (!this.channels.some((c) => c.id === job.channelId) || !src) return;
+    // A plan for the stream: the one the schedule picked if it can, else any with this channel free.
+    let lease;
+    try {
+      lease = this.tuners.acquire(job.viaChannelId || job.channelId, 'rec', job.title);
+    } catch (e) {
+      if (!(this.busyNoted ||= new Set()).has(job.id)) { this.busyNoted.add(job.id); this.note(`${job.title}: waiting for a free plan: ${e.message}`); }
+      return; // tried again at the next tick
+    }
+    const channel = lease.channel;
     const file = recordingPath(this.settings.recordingsDir, job);
     const rec = {
-      id: newId(), jobId: job.id, ruleId: job.ruleId, channelId: job.channelId, channelNumber: channel.number, channelName: channel.name,
+      id: newId(), jobId: job.id, ruleId: job.ruleId, channelId: job.channelId, channelNumber: job.channelNumber, channelName: job.channelName,
       title: job.title, subtitle: job.subtitle, desc: job.desc, season: job.season, episode: job.episode, categories: job.categories,
       episodeKey: job.episodeKey, start: job.start, end: job.end, recordedAt: Date.now(), file, size: 0, status: 'recording', error: null,
-      position: 0, watched: false, simulated: src.type === 'demo',
+      position: 0, watched: false, simulated: (this.sources.find((x) => x.id === channel.sourceId) || src).type === 'demo',
     };
     this.store.write('recordings', [rec, ...this.recordings]);
     const handle = startRecording({
@@ -477,10 +488,11 @@ class DvrCore extends EventEmitter {
       log: (m) => this.note(`${job.title}: ${m}`),
     });
     this.active.set(job.id, { handle, recId: rec.id, ruleId: job.ruleId });
-    this.note(`recording started: ${job.title} on ${channel.number} ${channel.name}`);
+    this.note(`recording started: ${job.title} on ${channel.number} ${channel.name}${channel.id !== job.channelId ? ` (${(this.sources.find((x) => x.id === channel.sourceId) || {}).name}, the usual plan was busy)` : ''}`);
     this.changed('recordings');
     handle.done.then((result) => {
       this.active.delete(job.id);
+      this.tuners.release(lease.id);
       let size = 0;
       try { size = fs.statSync(file).size; } catch (_) {}
       this.patchRecording(rec.id, { status: result.status, error: result.error, size, finishedAt: Date.now() });
@@ -559,6 +571,7 @@ class DvrCore extends EventEmitter {
     const vlc = findVlc(this.settings);
     return {
       recordingNow: [...this.active.keys()].length,
+      plans: this.tuners.overview(),
       ffmpeg: ff, vlc,
       diskFree: (() => { try { const s = fs.statfsSync(fs.existsSync(this.settings.recordingsDir) ? this.settings.recordingsDir : os.homedir()); return s.bavail * s.bsize; } catch (_) { return null; } })(),
       log: this.log.slice(0, 50),

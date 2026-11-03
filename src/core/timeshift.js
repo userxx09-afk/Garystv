@@ -13,9 +13,10 @@ const GRACE_MS = 5000; // after the last viewer leaves (channel change, stop)
 const STALE_MS = 60000; // a viewer that stopped asking for the playlist is gone (closed app, TV off)
 
 class Timeshift {
-  // ffmpeg(): path to ffmpeg; input(channelId): Promise<ffmpeg input + video options>; dir(): buffer folder; minutes(): wanted length
-  constructor({ ffmpeg, input, dir, minutes, note = () => {} }) {
-    Object.assign(this, { ffmpeg, input, dir, minutes, note });
+  // ffmpeg(): path to ffmpeg; input(channelId, session): Promise<ffmpeg input + video options>; dir(): buffer folder; minutes(): wanted length
+  // claim(channelId, onBump): a plan for the stream (tuners.js; throws when none is free); unclaim(lease)
+  constructor({ ffmpeg, input, dir, minutes, note = () => {}, claim = () => null, unclaim = () => {} }) {
+    Object.assign(this, { ffmpeg, input, dir, minutes, note, claim, unclaim });
     this.sessions = new Map();
     this.timer = setInterval(() => this.reap(), GRACE_MS);
     try { fs.rmSync(this.dir(), { recursive: true, force: true }); } catch (_) { /* leftovers from a crash */ }
@@ -24,17 +25,20 @@ class Timeshift {
   // Starts (or joins) the buffer for a channel; resolves once the first piece of video exists.
   async open(channelId, viewer) {
     let s = this.sessions.get(channelId);
-    if (!s) s = this.start(channelId);
+    if (!s) {
+      const lease = this.claim(channelId, () => this.stop(channelId));
+      s = this.start(channelId, lease);
+    }
     s.viewers.set(viewer || 'anon', Date.now());
     await s.ready;
     return s;
   }
 
-  start(channelId) {
+  start(channelId, lease = null) {
     const root = this.dir();
     const dir = path.join(root, `ch-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`);
     fs.mkdirSync(dir, { recursive: true });
-    const s = { channelId, dir, proc: null, viewers: new Map(), stopped: false, fails: 0, minutes: this.fitMinutes(root), startedAt: Date.now() };
+    const s = { channelId, dir, proc: null, viewers: new Map(), stopped: false, fails: 0, minutes: this.fitMinutes(root), startedAt: Date.now(), lease };
     this.sessions.set(channelId, s);
     s.ready = new Promise((resolve, reject) => {
       const t0 = Date.now();
@@ -53,7 +57,7 @@ class Timeshift {
 
   async run(s, resume) {
     let args;
-    try { args = await this.input(s.channelId); } catch (e) { s.error = e.message; return this.stop(s.channelId); }
+    try { args = await this.input(s.channelId, s); } catch (e) { s.error = e.message; return this.stop(s.channelId); }
     if (s.stopped) return;
     const flags = `delete_segments+independent_segments+omit_endlist${resume ? '+append_list+discont_start' : ''}`;
     const proc = spawn(this.ffmpeg(), ['-hide_banner', '-loglevel', 'error', ...args, '-c:a', 'aac', '-ac', '2', '-b:a', '160k',
@@ -118,6 +122,7 @@ class Timeshift {
     if (!s) return;
     s.stopped = true;
     this.sessions.delete(channelId);
+    if (s.lease) this.unclaim(s.lease);
     if (s.proc) s.proc.kill();
     setTimeout(() => fs.rm(s.dir, { recursive: true, force: true }, () => {}), 1000); // after ffmpeg lets go of the files
   }
