@@ -301,3 +301,6 @@ html.tv .osd-btns { display: none; } /* the remote's buttons do these on the TV 
 .cat-cols .btn { justify-content: space-between; }
 .cat-cols .cnt { color: var(--muted); font-size: .9rem; margin-left: .8rem; }
 .cat-cols .btn.focus .cnt { color: #3b4a63; }
+/* Short directions at the top of a Settings page. */
+.howto { margin: .6rem 0 .8rem; padding-left: 1.2rem; display: grid; gap: .25rem; color: #c4d1e6; font-size: .95rem; }
+.howto b { color: var(--text); margin-right: .4rem; }

@@ -187,8 +187,17 @@ const SettingsView = {
     const matched = st.channels.filter((c) => c.guideId).length;
     const conf = (c) => (c.mapMode === 'manual' ? ['man', 'Set by you'] : c.mapMode === 'none' ? ['lo', 'No guide'] : !c.guideId ? ['lo', 'No match'] : c.matchScore >= 90 ? ['hi', 'Sure'] : c.matchScore >= 50 ? ['md', 'Likely'] : ['lo', 'Check']);
     pane.innerHTML = `
-      <div class="box"><h3>Match channels to the guide</h3>
-        <div class="s">${matched} of ${st.channels.length} channels have guide listings. GarysTV matches by channel number, call sign and name. Pin (📌) a channel to keep it at the top of the guide. Check any marked <span class="conf md">Likely</span> or <span class="conf lo">Check</span>, and hide channels you never watch. Click a channel number to give it your own, or use Renumber for many at once.</div>
+      <div class="box"><h3>Your channels</h3>
+        <div class="s">${matched} of ${st.channels.length} channels have guide listings. Highlight anything below and press OK to change it, or hold OK on a channel for all its choices.</div>
+        <ul class="howto">
+          <li><b>Show</b> Untick a channel you never watch to hide it from the guide.</li>
+          <li><b>📌</b> Pin a channel to keep it at the top of the guide, above every other.</li>
+          <li><b>Ch</b> Press OK on a number to give that channel your own (101 can be 6). The provider's stays as "was 101".</li>
+          <li><b>Guide listing</b> What GarysTV thinks is on that channel. Look at any marked <span class="conf md">Likely</span> or <span class="conf lo">Check</span>, and use <b>Change</b> to pick the right one or set the number there too.</li>
+          <li><b>🔢 Renumber</b> Numbers a whole group at once: what the filter shows, one provider, or every channel.</li>
+          <li><b>Filter</b> Type part of a name, number, group or provider to find channels.</li>
+          <li><b>★ Favorites</b> lists (Gary, Barb...) are set in the guide: hold OK on a channel there.</li>
+        </ul>
         <div class="row"><div class="field" style="flex:1"><input id="chf" placeholder="Filter channels..." value="${esc(this.chFilter)}"></div><div class="btn nav" id="renumber">🔢 Renumber...</div><div class="btn nav" id="rematch">↻ Re-match automatically</div></div></div>
       <table class="chs"><thead><tr><th>Show</th><th title="Pinned to the top of the guide">📌</th><th>Ch</th><th>Name</th><th>From</th><th>Guide listing</th><th></th></tr></thead><tbody>
       ${list.slice(0, 400).map((c) => {
