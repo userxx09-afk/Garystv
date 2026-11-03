@@ -366,6 +366,15 @@ window.addEventListener('popstate', () => {
 
 // ---------- live updates ----------
 let refreshTimer;
+// What changed decides what the screens must read again: new channels or listings mean the
+// guide (and, for a new provider, its movies and shows) are out of date.
+function onEvent(e) {
+  let what = '';
+  try { what = JSON.parse(e.data).what; } catch (_) { /* a plain ping */ }
+  if (['channels', 'sources', 'guides'].includes(what)) { GuideView.loaded = [0, 0]; App.guideRows = []; }
+  if (what === 'sources') for (const v of [MoviesView, ShowsView]) { v.cats = null; v.items = {}; }
+  scheduleRefresh();
+}
 function scheduleRefresh() {
   clearTimeout(refreshTimer);
   refreshTimer = setTimeout(async () => {
@@ -377,7 +386,7 @@ function scheduleRefresh() {
 }
 function connectEvents() {
   const es = new EventSource(server('/events'));
-  es.onmessage = scheduleRefresh;
+  es.onmessage = onEvent;
   es.onerror = () => { es.close(); setTimeout(connectEvents, 3000); };
 }
 

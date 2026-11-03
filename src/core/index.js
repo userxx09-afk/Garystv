@@ -109,6 +109,7 @@ class DvrCore extends EventEmitter {
     clearInterval(this.tickTimer);
     this.tickTimer = null;
     clearInterval(this.guideTimer);
+    clearTimeout(this.soonTimer);
     clearInterval(this.freeTimer);
     const writing = [...this.active.values()].map((a) => a.handle.done);
     for (const a of this.active.values()) a.handle.stop();
@@ -232,7 +233,18 @@ class DvrCore extends EventEmitter {
     const g = { id: newId(), type, name: name || guideType(type).label, config: config || {}, sourceId, lastRefresh: null, info: '' };
     this.store.write('guides', [...this.guides, g]);
     this.changed('guides');
+    this.refreshSoon(); // its listings now, not at the next start
     return g;
+  }
+
+  // Download the listings again shortly (a guide was added or changed). Waits for a refresh
+  // already under way, which wouldn't include it; several changes together make one refresh.
+  refreshSoon() {
+    clearTimeout(this.soonTimer);
+    this.soonTimer = setTimeout(() => {
+      Promise.resolve(this.refreshing).catch(() => {}).then(() => this.refreshGuides())
+        .catch((e) => this.note(`guide refresh failed: ${e.message}`));
+    }, 500);
   }
 
   updateGuide(id, patch) {
