@@ -295,11 +295,10 @@ const GuideView = {
     const items = [];
     const after = async () => { await App.loadAll(); this.setList(this.listId, r && r.id); };
     if (r) items.push({ label: `▶ Watch ${r.number} ${r.name}`, run: () => Player.play('live', r.id), cls: 'primary' });
+    if (r) items.push(...App.numberItem(r, after));
     items.push({ label: '🔢 Go to a channel number...', run: () => this.pad() });
     if (r) items.push(...App.recordItems(r, p).map((c) => ({ ...c, run: () => Promise.resolve(c.run()).then(() => this.refresh()) })));
     if (r) items.push(...App.channelFavItems(r, after));
-    const ch = r && App.state.channels.find((c) => c.id === r.id);
-    if (ch) items.push({ label: `🔢 Give ${r.name} a different number...`, run: async () => { if (await SettingsView.numberDialog(ch)) await after(); } });
     for (const l of lists) if (!cur || l.id !== cur.id) items.push({ label: `▦ Show ${l.name} (${l.channelIds.length})`, run: () => this.setList(l.id) });
     if (cur) items.push({ label: '▦ Show all channels', run: () => this.setList(null) });
     items.push({ label: this.filter ? `▦ Categories: ${this.filterLabel}...` : '▦ Categories (Sports, News, Movies...)', run: () => this.categoryPicker() });

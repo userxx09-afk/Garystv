@@ -317,6 +317,8 @@ const Player = {
     choices.push({ label: $('#video').paused ? '▶ Play' : '❚❚ Pause', value: 'pause' });
     const favs = App.channelFavItems(ch);
     favs.forEach((f, i) => choices.push({ label: f.label, value: `fav${i}` }));
+    const num = App.numberItem(ch, async (n) => { ch.number = n; await App.loadAll(); this.showOsd(`${n} ${ch.name}`); });
+    if (num.length) choices.push({ label: num[0].label, value: 'num' });
     choices.push({ label: '🔢 Go to a channel number', value: 'pad' });
     choices.push({ label: '▦ Guide', value: 'guide' });
     choices.push({ label: '■ Stop watching', value: 'stopWatching' });
@@ -341,6 +343,7 @@ const Player = {
       else if (v === 'stopWatching') { this.stop(); App.render(); }
       else if (v === 'home') App.home();
       else if (v === 'pad') this.pad();
+      else if (v === 'num') await num[0].run();
       else if (typeof v === 'string' && v.startsWith('fav')) await favs[+v.slice(3)].run();
       else if (v === 'vlc') this.openVlc('live', ch.id);
     } catch (e) { toast(e.message); }

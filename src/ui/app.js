@@ -117,6 +117,14 @@ const App = {
     });
   },
 
+  // Your own number for just this channel (101 KAAL can be 6); the provider's is kept.
+  // after(number): what to do once it's changed.
+  numberItem(ch, after = () => this.loadAll()) {
+    const c = this.state.channels.find((x) => x.id === ch.id);
+    if (!c) return [];
+    return [{ label: `🔢 Change channel number (now ${c.number})...`, run: async () => { const done = await SettingsView.numberDialog(c); if (done) await after(done.number); } }];
+  },
+
   // Recording choices for a channel and the show on it, for the hold-OK menus.
   recordItems(row, p) {
     const now = Date.now();

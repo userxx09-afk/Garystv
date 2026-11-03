@@ -381,7 +381,7 @@ const SearchView = {
         key: `c-${c.id}`,
         html: `<div class="main"><div class="t">${c.logo ? `<img class="slogo" src="${esc(c.logo)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}${esc(c.number)} ${esc(c.name)}</div><div class="s">${esc(c.group || 'Channel')}</div></div><div class="m">Watch</div>`,
         open: () => Player.play('live', c.id),
-        more: [...App.channelFavItems(c), ...App.recordItems(c, null), { label: '▦ Find it in the Guide', run: () => { GuideView.filter = null; GuideView.setList(null, c.id); App.go('guide'); } }],
+        more: [...App.channelFavItems(c), ...App.numberItem(c, async (n) => { c.number = n; await App.loadAll(); App.render(); }), ...App.recordItems(c, null), { label: '▦ Find it in the Guide', run: () => { GuideView.filter = null; GuideView.setList(null, c.id); App.go('guide'); } }],
       }));
     }
     if (kind === 'programs') {

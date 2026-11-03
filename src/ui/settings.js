@@ -160,6 +160,22 @@ const SettingsView = {
     });
   },
 
+  // Hold OK, M or a long press on a channel in Channels & matching: what you can change about it.
+  menu() {
+    const tr = Nav.current && Nav.current.closest('tr[data-ch]');
+    const c = tr && App.state.channels.find((x) => x.id === tr.dataset.ch);
+    if (!c) return {};
+    return {
+      title: `${c.number} ${c.name}`,
+      items: [
+        ...App.numberItem(c),
+        { label: 'Change its guide listing...', run: () => this.matchDialog(c) },
+        { label: c.hidden ? 'Show it in the guide' : 'Hide it from the guide', run: () => api.put(`/api/channels/${encodeURIComponent(c.id)}`, { hidden: !c.hidden }) },
+        { label: c.favorite ? '★ Stop keeping it at the top' : '☆ Keep it at the top of the guide', run: () => api.put(`/api/channels/${encodeURIComponent(c.id)}`, { favorite: !c.favorite }) },
+      ],
+    };
+  },
+
   // ---------- channels ----------
   channels(pane) {
     const st = App.state;
@@ -222,7 +238,7 @@ const SettingsView = {
         try {
           await api.put(`/api/channels/${encodeURIComponent(c.id)}`, { alias });
           toast(alias ? `${c.name} is now channel ${alias}` : `${c.name} is back on ${theirs}`);
-          close(true);
+          close({ number: alias || theirs });
         } catch (e) { toast(e.message); }
       };
       input._onFocus = () => input.focus();
