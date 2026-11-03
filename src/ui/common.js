@@ -192,8 +192,10 @@ const Modal = {
       // Reachable with the remote's arrows like the buttons; OK on it brings up the TV's keyboard.
       input._onFocus = () => input.focus();
       input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && input.value.trim()) { e.preventDefault(); done(); }
-        if (e.key === 'ArrowDown') { e.preventDefault(); input.blur(); Nav.focus($('#p-ok', m)); }
+        // Stopped here: otherwise the same Enter reaches the screen and presses what's highlighted
+        // there again (the "New list" card, which asked for a name all over again).
+        if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); if (input.value.trim()) done(); }
+        if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); input.blur(); Nav.focus($('#p-ok', m)); }
       });
     });
   },
