@@ -32,11 +32,32 @@ function score(channel, g) {
 }
 
 // Returns Map(channelId -> { guideId, score, reason }) for channels in 'auto' mode.
+// An IPTV plan has thousands of channels and its guide as many listings, so trying every pair
+// (tens of millions) froze the engine for many minutes. Only listings sharing a guide ID,
+// number, call sign or name with a channel can reach the threshold, so only those are scored.
 function reconcile(channels, guideChannels, threshold = 40) {
+  const index = new Map();
+  const add = (key, i) => { if (!index.has(key)) index.set(key, []); index.get(key).push(i); };
+  guideChannels.forEach((g, i) => {
+    add(`id:${g.rawId}`, i);
+    for (const s of [g.number, ...g.names]) { const n = normNumber(s); if (n) add(`num:${n}`, i); }
+    for (const s of g.names) {
+      const c = normCallsign(s); if (c) add(`call:${c}`, i);
+      const n = normName(s); if (n) add(`name:${n}`, i);
+    }
+  });
   const result = new Map();
   for (const ch of channels) {
+    const keys = [];
+    if (ch.tvgId) keys.push(`id:${ch.tvgId}`);
+    const num = normNumber(ch.sourceNumber ?? ch.number); if (num) keys.push(`num:${num}`);
+    const call = normCallsign(ch.callsign || ch.name); if (call) keys.push(`call:${call}`);
+    const name = normName(ch.name); if (name) keys.push(`name:${name}`);
+    const near = new Set();
+    for (const k of keys) for (const i of index.get(k) || []) near.add(i);
     let best = null;
-    for (const g of guideChannels) {
+    for (const i of [...near].sort((a, b) => a - b)) { // guide order, as before: the first of equals wins
+      const g = guideChannels[i];
       const s = score(ch, g);
       if (s.total > 0 && (!best || s.total > best.score)) best = { guideId: g.id, score: s.total, reason: s.reasons.join(' + ') };
     }
