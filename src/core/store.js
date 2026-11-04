@@ -27,8 +27,22 @@ class Store {
   write(name, value) {
     this.cache[name] = value;
     const file = this.file(name);
-    fs.writeFileSync(file + '.tmp', JSON.stringify(value, null, 2));
+    // Not indented: the guide listings run to 100 MB, and spacing made them slower to save and bigger.
+    fs.writeFileSync(file + '.tmp', JSON.stringify(value));
     fs.renameSync(file + '.tmp', file);
+  }
+
+  // For the big ones (the guide listings): in use right away, saved to disk without holding up
+  // everything else while it's written. Saves of the same file happen in order.
+  writeSoon(name, value) {
+    this.cache[name] = value;
+    const file = this.file(name);
+    const text = JSON.stringify(value);
+    this.saving ||= {};
+    this.saving[name] = (this.saving[name] || Promise.resolve()).catch(() => {})
+      .then(() => fs.promises.writeFile(file + '.tmp', text))
+      .then(() => fs.promises.rename(file + '.tmp', file));
+    return this.saving[name];
   }
 }
 

@@ -50,16 +50,39 @@ class Tuners {
   free(src) { return capacity(src) - this.using(src).length; }
 
   // The channel, then the same channel on the other plans (enabled ones only).
+  // (The scheduler asks this for every upcoming recording, hundreds with a few series timers, so
+  // the channels are indexed by guide listing and by name, again only when they change.)
   choices(channelId) {
-    const channels = this.core.channels;
-    const ch = channels.find((c) => c.id === channelId);
+    const { byId, byGuide, byName } = this.index();
+    const ch = byId.get(channelId);
     if (!ch) throw new Error('Channel not found');
-    const on = new Set(this.core.sources.filter((s) => s.enabled).map((s) => s.id));
     const name = normName(ch.name);
-    const same = channels.filter((c) => c.id !== ch.id && c.sourceId !== ch.sourceId && on.has(c.sourceId) && c.streamUrl
-      && ((ch.guideId && c.guideId === ch.guideId) || (name.length > 2 && normName(c.name) === name)));
-    same.sort((a, b) => (b.guideId === ch.guideId) - (a.guideId === ch.guideId));
+    const seen = new Set([ch.id]);
+    const same = [];
+    // Same guide listing first, then the same name; each in channel order.
+    for (const c of [...((ch.guideId && byGuide.get(ch.guideId)) || []), ...((name.length > 2 && byName.get(name)) || [])]) {
+      if (seen.has(c.id) || c.sourceId === ch.sourceId) continue;
+      seen.add(c.id);
+      same.push(c);
+    }
     return [ch, ...same];
+  }
+
+  index() {
+    const channels = this.core.channels, sources = this.core.sources;
+    if (this.idx && this.idx.channels === channels && this.idx.sources === sources) return this.idx;
+    const on = new Set(sources.filter((s) => s.enabled).map((s) => s.id));
+    const byId = new Map(), byGuide = new Map(), byName = new Map();
+    const add = (m, k, c) => { if (!m.has(k)) m.set(k, []); m.get(k).push(c); };
+    for (const c of channels) {
+      byId.set(c.id, c);
+      if (!on.has(c.sourceId) || !c.streamUrl) continue;
+      if (c.guideId) add(byGuide, c.guideId, c);
+      const n = normName(c.name);
+      if (n.length > 2) add(byName, n, c);
+    }
+    this.idx = { channels, sources, byId, byGuide, byName };
+    return this.idx;
   }
 
   // Takes a plan for a stream of this channel. -> { id, channel } (channel may be the same channel

@@ -329,3 +329,40 @@ test('Home and work sharing: plans in use, lists, channel numbers and recordings
     for (const x of [home, work]) { x.srv.close(); x.core.timeshift.stopAll(); x.core.sharing.stop(); }
   }
 });
+
+test('Big guides and lists: read off the main thread, sent zipped, no logins in the channel list', async () => {
+  const fs = require('fs'), os = require('os'), path = require('path'), http = require('http'), zlib = require('zlib');
+  const xmltv = require('../src/core/guide/xmltv');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gtv-big-'));
+  const file = path.join(dir, 'guide.xml');
+  fs.writeFileSync(file, `<tv><channel id="a"><display-name>WABC</display-name><display-name>7</display-name></channel>
+    <programme start="20261027200000 +0000" stop="20261027210000 +0000" channel="a"><title>News</title></programme></tv>`);
+  const g = await xmltv.fetch({ url: file });
+  assert.equal(g.channels[0].number, '7');
+  assert.equal(g.programs.a[0].title, 'News');
+  await assert.rejects(xmltv.fetch({ url: path.join(dir, 'missing.xml') }));
+
+  const { DvrCore } = require('../src/core');
+  const { createServer } = require('../src/core/server');
+  const core = new DvrCore({ dataDir: dir });
+  core.updateSettings({ recordingsDir: dir });
+  core.store.write('sources', [{ id: 's1', type: 'xtream', name: 'P', enabled: true, config: {} }]);
+  core.store.write('channels', Array.from({ length: 300 }, (_, i) => ({ id: `s1:${i}`, sourceId: 's1', number: String(i + 1), name: `Channel ${i}`, streamUrl: `http://p/live/user/secret/${i}.ts` })));
+  const srv = createServer(core);
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const get = (headers) => new Promise((ok, no) => http.get(`http://127.0.0.1:${srv.address().port}/api/state`, { headers }, (res) => {
+    const parts = []; res.on('data', (d) => parts.push(d)); res.on('end', () => ok({ res, body: Buffer.concat(parts) }));
+  }).on('error', no));
+  try {
+    const zipped = await get({ 'accept-encoding': 'gzip' });
+    assert.equal(zipped.res.headers['content-encoding'], 'gzip');
+    const st = JSON.parse(zlib.gunzipSync(zipped.body));
+    assert.equal(st.channels.length, 300);
+    assert.ok(!JSON.stringify(st.channels).includes('/live/user/'));
+    const plain = await get({});
+    assert.equal(plain.res.headers['content-encoding'], undefined);
+    assert.equal(JSON.parse(plain.body).channels.length, 300);
+  } finally {
+    srv.closeAllConnections(); srv.close(); core.timeshift.stopAll(); core.sharing.stop();
+  }
+});

@@ -2,6 +2,7 @@
 // zap2xml-style grabbers and most IPTV providers' EPG links.
 const fs = require('fs');
 const zlib = require('zlib');
+const { Worker, isMainThread, parentPort, workerData } = require('worker_threads');
 const { XMLParser } = require('fast-xml-parser');
 
 const parser = new XMLParser({
@@ -84,7 +85,29 @@ function parseXmltv(xml) {
   return { channels, programs };
 }
 
-async function loadXmltv(location) {
+// An IPTV plan's guide can be 100 MB or more, and reading it took the engine 10 seconds, during
+// which nothing else answered (the TVs, live TV). So it's downloaded and read on a thread of its
+// own; if one can't be started, it's done here as before.
+function loadXmltv(location) {
+  return new Promise((resolve, reject) => {
+    let worker;
+    try {
+      worker = new Worker(__filename, { workerData: { xmltv: location } });
+    } catch (_) {
+      return loadHere(location).then(resolve, reject);
+    }
+    let answered = false;
+    worker.once('message', (m) => { answered = true; if (m.error) reject(new Error(m.error)); else resolve(m.data); });
+    worker.once('error', () => { if (!answered) { answered = true; loadHere(location).then(resolve, reject); } });
+    worker.once('exit', (code) => { if (!answered) { answered = true; reject(new Error(`The guide reader stopped (${code}).`)); } });
+  });
+}
+
+if (!isMainThread && workerData && workerData.xmltv) {
+  loadHere(workerData.xmltv).then((data) => parentPort.postMessage({ data }), (e) => parentPort.postMessage({ error: e.message }));
+}
+
+async function loadHere(location) {
   let buf;
   if (/^https?:\/\//i.test(location)) {
     const res = await fetch(location, { signal: AbortSignal.timeout(120000) });

@@ -32,6 +32,8 @@ class Vod {
   cached(key, make) {
     const hit = this.cache.get(key);
     if (hit && Date.now() - hit.at < KEEP_MS) return hit.value;
+    // Every movie and show opened is kept too; drop the old ones now and then, or it only grows.
+    if (this.cache.size > 300) for (const [k, v] of this.cache) if (Date.now() - v.at >= KEEP_MS) this.cache.delete(k);
     const value = make();
     this.cache.set(key, { at: Date.now(), value });
     value.catch(() => this.cache.delete(key));

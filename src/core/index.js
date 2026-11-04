@@ -291,10 +291,10 @@ class DvrCore extends EventEmitter {
   removeGuide(id) {
     this.store.write('guides', this.guides.filter((g) => g.id !== id));
     const data = this.guideData;
-    this.store.write('guidedata', {
+    this.store.writeSoon('guidedata', {
       channels: data.channels.filter((c) => c.providerId !== id),
       programs: Object.fromEntries(Object.entries(data.programs).filter(([k]) => !k.startsWith(`${id}|`))),
-    });
+    }).catch((e) => this.note(`couldn't save the guide: ${e.message}`));
     this.reconcileChannels();
   }
 
@@ -320,7 +320,7 @@ class DvrCore extends EventEmitter {
           this.note(`guide ${g.name} failed: ${e.message}`);
         }
       }
-      this.store.write('guidedata', { channels: allChannels, programs: allPrograms });
+      this.store.writeSoon('guidedata', { channels: allChannels, programs: allPrograms }).catch((e) => this.note(`couldn't save the guide: ${e.message}`));
       this.reconcileChannels();
     })().finally(() => { this.refreshing = null; });
     return this.refreshing;
@@ -351,8 +351,10 @@ class DvrCore extends EventEmitter {
   getGuide(from, to) {
     const jobs = new Map(this.getSchedule().map((j) => [j.id, j]));
     const seriesTitles = new Set(this.rules.filter((r) => r.type === 'series').map((r) => normTitle(r.title)));
+    const gd = this.guideData;
+    if (!this.guideLogos || this.guideLogos.data !== gd) this.guideLogos = { data: gd, map: new Map(gd.channels.map((g) => [g.id, g.logo])) };
     return this.visibleChannels().map((c) => {
-      const logo = c.logo || (this.guideData.channels.find((g) => g.id === c.guideId) || {}).logo || '';
+      const logo = c.logo || (c.guideId && this.guideLogos.map.get(c.guideId)) || '';
       let programs = this.programsFor(c).filter((p) => p.end > from && p.start < to);
       if (!programs.length) {
         programs = [c.guideId ? { start: from, end: to, title: 'No information', filler: true }
@@ -432,10 +434,12 @@ class DvrCore extends EventEmitter {
   getSchedule() {
     if (this.schedule && Date.now() - this.scheduleAt < 30000) return this.schedule;
     const tuners = new Map(this.sources.map((s) => [s.id, capacity(s)]));
+    const channels = this.visibleChannels();
     this.schedule = buildSchedule({
       rules: this.rules,
-      channels: this.visibleChannels(),
+      channels,
       programsFor: (c) => this.programsFor(c),
+      airings: (title) => this.titleIndex(channels).get(title) || [],
       tunerCount: (sid) => tuners.get(sid) || 1,
       choices: (job) => { try { return this.tuners.choices(job.channelId); } catch (_) { return null; } },
       reserved: (sid) => (this.sharing ? this.sharing.reserved(sid) : []), // the other place's timers on the same plan
@@ -448,6 +452,24 @@ class DvrCore extends EventEmitter {
     for (const j of this.schedule) if (this.active.has(j.id)) j.status = 'recording';
     this.scheduleAt = Date.now();
     return this.schedule;
+  }
+
+  // Every airing by show title, for series timers. Reading all the listings for each timer took
+  // most of a second per timer with a big IPTV plan, every time the schedule was worked out;
+  // this is built once per guide download and channel list.
+  titleIndex(channels) {
+    const key = [this.guideData, this.channels, this.sources];
+    if (this.titles && this.titles.key.every((k, i) => k === key[i])) return this.titles.map;
+    const map = new Map();
+    for (const ch of channels) {
+      for (const p of this.programsFor(ch)) {
+        const t = normTitle(p.title);
+        if (!map.has(t)) map.set(t, []);
+        map.get(t).push([ch, p]);
+      }
+    }
+    this.titles = { key, map };
+    return map;
   }
 
   // ---------- recording ----------

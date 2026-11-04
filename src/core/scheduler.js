@@ -83,9 +83,12 @@ function buildSchedule(ctx) {
       if (ch) for (const p of manualAirings(rule, now, horizonEnd)) candidates.push([ch, p]);
     } else if (rule.type === 'series') {
       const want = normTitle(rule.title);
-      for (const ch of channels) {
+      // ctx.airings: the engine's index by title, so each timer doesn't read every listing again.
+      const airings = ctx.airings ? ctx.airings(want)
+        : channels.flatMap((ch) => programsFor(ch).filter((p) => normTitle(p.title) === want).map((p) => [ch, p]));
+      for (const [ch, p] of airings) {
         if (ch.hidden || (rule.channelId && rule.channelId !== ch.id)) continue;
-        for (const p of programsFor(ch)) if (normTitle(p.title) === want) candidates.push([ch, p]);
+        candidates.push([ch, p]);
       }
       candidates.sort((a, b) => a[1].start - b[1].start);
     }

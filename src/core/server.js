@@ -4,6 +4,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const zlib = require('zlib');
 const { spawn, execFile } = require('child_process');
 const { findFfmpeg, findVlc } = require('./tools');
 const { bestVariant, HLS_INPUT, RECONNECT } = require('./hls');
@@ -23,9 +24,21 @@ const MPEGTS = require.resolve('mpegts.js/dist/mpegts.js');
 const HLSJS = require.resolve('hls.js/dist/hls.min.js');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg' };
 
+// The guide and the channel list run to megabytes with a big IPTV plan; zipped they're about a
+// tenth, which a TV on Wi-Fi gets much sooner. (Zipping runs off the main thread.)
 function send(res, code, body) {
-  res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-  res.end(JSON.stringify(body ?? null));
+  const text = JSON.stringify(body ?? null);
+  const head = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };
+  if (text.length < 8192 || !/\bgzip\b/.test((res.req && res.req.headers['accept-encoding']) || '')) {
+    res.writeHead(code, head);
+    return res.end(text);
+  }
+  zlib.gzip(text, { level: 4 }, (err, zipped) => {
+    if (res.writableEnded || res.destroyed) return;
+    if (err) { res.writeHead(code, head); return res.end(text); }
+    res.writeHead(code, { ...head, 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding' });
+    res.end(zipped);
+  });
 }
 
 function readBody(req, limit = 1e6) {
@@ -225,7 +238,8 @@ function createServer(core) {
     ['GET', '/api/state', () => ({
       // The TMDb key itself stays on the server; screens only learn whether there is one.
       settings: { ...core.settings, tmdbKey: undefined, tmdbKeyFrom: tmdb.keySource() }, types: core.describeTypes(), sources: core.sources, guides: core.guides,
-      channels: core.channels, guideChannels: core.guideData.channels.map(({ id, names, number, providerName }) => ({ id, names, number, providerName })),
+      // Not the stream addresses: the screens play through /stream, and IPTV ones hold the login.
+      channels: core.channels.map(({ streamUrl, ...c }) => c), guideChannels: core.guideData.channels.map(({ id, names, number, providerName }) => ({ id, names, number, providerName })),
       rules: core.rules, status: { ...core.status(), tools: tools.status(), platform: process.platform, version: VERSION }, favLists: core.favLists,
     })],
     // Linked GarysTVs at other locations (peers.js).
