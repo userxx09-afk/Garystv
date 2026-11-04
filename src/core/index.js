@@ -348,26 +348,37 @@ class DvrCore extends EventEmitter {
       .sort((a, b) => (b.favorite - a.favorite) || num(a) - num(b) || a.name.localeCompare(b.name));
   }
 
-  getGuide(from, to) {
+  getGuide(from, to) { return this.guidePage(from, to).rows.map(({ i, ...r }) => r); }
+
+  // Part of the guide, so a TV can show some channels at once and fetch the rest behind them:
+  // ids (those channels, wherever they are) or start/count (in guide order). -> { total, rows }
+  // Each row's i is its place in the whole guide.
+  guidePage(from, to, { ids = null, start = 0, count = Infinity } = {}) {
     const jobs = new Map(this.getSchedule().map((j) => [j.id, j]));
     const seriesTitles = new Set(this.rules.filter((r) => r.type === 'series').map((r) => normTitle(r.title)));
     const gd = this.guideData;
     if (!this.guideLogos || this.guideLogos.data !== gd) this.guideLogos = { data: gd, map: new Map(gd.channels.map((g) => [g.id, g.logo])) };
-    return this.visibleChannels().map((c) => {
-      const logo = c.logo || (c.guideId && this.guideLogos.map.get(c.guideId)) || '';
-      let programs = this.programsFor(c).filter((p) => p.end > from && p.start < to);
-      if (!programs.length) {
-        programs = [c.guideId ? { start: from, end: to, title: 'No information', filler: true }
-          : { start: from, end: to, title: c.city ? `${c.name} - ${c.city}` : c.name, subtitle: c.group ? `${c.group} · Live` : 'No guide data', desc: c.group ? 'Live channel. No schedule listing is available for it.' : '', filler: true }];
-      }
-      return {
-        id: c.id, number: c.number, name: c.name, logo, favorite: c.favorite, sourceId: c.sourceId, group: c.group || '',
-        programs: programs.map((p) => {
-          const job = jobs.get(`${c.id}@${p.start}`);
-          return { ...p, timer: job ? (job.ruleType === 'series' ? 'series' : 'once') : null, timerStatus: job ? job.status : null, seriesTimer: seriesTitles.has(normTitle(p.title)) };
-        }),
-      };
-    });
+    const all = this.visibleChannels();
+    const want = ids && new Set(ids);
+    const picked = [];
+    all.forEach((c, i) => { if (want ? want.has(c.id) : i >= start && i < start + count) picked.push([c, i]); });
+    return { total: all.length, rows: picked.map(([c, i]) => ({ i, ...this.guideRow(c, from, to, jobs, seriesTitles) })) };
+  }
+
+  guideRow(c, from, to, jobs, seriesTitles) {
+    const logo = c.logo || (c.guideId && this.guideLogos.map.get(c.guideId)) || '';
+    let programs = this.programsFor(c).filter((p) => p.end > from && p.start < to);
+    if (!programs.length) {
+      programs = [c.guideId ? { start: from, end: to, title: 'No information', filler: true }
+        : { start: from, end: to, title: c.city ? `${c.name} - ${c.city}` : c.name, subtitle: c.group ? `${c.group} · Live` : 'No guide data', desc: c.group ? 'Live channel. No schedule listing is available for it.' : '', filler: true }];
+    }
+    return {
+      id: c.id, number: c.number, name: c.name, logo, favorite: c.favorite, sourceId: c.sourceId, group: c.group || '',
+      programs: programs.map((p) => {
+        const job = jobs.get(`${c.id}@${p.start}`);
+        return { ...p, timer: job ? (job.ruleType === 'series' ? 'series' : 'once') : null, timerStatus: job ? job.status : null, seriesTimer: seriesTitles.has(normTitle(p.title)) };
+      }),
+    };
   }
 
   // Search everything at once: upcoming shows, channels and recordings (movies and shows are core/vod.js).

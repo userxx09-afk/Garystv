@@ -6,9 +6,22 @@ const VIEWS = { home: HomeView, guide: GuideView, movies: MoviesView, shows: Sho
 const App = {
   state: null, recordings: [], schedule: [], guideRows: [], view: null, viewName: 'home', history: [], lastChannel: null,
 
+  // Every channel in the guide, to pick one by number or name: the guide's own once it has them
+  // all (it fills in behind the first ones), until then the channel list, in guide order.
+  allChannels() {
+    if (GuideView.complete) return GuideView.all;
+    const on = new Set(this.state.sources.filter((s) => s.enabled).map((s) => s.id));
+    const num = (c) => (c.number ? parseFloat(c.number) : 1e9);
+    return this.state.channels.filter((c) => !c.hidden && on.has(c.sourceId))
+      .sort((a, b) => (b.favorite - a.favorite) || num(a) - num(b) || a.name.localeCompare(b.name));
+  },
+
   async loadAll() {
     [this.state, this.recordings, this.schedule] = await Promise.all([api.get('/api/state'), api.get('/api/recordings'), api.get('/api/schedule')]);
-    if (!this.guideRows.length) this.guideRows = await api.get(`/api/guide?from=${Date.now()}&to=${Date.now() + 3600000}`);
+    if (!this.guideRows.length) { // the top of the guide for now; the Guide fetches the rest
+      const g = await api.get(`/api/guide?from=${Date.now()}&to=${Date.now() + 3600000}&start=0&count=300`);
+      this.guideRows = Array.isArray(g) ? g : g.rows;
+    }
     const n = this.recordings.filter((r) => r.status === 'recording').length;
     $('#recInd').classList.toggle('on', n > 0);
     $('#recText').textContent = n > 1 ? `Recording ${n} shows` : 'Recording';
@@ -159,7 +172,7 @@ const App = {
   // has no number buttons), the mouse, a finger, or the number keys. Shows the channel as you
   // type. -> the channel picked, or null. first: a digit already pressed.
   channelPad(first = '', title = 'Go to channel') {
-    const all = GuideView.all.length ? GuideView.all : this.guideRows.length ? this.guideRows : this.state.channels.filter((c) => !c.hidden);
+    const all = this.allChannels();
     const find = (n) => n && (all.find((c) => String(c.number) === n) || all.find((c) => String(c.number).startsWith(n)));
     let typed = String(first);
     return Modal.open((m, close) => {
@@ -290,7 +303,7 @@ const App = {
 
   // channelId: start with that channel picked (e.g. from the red button on a channel without listings)
   manualDialog(channelId) {
-    const chans = (this.guideRows.length ? this.guideRows : this.state.channels.filter((c) => !c.hidden));
+    const chans = this.allChannels();
     if (!chans.length) return toast('Add a tuner or provider first.');
     const pick = chans.find((c) => c.id === channelId);
     const d = new Date(Date.now() + 3600000);

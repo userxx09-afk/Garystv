@@ -271,7 +271,12 @@ function createServer(core) {
     ['PUT', '/api/vod/progress/:id', (q, b, p) => vod.saveProgress(decodeURIComponent(p.id), b)],
     ['GET', '/api/vod/:kind/categories', (q, b, p) => vod.categories(p.kind)],
     ['GET', '/api/vod/:kind/category/:id', (q, b, p) => vod.items(p.kind, decodeURIComponent(p.id))],
-    ['GET', '/api/guide', (q) => core.getGuide(+q.from || Date.now(), +q.to || Date.now() + 3 * 3600000)],
+    // With ids or start/count, part of it ({ total, rows }); without, all of it (older TV apps).
+    ['GET', '/api/guide', (q) => {
+      const from = +q.from || Date.now(), to = +q.to || Date.now() + 3 * 3600000;
+      if (q.ids == null && q.start == null && q.count == null) return core.getGuide(from, to);
+      return core.guidePage(from, to, q.ids != null ? { ids: String(q.ids).split(',').filter(Boolean) } : { start: +q.start || 0, count: +q.count || 500 });
+    }],
     ['GET', '/api/schedule', () => core.getSchedule()],
     ['GET', '/api/recordings', (q, b, p, req) => (req.who.peer ? core.getRecordings() : sharing.withShared(core.getRecordings()))],
     ['GET', '/api/search', (q) => core.search(q.q)],

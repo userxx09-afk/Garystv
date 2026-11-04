@@ -366,3 +366,22 @@ test('Big guides and lists: read off the main thread, sent zipped, no logins in 
     srv.closeAllConnections(); srv.close(); core.timeshift.stopAll(); core.sharing.stop();
   }
 });
+
+test('Guide in parts: favorites and the top first, the rest behind', () => {
+  const { DvrCore } = require('../src/core');
+  const core = new DvrCore({ dataDir: require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'gtv-page-')) });
+  core.store.write('sources', [{ id: 's1', type: 'm3u', name: 'P', enabled: true, config: {} }]);
+  core.store.write('channels', Array.from({ length: 50 }, (_, i) => ({ id: `s1:${i}`, sourceId: 's1', number: String(i + 1), name: `Ch ${i}`, favorite: i === 30 })));
+  const whole = core.getGuide(0, 3600000);
+  assert.equal(whole.length, 50);
+  assert.equal(whole[0].id, 's1:30'); // pinned first
+  assert.equal(whole[0].i, undefined);
+  const top = core.guidePage(0, 3600000, { start: 0, count: 10 });
+  assert.equal(top.total, 50);
+  assert.deepEqual(top.rows.map((r) => r.i), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  assert.deepEqual(top.rows.map((r) => r.id), whole.slice(0, 10).map((r) => r.id));
+  const rest = core.guidePage(0, 3600000, { start: 10, count: 100 });
+  assert.equal(rest.rows.length, 40);
+  const mine = core.guidePage(0, 3600000, { ids: ['s1:45', 's1:2', 'nope'] });
+  assert.deepEqual(mine.rows.map((r) => [r.id, r.i]), [['s1:2', 3], ['s1:45', 45]]);
+});

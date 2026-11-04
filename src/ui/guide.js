@@ -4,6 +4,8 @@
 const SLOT = 30 * 60000;
 const SPAN = 3 * SLOT;
 const align = (t) => Math.floor(t / SLOT) * SLOT;
+const FIRST = 150; // channels shown before the rest load behind them
+const BATCH = 1500;
 // Every favorites list together (Gary's ESPN and Barb's Hallmark in one), when there's more than one.
 const ALL_FAVS = '*';
 const allFavorites = (lists) => ({ id: ALL_FAVS, name: 'All favorites', combined: true, channelIds: [...new Set(lists.flatMap((l) => l.channelIds))] });
@@ -129,14 +131,58 @@ const GuideView = {
 
   inAnyList(id) { return ((App.state && App.state.favLists) || []).some((l) => l.channelIds.includes(id)); },
 
+  // The channels you're most likely after come first: on your favorites lists, the one you last
+  // watched, then the top of the guide (pinned, lowest numbers). The guide shows them at once and
+  // the rest come behind, a batch at a time, while you look. A refresh keeps showing what it has.
   async load(force) {
     const from = align(Date.now()) - SLOT;
     const need = this.ws + SPAN;
     if (!force && this.ws >= this.loaded[0] && need <= this.loaded[1]) return;
     const to = Math.max(need, this.ws) + 12 * 3600000;
-    this.all = await api.get(`/api/guide?from=${Math.min(from, this.ws)}&to=${to}`);
+    const range = `from=${Math.min(from, this.ws)}&to=${to}`;
+    const run = this.run = (this.run || 0) + 1; // a newer load replaces this one
+    this.complete = false;
+    const lists = (App.state && App.state.favLists) || [];
+    const ids = [...new Set([...lists.flatMap((l) => l.channelIds), App.lastChannel].filter(Boolean))].slice(0, 300);
+    const [mine, top] = await Promise.all([
+      ids.length ? api.get(`/api/guide?${range}&ids=${ids.map(encodeURIComponent).join(',')}`) : { rows: [] },
+      api.get(`/api/guide?${range}&start=0&count=${FIRST}`),
+    ]);
+    if (run !== this.run) return;
     this.loaded = [Math.min(from, this.ws), to];
+    if (Array.isArray(top)) { this.all = top; this.complete = true; this.applyList(); return; } // an older GarysTV sends it all
+    const fresh = new Map([...mine.rows, ...top.rows].map((r) => [r.id, r]));
+    if (top.total <= FIRST) { this.merge(fresh, true); return; }
+    this.merge(fresh, false);
+    this.fillIn(range, run, fresh, top.total);
+  },
+
+  // The rest of the channels, behind the first ones.
+  async fillIn(range, run, fresh, total) {
+    try {
+      for (let start = FIRST; start < total; start += BATCH) {
+        const page = await api.get(`/api/guide?${range}&start=${start}&count=${BATCH}`);
+        if (run !== this.run) return;
+        for (const r of page.rows) fresh.set(r.id, r);
+        total = page.total;
+        this.merge(fresh, false);
+        if (App.view === this && !Modal.top()) this.paint();
+      }
+      this.merge(fresh, true);
+      if (App.view === this && !Modal.top()) { this.paintBar(); this.paint(); }
+    } catch (_) {
+      if (run === this.run) this.loaded = [0, 0]; // the engine is restarting, say: the next look tries again
+    }
+  },
+
+  // New rows in (done: they're all of them, in guide order), staying on the channel you're on.
+  merge(fresh, done) {
+    const was = this.rows[this.row];
+    this.all = (done ? [...fresh.values()] : [...new Map([...this.all.map((r) => [r.id, r]), ...fresh]).values()]).sort((a, b) => a.i - b.i);
+    this.complete = done;
     this.applyList();
+    const at = was ? this.rows.findIndex((r) => r.id === was.id) : -1;
+    if (at >= 0) { this.top = Math.max(0, this.top + at - this.row); this.row = at; }
   },
 
   async render(root) {
@@ -206,6 +252,11 @@ const GuideView = {
     $('#gday').textContent = fmt.day(this.ws);
     $('#gtimes').innerHTML = [0, 1, 2].map((i) => `<span style="left:${(i * 100) / 3}%">${fmt.time(this.ws + i * SLOT)}</span>`).join('') +
       (now >= this.ws && now < this.ws + SPAN ? `<div class="g-now" style="left:${((now - this.ws) / SPAN) * 100}%"></div>` : '');
+    if (!this.rows.length && !this.complete && this.all.length) {
+      body.innerHTML = '<div class="g-empty">Loading the rest of the channels...</div>'; // a category none of the first ones are in
+      this.paintInfo(null, null);
+      return;
+    }
     if (!this.rows.length && this.filter) {
       body.innerHTML = `<div class="g-empty">No channels${this.list ? ` in <b>${esc(this.list.name)}</b>` : ''} are in <b>${esc(this.filterLabel)}</b>. Pick another category on the bar above, or clear it.</div>`;
       this.paintInfo(null, null);
