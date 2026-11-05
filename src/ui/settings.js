@@ -6,7 +6,7 @@ const SettingsView = {
   section: 'sources',
   chFilter: '',
   hints: [['↑↓←→', 'Move'], ['OK', 'Select'], ['Tab', 'Next field'], ['Esc', 'Back']],
-  sections: [['sources', 'Antenna & Providers'], ['guide', 'Guide data'], ['channels', 'Channels & matching'], ['startup', 'When it starts'], ['recording', 'Recording'], ['media', 'Movies & Shows'], ['remote', 'Other locations'], ['updates', 'Updates'], ['backup', 'Backup & restore'], ['status', 'Status']],
+  sections: [['sources', 'Antenna & Providers'], ['guide', 'Guide data'], ['channels', 'Channels & matching'], ['startup', 'When it starts'], ['recording', 'Recording'], ['media', 'Movies & Shows'], ['arlo', 'Arlo'], ['remote', 'Other locations'], ['updates', 'Updates'], ['backup', 'Backup & restore'], ['status', 'Status']],
 
   render(root) {
     root.innerHTML = `<div class="settings">
@@ -443,6 +443,57 @@ const SettingsView = {
     const del = $('#tmdbDel', pane);
     if (del) del.onclick = async () => { await api.put('/api/settings', { tmdbKey: '' }); toast('Key removed'); };
     $('#tmdbClear', pane).onclick = async () => { await api.post('/api/tmdb/clear'); toast('Saved movie & show info cleared. It is looked up again as you browse.'); };
+  },
+
+  // ---------- Arlo cameras ----------
+  // Motion on a ticked camera pops its clip up in the corner while TV plays (core/arlo.js,
+  // player.js MotionPopup). Saved on the GarysTV engine, so every TV shares it.
+  async arlo(pane) {
+    const cur = () => ({ enabled: false, url: 'http://127.0.0.1:8090', cameras: [], ...(App.state.settings.arlo || {}) });
+    const save = async (patch, msg) => {
+      try { await api.put('/api/settings', { arlo: { ...cur(), ...patch } }); App.state.settings.arlo = { ...cur(), ...patch }; if (msg) toast(msg); } catch (e) { toast(e.message); }
+    };
+    const s = cur();
+    pane.innerHTML = `<div class="box"><h3>Arlo cameras</h3>
+        <div class="s">When a ticked camera sees motion, its clip shows (without sound) in the lower-left corner for 10 seconds while you watch live TV or a recording. The TV keeps playing, and the remote keeps working as usual. The clips come from <b>Arlo Keeper</b>.</div>
+        <label class="check nav" data-key="arlo-on" style="margin:.8rem 0"><input type="checkbox" id="arloOn" ${s.enabled ? 'checked' : ''}> Enable Arlo integration</label>
+        <div class="field"><label>Arlo Keeper address</label><input id="arloUrl" class="nav" data-key="arlo-url" value="${esc(s.url)}" placeholder="http://192.168.5.210:8090"></div>
+        <div class="actions"><div class="btn nav" id="arloUrlSave" data-key="arlo-url-save">Save address</div><div class="btn nav" id="arloTest" data-key="arlo-test">Show a test pop-up</div></div>
+        <div class="s" style="font-size:.85rem">The test shows Arlo Keeper's newest clip on every screen that's playing TV right now.</div></div>
+      <div class="box"><h3>Cameras that pop up</h3><div id="arloCams" class="s">Asking Arlo Keeper...</div></div>`;
+    $('#arloOn', pane).onchange = (e) => save({ enabled: e.target.checked }, e.target.checked ? 'Arlo turned on' : 'Arlo turned off');
+    const url = $('#arloUrl', pane);
+    url._onFocus = () => url.focus();
+    $('#arloUrlSave', pane).onclick = async () => { await save({ url: url.value.trim() || 'http://127.0.0.1:8090' }, 'Address saved'); this.arloCameras(pane, save, cur); };
+    $('#arloTest', pane).onclick = async () => {
+      try { const r = await api.post('/api/arlo/test'); toast(`Sent a test pop-up (${r.camera}). It shows on screens playing TV.`, 6000); } catch (e) { toast(e.message, 6000); }
+    };
+    this.arloCameras(pane, save, cur);
+  },
+
+  // Drawn at once from the last answer (each save redraws Settings, and a box that vanished
+  // while Arlo Keeper was being asked would lose a click), then again with a fresh one.
+  async arloCameras(pane, save, cur) {
+    if (this.arloLast) this.paintArloCameras(pane, save, cur, this.arloLast);
+    try { this.arloLast = await api.get('/api/arlo/cameras'); } catch (e) { const box = $('#arloCams', pane); if (box && !this.arloLast) box.innerHTML = `⚠️ ${esc(e.message)}`; return; }
+    this.paintArloCameras(pane, save, cur, this.arloLast);
+  },
+
+  paintArloCameras(pane, save, cur, r) {
+    const box = $('#arloCams', pane);
+    if (!box || !document.body.contains(box)) return;
+    const on = new Set(cur().cameras.map(String)); // what's saved now (the answer may be older)
+    r = { ...r, cameras: r.cameras.map((c) => ({ ...c, on: on.has(c.id) })) };
+    const modes = Object.values(r.modes || {}).filter(Boolean);
+    box.classList.remove('s');
+    box.innerHTML = `${r.connected ? '' : '<div class="s">⚠️ Arlo Keeper isn\'t signed in to Arlo right now, so no motion will come through. Sign in on its own page.</div>'}
+      ${r.cameras.map((c) => `<label class="check nav" data-key="arlo-cam-${esc(c.id)}" style="margin:.4rem 0"><input type="checkbox" data-cam="${esc(c.id)}" data-name="${esc(c.name)}" ${c.on ? 'checked' : ''}> ${esc(c.name)}
+        <span class="s">${[c.model, c.battery != null && c.battery > 0 ? `battery ${c.battery}%` : '', c.unavailable ? 'offline' : '', c.lastMotion ? `last motion ${fmt.when(c.lastMotion * 1000)}` : ''].filter(Boolean).map(esc).join(' · ')}</span></label>`).join('') || '<div class="s">Arlo Keeper has no cameras.</div>'}
+      ${modes.length ? `<div class="s" style="margin-top:.6rem">Arlo mode: ${modes.map(esc).join(', ')}. Cameras only report motion when Arlo is armed (set in the Arlo app).</div>` : ''}
+      ${r.error ? `<div class="s">⚠️ ${esc(r.error)}</div>` : ''}`;
+    $$('[data-cam]', box).forEach((el) => {
+      el.onchange = () => save({ cameras: $$('[data-cam]', box).filter((x) => x.checked).map((x) => x.dataset.cam) }, `${el.dataset.name}: ${el.checked ? 'pops up' : 'no pop-ups'}`);
+    });
   },
 
   // ---------- other locations ----------

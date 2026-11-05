@@ -17,6 +17,7 @@ const { ToolInstaller } = require('./installer');
 const { Auth } = require('./auth');
 const { Peers } = require('./peers');
 const { Sharing, remoteRecording } = require('./sharing');
+const { Arlo } = require('./arlo');
 
 const UI_DIR = path.join(__dirname, '..', 'ui');
 const VERSION = require('../../package.json').version;
@@ -228,7 +229,9 @@ function createServer(core) {
       return [...decodeArgs(input, { live: true, copy: plan.copy }), ...plan.video];
     },
   });
-  core.on('changed', (what) => { for (const c of clients) c.write(`data: ${JSON.stringify({ what })}\n\n`); });
+  const broadcast = (msg) => { for (const c of clients) c.write(`data: ${JSON.stringify(msg)}\n\n`); };
+  core.on('changed', (what) => broadcast({ what }));
+  const arlo = core.arlo = new Arlo(core, broadcast);
   const vod = core.vod = new Vod(core);
   const tmdb = core.tmdb = new Tmdb(core);
   core.on('changed', (what) => { if (what === 'sources') vod.cache.clear(); }); // new login or server: read the library again
@@ -305,6 +308,10 @@ function createServer(core) {
     ['POST', '/api/timeshift/release', (q, b) => timeshift.release(b.channelId, b.viewer)],
     ['DELETE', '/api/recordings/:id', (q, b, p) => atPeer(p.id, 'DELETE') || core.deleteRecording(p.id)],
     ['POST', '/api/tools/:name/install', (q, b, p) => tools.install(p.name)],
+    // Arlo cameras (core/arlo.js): Settings > Arlo, and Arlo Keeper saying a motion clip has started.
+    ['GET', '/api/arlo/cameras', () => arlo.cameras()],
+    ['POST', '/api/arlo/motion', (q, b) => arlo.motion(b)],
+    ['POST', '/api/arlo/test', () => arlo.test()],
     // Updates: the Windows app's own (src/app-updates.js), or a home server's (core/server-updates.js).
     ['GET', '/api/app-update', () => (core.appUpdater ? core.appUpdater.status() : { supported: false })],
     ['POST', '/api/app-update/check', () => (core.appUpdater ? core.appUpdater.check() : null)],
@@ -348,7 +355,7 @@ function createServer(core) {
       if (!who.ok) {
         // The screens' own files aren't secret; the start page becomes the sign-in page.
         if (['/', '/index.html'].includes(url.pathname)) return fs.readFile(path.join(UI_DIR, 'login.html'), (err, data) => { res.writeHead(200, { 'Content-Type': MIME['.html'], 'Cache-Control': 'no-store' }); res.end(data); });
-        if (url.pathname.startsWith('/api/') || /^\/(events|stream|direct|timeshift|peer)\b/.test(url.pathname)) return send(res, 401, { error: 'Sign in first.', login: true });
+        if (url.pathname.startsWith('/api/') || /^\/(events|stream|direct|timeshift|peer|arlo)\b/.test(url.pathname)) return send(res, 401, { error: 'Sign in first.', login: true });
       }
     }
     const caller = who.home ? checkCaller(req) : { ok: true };
@@ -375,6 +382,8 @@ function createServer(core) {
         req.on('close', () => clients.delete(res));
         return;
       }
+      // A motion clip for the pop-up, as pictures (core/arlo.js).
+      if (url.pathname === '/arlo/view') return arlo.view(req, res, q.src);
       // Live TV buffer: the playlist (starts the buffer if needed) and its video pieces.
       const tsm = /^\/timeshift\/([^/]+)\/(live\.m3u8|seg\d+\.ts)$/.exec(url.pathname);
       if (tsm) {

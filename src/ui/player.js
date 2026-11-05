@@ -192,6 +192,7 @@ const Player = {
 
   setMode(mode) {
     this.mode = mode;
+    if (mode !== 'full') MotionPopup.hide();
     const scr = $('#screen');
     scr.className = mode === 'off' ? '' : mode;
     scr.style.cssText = '';
@@ -443,6 +444,47 @@ const Player = {
     if (k === 'ContextMenu' || k === 'm' || k === 'M') { if (this.channel) this.optionsMenu(); else this.playbackMenu(); return true; }
     this.showOsd();
     return ['Enter', 'i', 'I'].includes(k);
+  },
+};
+
+// Arlo camera motion (Settings > Arlo, core/arlo.js): while live TV or a recording is playing full
+// screen, the camera's clip shows muted in the lower-left corner for 10 seconds, then goes. It's
+// only a picture over the video: the TV keeps playing and the remote keeps controlling it.
+// Arlo cameras take ~10s to send their first picture, so the camera name shows first and the 10
+// seconds start once the picture does.
+const MotionPopup = {
+  SHOW_MS: 10000, WAIT_MS: 25000, // no picture by then: give up
+  timer: null, waitTimer: null, poll: null,
+
+  show(m) {
+    if (Player.mode !== 'full' || !['live', 'rec'].includes(Player.kind)) return;
+    this.hide();
+    const box = $('#motion'), img = $('img', box);
+    $('.cam', box).innerHTML = `<b>${esc(m.camera)}</b> <span>Motion · ${fmt.time(m.time || Date.now())}</span>`;
+    box.classList.add('waiting');
+    box.classList.remove('hide');
+    img.onerror = () => this.hide();
+    img.src = server(m.view);
+    // A picture has arrived when the image has a size (load events are unreliable for a picture stream).
+    this.poll = setInterval(() => {
+      if (!img.naturalWidth) return;
+      clearInterval(this.poll); this.poll = null;
+      clearTimeout(this.waitTimer);
+      box.classList.remove('waiting');
+      this.timer = setTimeout(() => this.hide(), this.SHOW_MS);
+    }, 200);
+    this.waitTimer = setTimeout(() => this.hide(), this.WAIT_MS);
+  },
+
+  hide() {
+    clearTimeout(this.timer); clearTimeout(this.waitTimer); clearInterval(this.poll);
+    this.timer = this.waitTimer = this.poll = null;
+    const box = $('#motion');
+    if (!box || box.classList.contains('hide')) return;
+    box.classList.add('hide');
+    const img = $('img', box);
+    img.onerror = null;
+    img.removeAttribute('src'); // ends the picture stream (and ffmpeg on the engine)
   },
 };
 
