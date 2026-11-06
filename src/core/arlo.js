@@ -16,10 +16,17 @@ const RENEW_MS = 5 * 60000; // Arlo Keeper forgets a GarysTV that hasn't checked
 // What /arlo/view may fetch from Arlo Keeper: a clip as it records, or a saved one.
 const LIVE_PATH = /^\/live\/[A-Za-z0-9_-]+\.ts$/;
 const CLIP_PATH = /^\/media\/[\w\-. ]+(\/[\w\-. ]+)*\.mp4$/;
+// A clip's still picture, for the Arlo screen's list (/arlo/thumb).
+const THUMB_PATH = /^\/media\/[\w\-. ]+(\/[\w\-. ]+)*\.(jpe?g|png)$/i;
 
 function safePath(p) {
   p = String(p || '');
   return !p.includes('..') && (LIVE_PATH.test(p) || CLIP_PATH.test(p)) ? p : null;
+}
+
+function safeThumb(p) {
+  p = String(p || '');
+  return !p.includes('..') && THUMB_PATH.test(p) ? p : null;
 }
 
 class Arlo {
@@ -114,16 +121,50 @@ class Arlo {
     return { camera: pick.camera_name };
   }
 
-  // The clip as JPEG pictures (multipart/x-mixed-replace), ~10 a second, small enough for the corner.
-  view(req, res, src) {
+  // The Arlo screen (Home > Arlo): saved clips, newest first, from every camera or one.
+  async clips(camera, limit) {
+    const n = Math.min(Math.max(parseInt(limit, 10) || 60, 1), 200);
+    const qs = `limit=${n}${camera ? `&camera=${encodeURIComponent(camera)}` : ''}`;
+    const rows = await this.request('GET', `/api/clips?${qs}`);
+    return (Array.isArray(rows) ? rows : []).map((c) => {
+      const src = c.video_path && safePath(`/media/${c.video_path}`);
+      const thumb = c.thumb_path && safeThumb(`/media/${c.thumb_path}`);
+      return { key: c.key, camera: c.camera_name, cameraId: String(c.camera_id), time: +c.created_ms || 0, duration: c.duration_s || null,
+        trigger: c.trigger || null, starred: !!c.starred, size: c.size_bytes || null,
+        view: src ? `/arlo/view?big=1&src=${encodeURIComponent(src)}` : null,
+        thumb: thumb ? `/arlo/thumb?src=${encodeURIComponent(thumb)}` : null };
+    }).filter((c) => c.view);
+  }
+
+  // A clip's still picture, passed through from Arlo Keeper (the TVs may not be able to reach it).
+  thumb(req, res, src) {
+    const p = safeThumb(src);
+    if (!p) { res.writeHead(400); return res.end(); }
+    let url;
+    try { url = new URL((this.settings.url || DEFAULTS.url).replace(/\/+$/, '') + p); } catch (_) { res.writeHead(400); return res.end(); }
+    const lib = url.protocol === 'https:' ? https : http;
+    const up = lib.get(url, { timeout: 8000 }, (r) => {
+      if (r.statusCode !== 200) { r.resume(); res.writeHead(404); return res.end(); }
+      res.writeHead(200, { 'Content-Type': r.headers['content-type'] || 'image/jpeg', 'Cache-Control': 'max-age=86400' });
+      r.pipe(res);
+    });
+    up.on('timeout', () => up.destroy(new Error('timed out')));
+    up.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end(); });
+    req.on('close', () => up.destroy());
+  }
+
+  // The clip as JPEG pictures (multipart/x-mixed-replace): ~10 a second, small enough for the
+  // corner; or (big) bigger and smoother, for watching a clip full screen on the Arlo screen.
+  view(req, res, src, big) {
     const path = safePath(src);
     if (!path) { res.writeHead(400); return res.end(); }
     const ffmpeg = findFfmpeg(this.core.settings);
     if (!ffmpeg) { res.writeHead(501); return res.end(); }
     const input = (this.settings.url || DEFAULTS.url).replace(/\/+$/, '') + path;
+    const look = big ? ['-t', '120', '-an', '-vf', 'fps=15,scale=1280:-2', '-q:v', '5'] : ['-t', '30', '-an', '-vf', 'fps=10,scale=640:-2', '-q:v', '7'];
     // -re: show it at normal speed (a finished clip would otherwise be sent all at once).
-    const proc = spawn(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-re', '-i', input, '-t', '30', '-an',
-      '-vf', 'fps=10,scale=640:-2', '-q:v', '7', '-f', 'mpjpeg', 'pipe:1'], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    const proc = spawn(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-re', '-i', input, ...look,
+      '-f', 'mpjpeg', 'pipe:1'], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     let err = '';
     proc.stderr.on('data', (d) => { err = (err + d).slice(-500); });
     res.writeHead(200, { 'Content-Type': 'multipart/x-mixed-replace;boundary=ffmpeg', 'Cache-Control': 'no-store' });

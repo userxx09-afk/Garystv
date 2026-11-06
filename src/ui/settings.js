@@ -1,6 +1,6 @@
 // Settings: tuners & IPTV providers, guide sources, matching channels to the
 // guide, recording options and status.
-/* global App, Updates, GTVAndroid, categoryOf, CATEGORY_RULES, GuideView */
+/* global App, Updates, GTVAndroid, categoryOf, CATEGORY_RULES, GuideView, Player */
 const SettingsView = {
   title: 'Settings',
   section: 'sources',
@@ -459,14 +459,24 @@ const SettingsView = {
         <label class="check nav" data-key="arlo-on" style="margin:.8rem 0"><input type="checkbox" id="arloOn" ${s.enabled ? 'checked' : ''}> Enable Arlo integration</label>
         <div class="field"><label>Arlo Keeper address</label><input id="arloUrl" class="nav" data-key="arlo-url" value="${esc(s.url)}" placeholder="http://192.168.5.210:8090"></div>
         <div class="actions"><div class="btn nav" id="arloUrlSave" data-key="arlo-url-save">Save address</div><div class="btn nav" id="arloTest" data-key="arlo-test">Show a test pop-up</div></div>
-        <div class="s" style="font-size:.85rem">The test shows Arlo Keeper's newest clip on every screen that's playing TV right now.</div></div>
+        <div class="s" style="font-size:.85rem">The test starts Live TV here (last channel), then shows Arlo Keeper's newest clip on every screen that's playing TV. Press Back to come back.</div></div>
       <div class="box"><h3>Cameras that pop up</h3><div id="arloCams" class="s">Asking Arlo Keeper...</div></div>`;
     $('#arloOn', pane).onchange = (e) => save({ enabled: e.target.checked }, e.target.checked ? 'Arlo turned on' : 'Arlo turned off');
     const url = $('#arloUrl', pane);
     url._onFocus = () => url.focus();
     $('#arloUrlSave', pane).onclick = async () => { await save({ url: url.value.trim() || 'http://127.0.0.1:8090' }, 'Address saved'); this.arloCameras(pane, save, cur); };
+    // The pop-up only shows over TV that's playing full screen, and Settings isn't: start Live TV
+    // on the last channel, wait for its picture (up to 20s), then send the test.
     $('#arloTest', pane).onclick = async () => {
-      try { const r = await api.post('/api/arlo/test'); toast(`Sent a test pop-up (${r.camera}). It shows on screens playing TV.`, 6000); } catch (e) { toast(e.message, 6000); }
+      const ch = App.lastChannel || (App.guideRows && App.guideRows[0] && App.guideRows[0].id) || (App.state.channels.find((c) => !c.hidden) || {}).id;
+      if (!ch) return toast('No channels yet to test over - add your tuner first.', 6000);
+      if (!(Player.mode === 'full' && Player.kind === 'live')) Player.play('live', ch);
+      toast('Starting Live TV for the test...', 4000);
+      const video = $('#video'), until = Date.now() + 20000;
+      while (Date.now() < until && !(Player.mode === 'full' && video && video.readyState >= 2 && video.currentTime > 0)) await new Promise((r) => setTimeout(r, 300));
+      if (Player.mode !== 'full') return toast('Live TV was closed, so the test was not sent.', 6000);
+      await new Promise((r) => setTimeout(r, 1500)); // let the picture settle
+      try { const r = await api.post('/api/arlo/test'); toast(`Test pop-up sent (${r.camera}). The camera takes a few seconds to show.`, 6000); } catch (e) { toast(e.message, 6000); }
     };
     this.arloCameras(pane, save, cur);
   },

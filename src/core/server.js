@@ -310,6 +310,7 @@ function createServer(core) {
     ['POST', '/api/tools/:name/install', (q, b, p) => tools.install(p.name)],
     // Arlo cameras (core/arlo.js): Settings > Arlo, and Arlo Keeper saying a motion clip has started.
     ['GET', '/api/arlo/cameras', () => arlo.cameras()],
+    ['GET', '/api/arlo/clips', (q) => arlo.clips(q.camera, q.limit)], // Home > Arlo
     ['POST', '/api/arlo/motion', (q, b) => arlo.motion(b)],
     ['POST', '/api/arlo/test', () => arlo.test()],
     // Updates: the Windows app's own (src/app-updates.js), or a home server's (core/server-updates.js).
@@ -383,7 +384,8 @@ function createServer(core) {
         return;
       }
       // A motion clip for the pop-up, as pictures (core/arlo.js).
-      if (url.pathname === '/arlo/view') return arlo.view(req, res, q.src);
+      if (url.pathname === '/arlo/view') return arlo.view(req, res, q.src, q.big === '1');
+      if (url.pathname === '/arlo/thumb') return arlo.thumb(req, res, q.src); // a clip's picture (Home > Arlo)
       // Live TV buffer: the playlist (starts the buffer if needed) and its video pieces.
       const tsm = /^\/timeshift\/([^/]+)\/(live\.m3u8|seg\d+\.ts)$/.exec(url.pathname);
       if (tsm) {

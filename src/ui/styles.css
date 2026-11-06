@@ -218,6 +218,16 @@ pre.log { margin: 0; font-size: .8rem; color: var(--muted); white-space: pre-wra
 .motion .cam { position: absolute; left: 0; right: 0; bottom: 0; padding: .4rem .7rem; background: linear-gradient(transparent, #000c 40%); font-size: 1.1rem; }
 .motion .cam span { color: #cfe0ff; font-size: .95rem; margin-left: .4rem; }
 .motion.waiting img { visibility: hidden; }
+/* Home > Arlo (views.js ArloView): clips with their pictures, and one playing big */
+.item .athumb { width: 7rem; aspect-ratio: 16 / 9; object-fit: cover; border-radius: .35rem; background: #000; flex: none; }
+.detail .athumb.big { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: .5rem; background: #000; }
+.arlo-play { position: relative; flex: 1; min-height: 0; background: #000; border-radius: .8rem; overflow: hidden; display: grid; place-items: center; margin-bottom: 1rem; }
+.arlo-play img { max-width: 100%; max-height: 100%; width: 100%; height: 100%; object-fit: contain; }
+.arlo-play .cap { position: absolute; left: 0; right: 0; bottom: 0; padding: .7rem 1.2rem; background: linear-gradient(transparent, #000c 40%); font-size: 1.3rem; }
+.arlo-play .cap span { color: #cfe0ff; font-size: 1.05rem; margin-left: .5rem; }
+.arlo-play.waiting img, .arlo-play.failed img { visibility: hidden; }
+.arlo-play.waiting::before { content: "Loading the clip..."; position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 1.2rem; }
+.arlo-play.failed::before { content: "This clip couldn't be played."; position: absolute; inset: 0; display: grid; place-items: center; color: var(--yellow); font-size: 1.2rem; }
 .motion.waiting::before { content: "Camera waking up…"; position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 1rem; }
 
 .toast { position: fixed; right: 2rem; bottom: 4rem; background: #13233d; border: 1px solid #2c4774; border-left: 5px solid var(--red2); padding: .9rem 1.3rem; border-radius: .5rem; z-index: 60; font-size: 1.05rem; max-width: 32rem; box-shadow: 0 10px 30px #000a; animation: slide .2s ease-out; }
