@@ -11,7 +11,17 @@ const { makeBackup, restoreBackup } = require('./backup');
 const sources = require('./sources');
 const { reconcile } = require('./guide/reconcile');
 const { buildSchedule, episodeKey, normTitle } = require('./scheduler');
-const { startRecording, recordingPath } = require('./recorder');
+const { startRecording, recordingPath, probeStream } = require('./recorder');
+
+// Many stream servers (IPTV plans behind Cloudflare, free channels) have both IPv4 and IPv6
+// addresses. On a network that hands out IPv6 addresses but can't actually reach the internet
+// over IPv6 (tapper's since Nov 2026), Node's fetch tried IPv6 only, waited 10s and gave up
+// with "fetch failed", so recordings and the guide failed while curl and ffmpeg worked.
+// Try IPv4 first, and fall back between the two when one doesn't answer.
+try { require('dns').setDefaultResultOrder('ipv4first'); } catch (_) {}
+try { const net = require('net'); if (net.setDefaultAutoSelectFamily) net.setDefaultAutoSelectFamily(true); } catch (_) {}
+
+const PRECHECK_MS = 3 * 60000; // check a timer's stream this long before it starts
 const { findFfmpeg, findVlc } = require('./tools');
 const commercials = require('./commercials');
 const { Tuners, capacity } = require('./tuners');
@@ -489,6 +499,7 @@ class DvrCore extends EventEmitter {
     const jobs = this.getSchedule();
     for (const job of jobs) {
       if (job.status === 'scheduled' && !this.active.has(job.id) && job.recStart <= now && now < job.recEnd) this.startJob(job);
+      else if (job.status === 'scheduled' && job.recStart > now && job.recStart - now <= PRECHECK_MS) this.precheck(job);
     }
     // Stop recordings whose timer was removed or that lost their tuner to a higher-priority timer.
     const wanted = new Set(jobs.filter((j) => j.status === 'scheduled' || j.status === 'recording').map((j) => j.id));
@@ -499,13 +510,51 @@ class DvrCore extends EventEmitter {
     if (expired.length) this.store.write('rules', this.rules.filter((r) => !expired.includes(r)));
   }
 
+  // A few minutes before a timer starts, make sure its stream answers. If it doesn't, try the same
+  // channel on the other plans/feeds and record from the first that works; if none does, say so
+  // now (the recording still starts on time and keeps trying).
+  precheck(job) {
+    const checks = (this.prechecks ||= new Map());
+    if (checks.has(job.id) || this.simulatedJob(job)) return;
+    checks.set(job.id, { pending: true });
+    for (const [id, c] of checks) if (c.at && Date.now() - c.at > 6 * 3600000) checks.delete(id);
+    (async () => {
+      let list;
+      try { list = this.tuners.choices(job.viaChannelId || job.channelId); } catch (_) { list = []; }
+      const errors = [];
+      for (const ch of list) {
+        const src = this.sources.find((s) => s.id === ch.sourceId);
+        if (!ch.streamUrl || !src) continue;
+        // A plan with no stream free is in use, which itself shows it works; don't take its stream.
+        if (this.tuners.free(src) <= 0) { errors.push(`${ch.name}: in use, not checked`); continue; }
+        const r = await probeStream(ch.streamUrl);
+        if (r.ok) {
+          if (errors.length) this.note(`${job.title}: stream check: ${errors.join('; ')}. Recording from ${ch.number} ${ch.name} (${src.name}) instead.`);
+          checks.set(job.id, { at: Date.now(), channelId: ch.id, switched: errors.length ? errors.join('; ') : null });
+          return;
+        }
+        errors.push(`${ch.number} ${ch.name} (${src.name}): ${r.error}`);
+      }
+      this.note(`${job.title}: warning, stream check failed a few minutes before the timer: ${errors.join('; ') || 'no stream for this channel'}. It will keep trying once it starts.`);
+      checks.set(job.id, { at: Date.now(), channelId: null, failed: errors.join('; ') });
+    })().catch((e) => checks.set(job.id, { at: Date.now(), channelId: null, failed: e.message }));
+  }
+
+  simulatedJob(job) {
+    const src = this.sources.find((s) => s.id === job.sourceId);
+    return !src || src.type === 'demo';
+  }
+
   startJob(job) {
     const src = this.sources.find((s) => s.id === job.sourceId);
     if (!this.channels.some((c) => c.id === job.channelId) || !src) return;
-    // A plan for the stream: the one the schedule picked if it can, else any with this channel free.
+    // A plan for the stream: the one the stream check found working, else the one the schedule
+    // picked if it can, else any with this channel free.
+    const check = this.prechecks && this.prechecks.get(job.id);
+    const preferred = check && check.channelId && this.channels.some((c) => c.id === check.channelId) ? check.channelId : null;
     let lease;
     try {
-      lease = this.tuners.acquire(job.viaChannelId || job.channelId, 'rec', job.title);
+      lease = this.tuners.acquire(preferred || job.viaChannelId || job.channelId, 'rec', job.title);
     } catch (e) {
       if (!(this.busyNoted ||= new Set()).has(job.id)) {
         this.busyNoted.add(job.id);
@@ -528,7 +577,8 @@ class DvrCore extends EventEmitter {
       log: (m) => this.note(`${job.title}: ${m}`),
     });
     this.active.set(job.id, { handle, recId: rec.id, ruleId: job.ruleId });
-    this.note(`recording started: ${job.title} on ${channel.number} ${channel.name}${channel.id !== job.channelId ? ` (${(this.sources.find((x) => x.id === channel.sourceId) || {}).name}, the usual plan was busy)` : ''}`);
+    const why = preferred && preferred === channel.id && check.switched ? "the usual feed didn't answer the stream check" : 'the usual plan was busy';
+    this.note(`recording started: ${job.title} on ${channel.number} ${channel.name}${channel.id !== job.channelId ? ` (${(this.sources.find((x) => x.id === channel.sourceId) || {}).name}, ${why})` : ''}`);
     this.changed('recordings');
     handle.done.then((result) => {
       this.active.delete(job.id);
