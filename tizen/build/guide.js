@@ -1,9 +1,14 @@
 // The program guide: channels down the side, 90 minutes across the top,
 // a details panel with a picture-in-picture preview above (DISH-style).
-/* global App, Player */
+/* global App, Player, toast */
 const SLOT = 30 * 60000;
 const SPAN = 3 * SLOT;
 const align = (t) => Math.floor(t / SLOT) * SLOT;
+const FIRST = 150; // channels shown before the rest load behind them
+const BATCH = 1500;
+// Every favorites list together (Gary's ESPN and Barb's Hallmark in one), when there's more than one.
+const ALL_FAVS = '*';
+const allFavorites = (lists) => ({ id: ALL_FAVS, name: 'All favorites', combined: true, channelIds: [...new Set(lists.flatMap((l) => l.channelIds))] });
 
 const GuideView = {
   ws: align(Date.now()), row: 0, top: 0, t: Date.now(), rows: [], all: [], loaded: [0, 0], visible: 7,
@@ -11,7 +16,11 @@ const GuideView = {
   filter: (() => { try { return localStorage.getItem('gtv.filter'); } catch (_) { return null; } })(), // one channel group, or all
   inBar: false, // the remote is on the bar above the guide
 
-  get list() { return ((App.state && App.state.favLists) || []).find((l) => l.id === this.listId) || null; },
+  get list() {
+    const lists = (App.state && App.state.favLists) || [];
+    if (this.listId === ALL_FAVS) return lists.length > 1 ? allFavorites(lists) : null;
+    return lists.find((l) => l.id === this.listId) || null;
+  },
   get title() { return ['Guide', this.list && this.list.name, this.filterLabel].filter(Boolean).join(' › '); },
   hints: [['↑↓←→', 'Move'], ['OK', 'Options'], ['R', 'Record', 'k-red'], ['M', 'Menu'], ['PgUp/PgDn', 'Page'], ['[ ]', 'Day'], ['#', 'Channel #'], ['Esc', 'Back']],
 
@@ -98,6 +107,7 @@ const GuideView = {
     const lists = (App.state && App.state.favLists) || [];
     const chip = (key, on, label, attr = '') => `<span class="chip nav${on ? ' on' : ''}" data-key="${key}" ${attr}>${label}</span>`;
     bar.innerHTML = chip('gb-all', !this.list, 'All channels', 'data-list=""')
+      + (lists.length > 1 ? chip('gb-allfav', this.listId === ALL_FAVS, '★ All favorites', `data-list="${ALL_FAVS}"`) : '')
       + lists.map((l) => chip(`gb-${esc(l.id)}`, this.listId === l.id, `★ ${esc(l.name)}`, `data-list="${esc(l.id)}"`)).join('')
       + chip('gb-cats', !!this.filter, `▦ ${this.filter ? esc(this.filterLabel) : 'Categories'}`, 'id="gcats"')
       + (this.filter ? chip('gb-clear', false, '✕', 'id="gclear" title="Show every category"') : '')
@@ -121,14 +131,58 @@ const GuideView = {
 
   inAnyList(id) { return ((App.state && App.state.favLists) || []).some((l) => l.channelIds.includes(id)); },
 
+  // The channels you're most likely after come first: on your favorites lists, the one you last
+  // watched, then the top of the guide (pinned, lowest numbers). The guide shows them at once and
+  // the rest come behind, a batch at a time, while you look. A refresh keeps showing what it has.
   async load(force) {
     const from = align(Date.now()) - SLOT;
     const need = this.ws + SPAN;
     if (!force && this.ws >= this.loaded[0] && need <= this.loaded[1]) return;
     const to = Math.max(need, this.ws) + 12 * 3600000;
-    this.all = await api.get(`/api/guide?from=${Math.min(from, this.ws)}&to=${to}`);
+    const range = `from=${Math.min(from, this.ws)}&to=${to}`;
+    const run = this.run = (this.run || 0) + 1; // a newer load replaces this one
+    this.complete = false;
+    const lists = (App.state && App.state.favLists) || [];
+    const ids = [...new Set([...lists.flatMap((l) => l.channelIds), App.lastChannel].filter(Boolean))].slice(0, 300);
+    const [mine, top] = await Promise.all([
+      ids.length ? api.get(`/api/guide?${range}&ids=${ids.map(encodeURIComponent).join(',')}`) : { rows: [] },
+      api.get(`/api/guide?${range}&start=0&count=${FIRST}`),
+    ]);
+    if (run !== this.run) return;
     this.loaded = [Math.min(from, this.ws), to];
+    if (Array.isArray(top)) { this.all = top; this.complete = true; this.applyList(); return; } // an older GarysTV sends it all
+    const fresh = new Map([...mine.rows, ...top.rows].map((r) => [r.id, r]));
+    if (top.total <= FIRST) { this.merge(fresh, true); return; }
+    this.merge(fresh, false);
+    this.fillIn(range, run, fresh, top.total);
+  },
+
+  // The rest of the channels, behind the first ones.
+  async fillIn(range, run, fresh, total) {
+    try {
+      for (let start = FIRST; start < total; start += BATCH) {
+        const page = await api.get(`/api/guide?${range}&start=${start}&count=${BATCH}`);
+        if (run !== this.run) return;
+        for (const r of page.rows) fresh.set(r.id, r);
+        total = page.total;
+        this.merge(fresh, false);
+        if (App.view === this && !Modal.top()) this.paint();
+      }
+      this.merge(fresh, true);
+      if (App.view === this && !Modal.top()) { this.paintBar(); this.paint(); }
+    } catch (_) {
+      if (run === this.run) this.loaded = [0, 0]; // the engine is restarting, say: the next look tries again
+    }
+  },
+
+  // New rows in (done: they're all of them, in guide order), staying on the channel you're on.
+  merge(fresh, done) {
+    const was = this.rows[this.row];
+    this.all = (done ? [...fresh.values()] : [...new Map([...this.all.map((r) => [r.id, r]), ...fresh]).values()]).sort((a, b) => a.i - b.i);
+    this.complete = done;
     this.applyList();
+    const at = was ? this.rows.findIndex((r) => r.id === was.id) : -1;
+    if (at >= 0) { this.top = Math.max(0, this.top + at - this.row); this.row = at; }
   },
 
   async render(root) {
@@ -137,7 +191,7 @@ const GuideView = {
     await this.load();
     this.inBar = false;
     root.innerHTML = `
-      <div class="infopane"><div class="info" id="ginfo"></div><div class="preview" id="gprev"></div></div>
+      <div class="infopane"><div class="info" id="ginfo"></div><div class="watch" id="gwatch"></div><div class="preview" id="gprev"></div></div>
       <div class="g-bar" id="gbar"></div>
       <div class="guide">
         <div class="g-head"><div class="g-day" id="gday"></div><div class="g-times" id="gtimes"></div></div>
@@ -152,8 +206,37 @@ const GuideView = {
       else this.moveRow(e.deltaY > 0 ? 3 : -3);
     };
     this.paintBar();
+    this.paintWatch();
     this.paint();
     if (Player.mode === 'pip') Player.placePip();
+  },
+
+  // While a channel plays in the corner: what's on it and what you can do with it, beside the details.
+  paintWatch() {
+    const box = $('#gwatch');
+    if (!box || App.view !== this) return;
+    const ch = Player.mode === 'pip' && Player.channel;
+    const had = Nav.current && box.contains(Nav.current) ? Nav.current.dataset.key : null;
+    if (!ch) { box.innerHTML = ''; if (had) this.refocusBar(); return; }
+    const p = Player.currentProgram(), rec = Player.recording();
+    const chip = (k, label) => `<span class="chip nav" data-key="gw-${k}" data-w="${k}">${label}</span>`;
+    box.innerHTML = `<div class="wh">Now watching${rec ? ' <span class="tag rec">● REC</span>' : ''}</div>
+      <div class="wt">${esc(ch.number)} ${esc(ch.name)}</div>
+      <div class="ws">${p && !p.filler ? `${esc(p.title)} · until ${fmt.time(p.end)}` : '&nbsp;'}</div>
+      <div class="wbtns">${chip('full', '⛶ Full screen')}${chip('rec', rec ? '■ Stop recording' : '● Record now')}${chip('fav', '★ Favorites')}${chip('pad', '🔢 Change channel')}${chip('stop', '■ Stop')}</div>`;
+    const run = {
+      full: () => Player.full(),
+      rec: () => (rec ? Player.stopRecording(rec) : Player.recordMenu()).then(() => this.refresh()),
+      fav: async () => {
+        const items = App.channelFavItems(ch, async () => { await App.loadAll(); this.paintBar(); this.paint(); });
+        const v = await Modal.menu(`${ch.number} ${ch.name}`, '', [...items.map((i) => ({ label: i.label, value: i.run })), { label: 'Cancel', value: null }]);
+        if (v) try { await v(); } catch (e) { toast(e.message); }
+      },
+      pad: () => Player.pad(),
+      stop: () => { Player.stop(); this.paintWatch(); this.paint(); },
+    };
+    $$('[data-w]', box).forEach((el) => { el.onclick = () => run[el.dataset.w](); });
+    if (had) Nav.focus($(`[data-key="${had}"]`, box) || $('.chip', box));
   },
 
   focused() {
@@ -169,6 +252,11 @@ const GuideView = {
     $('#gday').textContent = fmt.day(this.ws);
     $('#gtimes').innerHTML = [0, 1, 2].map((i) => `<span style="left:${(i * 100) / 3}%">${fmt.time(this.ws + i * SLOT)}</span>`).join('') +
       (now >= this.ws && now < this.ws + SPAN ? `<div class="g-now" style="left:${((now - this.ws) / SPAN) * 100}%"></div>` : '');
+    if (!this.rows.length && !this.complete && this.all.length) {
+      body.innerHTML = '<div class="g-empty">Loading the rest of the channels...</div>'; // a category none of the first ones are in
+      this.paintInfo(null, null);
+      return;
+    }
     if (!this.rows.length && this.filter) {
       body.innerHTML = `<div class="g-empty">No channels${this.list ? ` in <b>${esc(this.list.name)}</b>` : ''} are in <b>${esc(this.filterLabel)}</b>. Pick another category on the bar above, or clear it.</div>`;
       this.paintInfo(null, null);
@@ -200,7 +288,7 @@ const GuideView = {
           ${p.subtitle ? `<div class="s">${esc(p.subtitle)}</div>` : ''}</div>`;
       }).join('');
       return `<div class="g-row ${ri === this.row ? 'sel' : ''}">
-        <div class="g-ch" data-ch="${esc(r.id)}"><span class="num">${esc(r.number)}</span>${r.logo ? `<img src="${esc(r.logo)}" alt="" referrerpolicy="no-referrer">` : ''}<span class="nm">${r.favorite || this.inAnyList(r.id) ? '<span class="fav">★</span> ' : ''}${esc(r.name)}</span></div>
+        <div class="g-ch" data-ch="${esc(r.id)}"><span class="num">${esc(r.number)}</span>${r.logo ? `<img src="${esc(r.logo)}" alt="" referrerpolicy="no-referrer">` : ''}<span class="nm">${r.favorite ? '<span class="fav">📌</span> ' : ''}${this.inAnyList(r.id) ? '<span class="fav">★</span> ' : ''}${esc(r.name)}</span></div>
         <div class="g-progs">${progs}</div></div>`;
     }).join('');
     $$('.g-p', body).forEach((el) => {
@@ -286,6 +374,7 @@ const GuideView = {
     if (this.listId && !this.list) this.setList(null); // deleted on another screen
     $('#crumb').textContent = this.title; // a list may have been renamed
     this.paintBar();
+    this.paintWatch();
     this.paint();
   },
 
@@ -295,10 +384,11 @@ const GuideView = {
     const items = [];
     const after = async () => { await App.loadAll(); this.setList(this.listId, r && r.id); };
     if (r) items.push({ label: `▶ Watch ${r.number} ${r.name}`, run: () => Player.play('live', r.id), cls: 'primary' });
+    if (r) items.push(...App.numberItem(r, after));
     items.push({ label: '🔢 Go to a channel number...', run: () => this.pad() });
     if (r) items.push(...App.recordItems(r, p).map((c) => ({ ...c, run: () => Promise.resolve(c.run()).then(() => this.refresh()) })));
     if (r) items.push(...App.channelFavItems(r, after));
-    for (const l of lists) if (!cur || l.id !== cur.id) items.push({ label: `▦ Show ${l.name} (${l.channelIds.length})`, run: () => this.setList(l.id) });
+    for (const l of lists.length > 1 ? [allFavorites(lists), ...lists] : lists) if (!cur || l.id !== cur.id) items.push({ label: `▦ Show ${l.name} (${l.channelIds.length})`, run: () => this.setList(l.id) });
     if (cur) items.push({ label: '▦ Show all channels', run: () => this.setList(null) });
     items.push({ label: this.filter ? `▦ Categories: ${this.filterLabel}...` : '▦ Categories (Sports, News, Movies...)', run: () => this.categoryPicker() });
     if (this.filter) items.push({ label: '✕ Show every category', run: () => this.setFilter(null) });
@@ -314,7 +404,7 @@ const GuideView = {
         await after();
       },
     });
-    if (cur) {
+    if (cur && !cur.combined) {
       items.push({
         label: `✎ Rename ${cur.name}...`,
         run: async () => {
@@ -362,14 +452,16 @@ const GuideView = {
   onKey(e) {
     const k = e.key;
     if (this.inBar && Nav.current && Nav.current.closest('#topnav')) { // the buttons along the top
-      if (k === 'ArrowDown') { this.refocusBar(); return true; }
+      if (k === 'ArrowDown') { const w = $('#gwatch .chip'); if (w) Nav.focus(w); else this.refocusBar(); return true; }
       return ['ArrowLeft', 'ArrowRight', 'Enter'].includes(k) && Nav.handle(e);
     }
+    const inWatch = this.inBar && Nav.current && Nav.current.closest('#gwatch'); // the buttons for what's playing
     if (this.inBar) { // on the bar above the guide: ←→ along it, OK picks, ↓ back to the shows
+      if (k === 'ArrowDown' && inWatch) { this.refocusBar(); return true; }
       if (k === 'ArrowDown') { this.inBar = false; Nav.focus(null); this.paint(); return true; }
-      if (k === 'ArrowUp') { Nav.focus($('#topnav .nav')); return true; }
+      if (k === 'ArrowUp') { Nav.focus((!inWatch && $('#gwatch .chip')) || $('#topnav .nav')); return true; }
       if (k === 'ArrowLeft' || k === 'ArrowRight') { // in order, even when a narrow screen wraps the bar
-        const chips = $$('#gbar .chip'), i = chips.indexOf(Nav.current);
+        const chips = $$(inWatch ? '#gwatch .chip' : '#gbar .chip'), i = chips.indexOf(Nav.current);
         Nav.focus(chips[Math.max(0, Math.min(chips.length - 1, i + (k === 'ArrowRight' ? 1 : -1)))]);
         return true;
       }
@@ -396,6 +488,7 @@ const GuideView = {
 
   tick() {
     if (this.ws < align(Date.now())) { this.ws = align(Date.now()); this.load(true).then(() => this.paint()); } else this.paint();
+    this.paintWatch(); // what is on now, in the corner
   },
 };
 

@@ -10,7 +10,7 @@
 const MAX_RETRIES = 6;
 const LIVE_S = 8; // this close to the live edge counts as live
 const VIEWER = Math.random().toString(36).slice(2); // tells the engine which buffer viewers are still here
-const serverBase = () => window.GTV_SERVER || location.origin;
+const serverBase = () => (window.GTV_SERVER || location.origin) + (MANAGING ? `/peer/${MANAGING.id}` : '');
 
 const Player = {
   mode: 'off', // off | full | pip
@@ -38,7 +38,7 @@ const Player = {
     this.channel = kind === 'live' ? App.state.channels.find((c) => c.id === id) : null;
     if (kind === 'rec' && this.rec) this.duration = ((this.rec.finishedAt || Date.now()) - this.rec.recordedAt) / 1000;
     if (kind === 'vod') this.duration = this.rec.duration || 0; // 0: the provider didn't say
-    if (this.channel) App.lastChannel = id;
+    if (this.channel) { App.lastChannel = id; try { localStorage.setItem('gtv.lastChannel', id); } catch (_) { /* private mode */ } }
     if (kind === 'live') this.playLive(id);
     else this.playRec(kind, id, offset);
     this.setMode('full');
@@ -57,7 +57,14 @@ const Player = {
     const hls = this.hls = new Hls({ liveSyncDurationCount: 3, liveDurationInfinity: true, maxBufferLength: 20, backBufferLength: 60,
       manifestLoadingTimeOut: 25000, manifestLoadingMaxRetry: 3, levelLoadingMaxRetry: 8, fragLoadingMaxRetry: 8 });
     hls.on(Hls.Events.ERROR, (ev, d) => {
-      if (session !== this.session || !d.fatal) return;
+      if (session !== this.session) return;
+      // Every plan with this channel is in use (or a recording took this one): say what's using it.
+      if (d.response && d.response.code === 409) {
+        hls.stopLoad();
+        fetch(url).then((r) => r.json()).then((j) => { if (session === this.session) { this.showOsd(j.error); toast(j.error, 8000); } }).catch(() => {});
+        return;
+      }
+      if (!d.fatal) return;
       if (d.type === Hls.ErrorTypes.MEDIA_ERROR) { hls.recoverMediaError(); return; }
       if (this.retries++ >= MAX_RETRIES) { this.showOsd('Could not play this channel. Check the tuner or stream, then try again.'); return; }
       this.showOsd('Signal lost. Reconnecting...');
@@ -185,11 +192,29 @@ const Player = {
 
   setMode(mode) {
     this.mode = mode;
+    if (mode !== 'full') MotionPopup.hide();
     const scr = $('#screen');
     scr.className = mode === 'off' ? '' : mode;
     scr.style.cssText = '';
-    if (mode === 'pip') this.placePip();
+    if (mode === 'pip') {
+      this.placePip();
+      // Some TV web views keep the picture where it was until the video is redrawn.
+      const v = $('#video');
+      requestAnimationFrame(() => { v.style.visibility = 'hidden'; requestAnimationFrame(() => { v.style.visibility = ''; }); });
+    }
   },
+
+  // OK, Back or G while watching live: the guide, on this channel, with it still playing in the
+  // corner above. Back or Full screen there brings it back.
+  toGuide() {
+    const id = this.channel.id;
+    this.setMode('pip');
+    GuideView.inBar = false;
+    GuideView.setList(GuideView.listId, id);
+    if (GuideView.rows[GuideView.row] && GuideView.rows[GuideView.row].id === id) GuideView.t = Date.now();
+    App.go('guide');
+  },
+  full() { this.setMode('full'); this.showOsd(); },
 
   placePip() {
     const box = $('.preview');
@@ -205,6 +230,7 @@ const Player = {
   },
 
   showOsd(msg) {
+    if (this.mode === 'pip') { if (msg) toast(msg); GuideView.paintWatch(); return; } // the corner has no room for it
     const osd = $('#osd');
     let title = '', sub = '';
     if (this.rec) {
@@ -317,6 +343,8 @@ const Player = {
     choices.push({ label: $('#video').paused ? '▶ Play' : '❚❚ Pause', value: 'pause' });
     const favs = App.channelFavItems(ch);
     favs.forEach((f, i) => choices.push({ label: f.label, value: `fav${i}` }));
+    const num = App.numberItem(ch, async (n) => { ch.number = n; await App.loadAll(); this.showOsd(`${n} ${ch.name}`); });
+    if (num.length) choices.push({ label: num[0].label, value: 'num' });
     choices.push({ label: '🔢 Go to a channel number', value: 'pad' });
     choices.push({ label: '▦ Guide', value: 'guide' });
     choices.push({ label: '■ Stop watching', value: 'stopWatching' });
@@ -337,10 +365,11 @@ const Player = {
       else if (v === 'recordMenu') this.recordMenu();
       else if (v === 'live') this.goLive();
       else if (v === 'pause') this.togglePause();
-      else if (v === 'guide') { this.setMode('pip'); App.go('guide'); }
+      else if (v === 'guide') this.toGuide();
       else if (v === 'stopWatching') { this.stop(); App.render(); }
       else if (v === 'home') App.home();
       else if (v === 'pad') this.pad();
+      else if (v === 'num') await num[0].run();
       else if (typeof v === 'string' && v.startsWith('fav')) await favs[+v.slice(3)].run();
       else if (v === 'vlc') this.openVlc('live', ch.id);
     } catch (e) { toast(e.message); }
@@ -400,6 +429,7 @@ const Player = {
   onKey(e) {
     if (this.mode !== 'full' || Modal.top()) return false; // a menu over the video gets the keys
     const k = e.key;
+    if (this.channel && (k === 'Escape' || k === 'Backspace' || k === 'Enter')) { this.toGuide(); return true; }
     if (k === 'Escape' || k === 'Backspace') { this.stop(); App.render(); return true; }
     if (k === ' ' || k === 'MediaPlayPause') { this.togglePause(); return true; }
     if (k === 'ArrowLeft') { this.act('back'); return true; }
@@ -408,12 +438,54 @@ const Player = {
     if (this.rec && k === 'Enter' && this.breakNow()) { this.act('skip'); return true; }
     if (this.channel && k === 'ArrowUp') { this.surf(-1); return true; }
     if (this.channel && k === 'ArrowDown') { this.surf(1); return true; }
-    if (this.channel && (k === 'Enter' || /^[0-9.]$/.test(k) || k === '#')) { this.pad(/^[0-9.]$/.test(k) ? k : ''); return true; }
-    if (this.channel && (k === 'g' || k === 'G')) { this.setMode('pip'); App.go('guide'); return true; }
+    if (this.channel && (/^[0-9.]$/.test(k) || k === '#')) { this.pad(k === '#' ? '' : k); return true; }
+    if (this.channel && (k === 'g' || k === 'G')) { this.toGuide(); return true; }
     if (this.channel && (k === 'r' || k === 'R')) { this.recordMenu(); return true; }
     if (k === 'ContextMenu' || k === 'm' || k === 'M') { if (this.channel) this.optionsMenu(); else this.playbackMenu(); return true; }
     this.showOsd();
     return ['Enter', 'i', 'I'].includes(k);
+  },
+};
+
+// Arlo camera motion (Settings > Arlo, core/arlo.js): while live TV or a recording is playing full
+// screen, the camera's clip shows muted in the lower-left corner for 10 seconds, then goes. It's
+// only a picture over the video: the TV keeps playing and the remote keeps controlling it.
+// Arlo cameras take ~10s to send their first picture. That happens out of sight (the box is laid
+// out but invisible, so the picture still loads), and the pop-up appears with live video once
+// the first picture is in; the 10 seconds start then. No picture within WAIT_MS: nothing shows.
+const MotionPopup = {
+  SHOW_MS: 10000, WAIT_MS: 25000, // no picture by then: give up
+  timer: null, waitTimer: null, poll: null,
+
+  show(m) {
+    if (Player.mode !== 'full' || !['live', 'rec'].includes(Player.kind)) return;
+    this.hide();
+    const box = $('#motion'), img = $('img', box);
+    $('.cam', box).innerHTML = `<b>${esc(m.camera)}</b> <span>Motion · ${fmt.time(m.time || Date.now())}</span>`;
+    box.classList.add('pending');
+    box.classList.remove('hide');
+    img.onerror = () => this.hide();
+    img.src = server(m.view);
+    // A picture has arrived when the image has a size (load events are unreliable for a picture stream).
+    this.poll = setInterval(() => {
+      if (!img.naturalWidth) return;
+      clearInterval(this.poll); this.poll = null;
+      clearTimeout(this.waitTimer);
+      box.classList.remove('pending');
+      this.timer = setTimeout(() => this.hide(), this.SHOW_MS);
+    }, 200);
+    this.waitTimer = setTimeout(() => this.hide(), this.WAIT_MS);
+  },
+
+  hide() {
+    clearTimeout(this.timer); clearTimeout(this.waitTimer); clearInterval(this.poll);
+    this.timer = this.waitTimer = this.poll = null;
+    const box = $('#motion');
+    if (!box || box.classList.contains('hide')) return;
+    box.classList.add('hide');
+    const img = $('img', box);
+    img.onerror = null;
+    img.removeAttribute('src'); // ends the picture stream (and ffmpeg on the engine)
   },
 };
 
@@ -422,3 +494,5 @@ window.addEventListener('resize', () => Player.placePip());
 document.addEventListener('DOMContentLoaded', () => $('#screen').addEventListener('mousemove', () => {
   if (Player.mode === 'full' && $('#osd').classList.contains('hide')) Player.showOsd();
 }));
+// Clicking the picture in the guide's corner: full screen again.
+document.addEventListener('DOMContentLoaded', () => $('#screen').addEventListener('click', () => { if (Player.mode === 'pip') Player.full(); }));

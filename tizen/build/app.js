@@ -1,14 +1,27 @@
 // App shell: screen switching, remote-style keys, live updates from the
 // engine, and the record / series-timer dialogs shared by several screens.
-/* global HomeView, GuideView, DvrView, TimersView, SearchView, SettingsView, MoviesView, ShowsView, Player, Updates */
-const VIEWS = { home: HomeView, guide: GuideView, movies: MoviesView, shows: ShowsView, dvr: DvrView, timers: TimersView, search: SearchView, settings: SettingsView };
+/* global HomeView, GuideView, DvrView, TimersView, ArloView, SearchView, SettingsView, MoviesView, ShowsView, Player, Updates */
+const VIEWS = { home: HomeView, guide: GuideView, movies: MoviesView, shows: ShowsView, dvr: DvrView, timers: TimersView, arlo: ArloView, search: SearchView, settings: SettingsView };
 
 const App = {
   state: null, recordings: [], schedule: [], guideRows: [], view: null, viewName: 'home', history: [], lastChannel: null,
 
+  // Every channel in the guide, to pick one by number or name: the guide's own once it has them
+  // all (it fills in behind the first ones), until then the channel list, in guide order.
+  allChannels() {
+    if (GuideView.complete) return GuideView.all;
+    const on = new Set(this.state.sources.filter((s) => s.enabled).map((s) => s.id));
+    const num = (c) => (c.number ? parseFloat(c.number) : 1e9);
+    return this.state.channels.filter((c) => !c.hidden && on.has(c.sourceId))
+      .sort((a, b) => (b.favorite - a.favorite) || num(a) - num(b) || a.name.localeCompare(b.name));
+  },
+
   async loadAll() {
     [this.state, this.recordings, this.schedule] = await Promise.all([api.get('/api/state'), api.get('/api/recordings'), api.get('/api/schedule')]);
-    if (!this.guideRows.length) this.guideRows = await api.get(`/api/guide?from=${Date.now()}&to=${Date.now() + 3600000}`);
+    if (!this.guideRows.length) { // the top of the guide for now; the Guide fetches the rest
+      const g = await api.get(`/api/guide?from=${Date.now()}&to=${Date.now() + 3600000}&start=0&count=300`);
+      this.guideRows = Array.isArray(g) ? g : g.rows;
+    }
     const n = this.recordings.filter((r) => r.status === 'recording').length;
     $('#recInd').classList.toggle('on', n > 0);
     $('#recText').textContent = n > 1 ? `Recording ${n} shows` : 'Recording';
@@ -117,6 +130,14 @@ const App = {
     });
   },
 
+  // Your own number for just this channel (101 KAAL can be 6); the provider's is kept.
+  // after(number): what to do once it's changed.
+  numberItem(ch, after = () => this.loadAll()) {
+    const c = this.state.channels.find((x) => x.id === ch.id);
+    if (!c) return [];
+    return [{ label: `🔢 Change channel number (now ${c.number})...`, run: async () => { const done = await SettingsView.numberDialog(c); if (done) await after(done.number); } }];
+  },
+
   // Recording choices for a channel and the show on it, for the hold-OK menus.
   recordItems(row, p) {
     const now = Date.now();
@@ -151,7 +172,7 @@ const App = {
   // has no number buttons), the mouse, a finger, or the number keys. Shows the channel as you
   // type. -> the channel picked, or null. first: a digit already pressed.
   channelPad(first = '', title = 'Go to channel') {
-    const all = GuideView.all.length ? GuideView.all : this.guideRows.length ? this.guideRows : this.state.channels.filter((c) => !c.hidden);
+    const all = this.allChannels();
     const find = (n) => n && (all.find((c) => String(c.number) === n) || all.find((c) => String(c.number).startsWith(n)));
     let typed = String(first);
     return Modal.open((m, close) => {
@@ -282,7 +303,7 @@ const App = {
 
   // channelId: start with that channel picked (e.g. from the red button on a channel without listings)
   manualDialog(channelId) {
-    const chans = (this.guideRows.length ? this.guideRows : this.state.channels.filter((c) => !c.hidden));
+    const chans = this.allChannels();
     if (!chans.length) return toast('Add a tuner or provider first.');
     const pick = chans.find((c) => c.id === channelId);
     const d = new Date(Date.now() + 3600000);
@@ -410,8 +431,9 @@ let refreshTimer;
 // What changed decides what the screens must read again: new channels or listings mean the
 // guide (and, for a new provider, its movies and shows) are out of date.
 function onEvent(e) {
-  let what = '';
-  try { what = JSON.parse(e.data).what; } catch (_) { /* a plain ping */ }
+  let what = '', msg = {};
+  try { msg = JSON.parse(e.data); what = msg.what; } catch (_) { /* a plain ping */ }
+  if (what === 'arlo') { if (msg.motion) MotionPopup.show(msg.motion); return; } // a camera saw motion (player.js)
   if (['channels', 'sources', 'guides'].includes(what)) { GuideView.loaded = [0, 0]; App.guideRows = []; }
   if (what === 'sources') for (const v of [MoviesView, ShowsView]) { v.cats = null; v.items = {}; }
   scheduleRefresh();
@@ -442,8 +464,14 @@ function tickClock() {
   setInterval(() => { if (App.view === GuideView && !Modal.top()) GuideView.tick(); }, 60000);
   await window.GTV_READY; // TV app: wait until it has found the PC
   await App.loadAll();
-  App.viewName = VIEWS[location.hash.slice(1)] ? location.hash.slice(1) : 'home';
+  try { App.lastChannel = localStorage.getItem('gtv.lastChannel'); } catch (_) { /* private mode */ }
+  if (!App.state.channels.some((c) => c.id === App.lastChannel)) App.lastChannel = null;
+  // A reload keeps the screen you were on; a fresh start opens what Settings > When it starts says.
+  const fresh = !VIEWS[location.hash.slice(1)], start = startChoice();
+  if (start.list !== 'last') GuideView.setList(start.list || null);
+  App.viewName = !fresh ? location.hash.slice(1) : start.open === 'home' ? 'home' : 'guide';
   await App.render();
+  if (fresh && start.open === 'live' && App.lastChannel) Player.play('live', App.lastChannel);
   if (!window.GTV_SERVER) history.pushState({ gtv: 1 }, '', location.hash); // the TV apps have their own Back
   Updates.startCheck();
   connectEvents();

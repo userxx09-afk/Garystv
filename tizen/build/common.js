@@ -6,7 +6,24 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 
 // The PC running GarysTV. Empty on the PC itself (same origin); the TV app sets
 // window.GTV_SERVER (e.g. "http://192.168.1.20:5480") before these scripts run.
-const server = (p) => (window.GTV_SERVER || '') + p;
+// Managing a linked GarysTV at another location (Settings > Other locations): everything for it
+// goes through this one, which passes it on (core/peers.js). Until "Back" (or the app is restarted).
+const MANAGING = (() => { try { return JSON.parse(sessionStorage.getItem('gtv.manage') || 'null'); } catch (_) { return null; } })();
+const server = (p) => (window.GTV_SERVER || '') + (MANAGING ? `/peer/${MANAGING.id}` : '') + p;
+function manageGarysTV(peer) {
+  try { if (peer) sessionStorage.setItem('gtv.manage', JSON.stringify({ id: peer.id, name: peer.name })); else sessionStorage.removeItem('gtv.manage'); } catch (_) { /* private mode */ }
+  location.hash = '';
+  location.reload();
+}
+if (MANAGING) {
+  document.addEventListener('DOMContentLoaded', () => {
+    const bar = document.createElement('div');
+    bar.className = 'managing';
+    bar.innerHTML = `<span>You're managing <b>${esc(MANAGING.name)}</b> at another location.</span><span class="btn nav" data-key="manage-back">‹ Back to this GarysTV</span>`;
+    bar.querySelector('.btn').onclick = () => manageGarysTV(null);
+    document.body.prepend(bar);
+  });
+}
 
 const api = {
   async call(method, url, body) {
@@ -97,23 +114,36 @@ const Nav = {
       if (cur) this.focus(cur, { scroll: false });
     }
     if (!cur) { this.focus(items.find((el) => !el.closest('#topnav')) || items[0]); return true; }
+    // Like reading: ←→ along the row you're on (at its end, on to the next row's first item in
+    // the same group); ↑↓ to the nearest row above or below, in the same column when there's one.
     const a = cur.getBoundingClientRect();
-    const ax = a.left + a.width / 2, ay = a.top + a.height / 2;
-    let best = null, bestScore = Infinity;
-    for (const el of items) {
-      if (el === cur) continue;
-      const b = el.getBoundingClientRect();
-      const bx = b.left + b.width / 2, by = b.top + b.height / 2;
-      const dx = bx - ax, dy = by - ay;
-      let primary, secondary;
-      if (dir === 'up') { if (b.bottom > a.top + 2) continue; primary = -dy; secondary = Math.abs(dx); }
-      if (dir === 'down') { if (b.top < a.bottom - 2) continue; primary = dy; secondary = Math.abs(dx); }
-      if (dir === 'left') { if (b.right > a.left + 2) continue; primary = -dx; secondary = Math.abs(dy); }
-      if (dir === 'right') { if (b.left < a.right - 2) continue; primary = dx; secondary = Math.abs(dy); }
-      const score = primary + secondary * 2.5;
-      if (score < bestScore) { bestScore = score; best = el; }
+    const others = items.filter((el) => el !== cur).map((el) => ({ el, b: el.getBoundingClientRect() }));
+    const cx = (r) => r.left + r.width / 2;
+    const sameRow = (b) => Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > Math.min(a.height, b.height) / 3;
+    const sameCol = (b) => Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0;
+    const pick = (list, score) => list.reduce((best, o) => (!best || score(o) < score(best) ? o : best), null);
+    let best = null;
+    if (dir === 'left' || dir === 'right') {
+      const right = dir === 'right';
+      const row = others.filter(({ b }) => sameRow(b) && (right ? b.left >= a.right - 2 : b.right <= a.left + 2));
+      best = pick(row, ({ b }) => (right ? b.left - a.right : a.left - b.right));
+      if (!best) { // end of the row: the next row's first item (or the previous row's last) in this group
+        const group = (el) => el.closest('.modal, #topnav, .menu, .tabs, .g-bar, .actions, .row, .list, .menu-list, .posters, .cards, .tiles, .seasons, table, .box, .pad');
+        const g = group(cur);
+        const order = items.filter((el) => group(el) === g).map((el) => ({ el, b: el.getBoundingClientRect() }))
+          .sort((p, q) => (Math.abs(p.b.top - q.b.top) < Math.min(p.b.height, q.b.height) / 2 ? p.b.left - q.b.left : p.b.top - q.b.top));
+        const i = order.findIndex((o) => o.el === cur);
+        best = g && order[i + (right ? 1 : -1)];
+      }
+    } else {
+      const down = dir === 'down';
+      const gap = ({ b }) => (down ? b.top - a.bottom : a.top - b.bottom);
+      const ahead = others.filter((o) => gap(o) >= -2);
+      const pool = ahead.some(({ b }) => sameCol(b)) ? ahead.filter(({ b }) => sameCol(b)) : ahead;
+      const nearest = pick(pool, gap);
+      if (nearest) best = pick(pool.filter((o) => gap(o) <= gap(nearest) + nearest.b.height / 2), ({ b }) => Math.abs(cx(b) - cx(a)));
     }
-    if (best) this.focus(best);
+    if (best) this.focus(best.el);
     return !!best;
   },
   handle(e) {
@@ -192,8 +222,10 @@ const Modal = {
       // Reachable with the remote's arrows like the buttons; OK on it brings up the TV's keyboard.
       input._onFocus = () => input.focus();
       input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && input.value.trim()) { e.preventDefault(); done(); }
-        if (e.key === 'ArrowDown') { e.preventDefault(); input.blur(); Nav.focus($('#p-ok', m)); }
+        // Stopped here: otherwise the same Enter reaches the screen and presses what's highlighted
+        // there again (the "New list" card, which asked for a name all over again).
+        if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); if (input.value.trim()) done(); }
+        if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); input.blur(); Nav.focus($('#p-ok', m)); }
       });
     });
   },

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GarysTV - Sign in</title>
+  <link rel="icon" href="icon.png">
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    /* Shown instead of the screens to a device at another location until it signs in (core/auth.js). */
+    .signin { max-width: 30rem; margin: 12vh auto 0; padding: 0 16px; }
+    .signin input { width: 100%; box-sizing: border-box; font-size: 1.3rem; padding: .7rem .8rem; margin: .8rem 0; border-radius: 8px; border: 2px solid #2a3a55; background: #0a1424; color: inherit; }
+    .signin input:focus, .signin button:focus { outline: 3px solid #4da3ff; outline-offset: 2px; }
+    .signin button { font-size: 1.2rem; padding: .7rem 1.4rem; border-radius: 8px; border: 0; background: #2f6fd6; color: #fff; cursor: pointer; }
+    .signin .why { margin-top: 1rem; opacity: .75; line-height: 1.45; }
+    .signin .err { color: #ffcc55; min-height: 1.4em; }
+  </style>
+</head>
+<body>
+  <div class="signin">
+    <h1><img src="logo.jpg" alt="" style="height:1.4em;vertical-align:middle;border-radius:6px"> GarysTV</h1>
+    <div>This GarysTV is at another location. Enter its password to use it from here.</div>
+    <form id="f">
+      <input id="pw" type="password" autocomplete="current-password" placeholder="Password" autofocus>
+      <div class="err" id="err"></div>
+      <button type="submit">Sign in</button>
+    </form>
+    <div class="why">This device is remembered for a year. The password is set at home, in Settings &gt; Other locations.</div>
+  </div>
+  <script>
+    // A name for this device in the list of signed-in devices.
+    function device() {
+      var u = navigator.userAgent;
+      if (/AFT|Fire TV/i.test(u)) return 'Fire TV';
+      if (/Tizen|SMART-TV/i.test(u)) return 'Samsung TV';
+      if (/Electron/i.test(u)) return 'GarysTV app on Windows';
+      if (/iPhone|iPad/i.test(u)) return /iPad/.test(u) ? 'iPad' : 'iPhone';
+      if (/Android/i.test(u)) return 'Android';
+      if (/Windows/i.test(u)) return 'Windows browser';
+      if (/Mac OS/i.test(u)) return 'Mac browser';
+      return 'A browser';
+    }
+    document.getElementById('f').onsubmit = function (e) {
+      e.preventDefault();
+      var err = document.getElementById('err');
+      err.textContent = '';
+      fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: document.getElementById('pw').value, device: device() }) })
+        .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || 'Could not sign in'); }); })
+        .then(function () { location.reload(); })
+        .catch(function (x) { err.textContent = x.message; });
+    };
+  </script>
+</body>
+</html>

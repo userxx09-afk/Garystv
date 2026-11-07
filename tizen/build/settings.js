@@ -1,12 +1,24 @@
 // Settings: tuners & IPTV providers, guide sources, matching channels to the
 // guide, recording options and status.
-/* global App, Updates, GTVAndroid */
+/* global App, Updates, GTVAndroid, categoryOf, CATEGORY_RULES, GuideView, Player */
 const SettingsView = {
   title: 'Settings',
   section: 'sources',
   chFilter: '',
   hints: [['↑↓←→', 'Move'], ['OK', 'Select'], ['Tab', 'Next field'], ['Esc', 'Back']],
-  sections: [['sources', 'Antenna & Providers'], ['guide', 'Guide data'], ['channels', 'Channels & matching'], ['recording', 'Recording'], ['media', 'Movies & Shows'], ['updates', 'Updates'], ['status', 'Status']],
+  sections: [['sources', 'Antenna & Providers'], ['guide', 'Guide data'], ['channels', 'Channels & matching'], ['startup', 'When it starts'], ['recording', 'Recording'], ['media', 'Movies & Shows'], ['arlo', 'Arlo'], ['cta', 'CTA'], ['remote', 'Other locations'], ['updates', 'Updates'], ['backup', 'Backup & restore'], ['status', 'Status']],
+
+  // With the activity log highlighted (Status), ↑↓ scroll it; at its top, ↑ moves on as usual.
+  onKey(e) {
+    const log = Nav.current;
+    if (!log || !log.matches('pre.log') || !['ArrowUp', 'ArrowDown'].includes(e.key)) return false;
+    const down = e.key === 'ArrowDown';
+    const atTop = log.scrollTop <= 0;
+    const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 2;
+    if ((!down && atTop) || (down && atEnd)) return false; // let the highlight move
+    log.scrollBy({ top: (down ? 1 : -1) * Math.max(40, log.clientHeight * 0.6) });
+    return true;
+  },
 
   render(root) {
     root.innerHTML = `<div class="settings">
@@ -160,33 +172,62 @@ const SettingsView = {
     });
   },
 
+  // Hold OK, M or a long press on a channel in Channels & matching: what you can change about it.
+  menu() {
+    const tr = Nav.current && Nav.current.closest('tr[data-ch]');
+    const c = tr && App.state.channels.find((x) => x.id === tr.dataset.ch);
+    if (!c) return {};
+    return {
+      title: `${c.number} ${c.name}`,
+      items: [
+        ...App.numberItem(c),
+        { label: 'Change its guide listing...', run: () => this.matchDialog(c) },
+        { label: c.hidden ? 'Show it in the guide' : 'Hide it from the guide', run: () => api.put(`/api/channels/${encodeURIComponent(c.id)}`, { hidden: !c.hidden }) },
+        { label: c.favorite ? '📌 Unpin it from the top of the guide' : '📌 Pin it to the top of the guide', run: () => api.put(`/api/channels/${encodeURIComponent(c.id)}`, { favorite: !c.favorite }) },
+      ],
+    };
+  },
+
   // ---------- channels ----------
   channels(pane) {
     const st = App.state;
     const gById = new Map(st.guideChannels.map((g) => [g.id, g]));
     const srcName = new Map(st.sources.map((s) => [s.id, s.name]));
     const f = this.chFilter.toLowerCase();
-    const list = st.channels.filter((c) => !f || `${c.number} ${c.name} ${c.group}`.toLowerCase().includes(f));
+    const list = st.channels.filter((c) => !f || `${c.number} ${c.name} ${c.group} ${srcName.get(c.sourceId) || ''}`.toLowerCase().includes(f))
+      .sort(byNumber);
     const matched = st.channels.filter((c) => c.guideId).length;
     const conf = (c) => (c.mapMode === 'manual' ? ['man', 'Set by you'] : c.mapMode === 'none' ? ['lo', 'No guide'] : !c.guideId ? ['lo', 'No match'] : c.matchScore >= 90 ? ['hi', 'Sure'] : c.matchScore >= 50 ? ['md', 'Likely'] : ['lo', 'Check']);
     pane.innerHTML = `
-      <div class="box"><h3>Match channels to the guide</h3>
-        <div class="s">${matched} of ${st.channels.length} channels have guide listings. GarysTV matches by channel number, call sign and name. Check any marked <span class="conf md">Likely</span> or <span class="conf lo">Check</span>, and hide channels you never watch.</div>
-        <div class="row"><div class="field" style="flex:1"><input id="chf" placeholder="Filter channels..." value="${esc(this.chFilter)}"></div><div class="btn nav" id="rematch">↻ Re-match automatically</div></div></div>
-      <table class="chs"><thead><tr><th>Show</th><th>★</th><th>Ch</th><th>Name</th><th>From</th><th>Guide listing</th><th></th></tr></thead><tbody>
+      <div class="box"><h3>Your channels</h3>
+        <div class="s">${matched} of ${st.channels.length} channels have guide listings. Highlight anything below and press OK to change it, or hold OK on a channel for all its choices.</div>
+        <ul class="howto">
+          <li><b>Show</b> Untick a channel you never watch to hide it from the guide.</li>
+          <li><b>📌</b> Pin a channel to keep it at the top of the guide, above every other.</li>
+          <li><b>Ch</b> Press OK on a number to give that channel your own (101 can be 6). The provider's stays as "was 101".</li>
+          <li><b>Guide listing</b> What GarysTV thinks is on that channel. Look at any marked <span class="conf md">Likely</span> or <span class="conf lo">Check</span>, and use <b>Change</b> to pick the right one or set the number there too.</li>
+          <li><b>🔢 Renumber</b> Numbers a whole group at once: what the filter shows, one provider, or every channel.</li>
+          <li><b>Filter</b> Type part of a name, number, group or provider to find channels.</li>
+          <li><b>★ Favorites</b> lists (Gary, Barb...) are set in the guide: hold OK on a channel there.</li>
+        </ul>
+        <div class="row"><div class="field" style="flex:1"><input id="chf" class="nav" data-key="chf" placeholder="Filter channels..." value="${esc(this.chFilter)}"></div><div class="btn nav" id="renumber">🔢 Renumber...</div><div class="btn nav" id="rematch">↻ Re-match automatically</div></div></div>
+      <table class="chs"><thead><tr><th>Show</th><th title="Pinned to the top of the guide">📌</th><th>Ch</th><th>Name</th><th>From</th><th>Guide listing</th><th></th></tr></thead><tbody>
       ${list.slice(0, 400).map((c) => {
         const g = gById.get(c.guideId);
         const [cls, label] = conf(c);
-        return `<tr data-ch="${esc(c.id)}"><td><input type="checkbox" data-k="show" ${c.hidden ? '' : 'checked'}></td>
-          <td><span class="nav" data-k="fav" style="cursor:pointer;color:${c.favorite ? 'var(--yellow)' : 'var(--dim)'}">★</span></td>
-          <td><b>${esc(c.number)}</b></td><td>${esc(c.name)}${c.group ? `<div class="s" style="font-size:.8rem">${esc(c.group)}</div>` : ''}</td><td class="s">${esc(srcName.get(c.sourceId) || '')}</td>
+        return `<tr data-ch="${esc(c.id)}"><td><input type="checkbox" class="nav" data-key="show-${esc(c.id)}" data-k="show" ${c.hidden ? '' : 'checked'}></td>
+          <td><span class="nav" data-key="pin-${esc(c.id)}" data-k="fav" title="${c.favorite ? 'Pinned to the top of the guide' : 'Pin to the top of the guide'}" style="cursor:pointer;${c.favorite ? '' : 'opacity:.3;filter:grayscale(1)'}">📌</span></td>
+          <td><span class="nav" data-key="num-${esc(c.id)}" data-k="num" style="cursor:pointer" title="Change the channel number"><b>${esc(c.number)}</b></span>${c.alias ? `<div class="s" style="font-size:.75rem">was ${esc(c.sourceNumber)}</div>` : ''}</td><td>${esc(c.name)}${c.group ? `<div class="s" style="font-size:.8rem">${esc(c.group)}</div>` : ''}</td><td class="s">${esc(srcName.get(c.sourceId) || '')}</td>
           <td>${g ? `${esc(g.names[0])} <span class="s">${esc(g.number || '')} · ${esc(g.providerName)}</span>` : '<span class="s">—</span>'}${c.matchReason && c.mapMode === 'auto' ? `<div class="s" style="font-size:.8rem">by ${esc(c.matchReason)}</div>` : ''}</td>
-          <td style="white-space:nowrap"><span class="conf ${cls}">${label}</span> <span class="btn nav" data-k="change" style="padding:.25rem .7rem;font-size:.85rem">Change</span></td></tr>`;
+          <td style="white-space:nowrap"><span class="conf ${cls}">${label}</span> <span class="btn nav" data-key="chg-${esc(c.id)}" data-k="change" style="padding:.25rem .7rem;font-size:.85rem">Change</span></td></tr>`;
       }).join('')}</tbody></table>
       ${list.length > 400 ? `<div class="s">Showing 400 of ${list.length}. Use the filter to find others.</div>` : ''}`;
     const fin = $('#chf', pane);
+    fin.onclick = () => fin.focus(); // OK on it brings up the keyboard
+    fin.addEventListener('keydown', (e) => { if (e.key === 'ArrowDown' || e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); fin.blur(); Nav.move('down'); } });
     let t;
     fin.oninput = () => { clearTimeout(t); t = setTimeout(() => { this.chFilter = fin.value; this.channels(pane); const i = $('#chf'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 300); };
+    $('#renumber', pane).onclick = () => this.renumberDialog(list, this.chFilter.trim());
     $('#rematch', pane).onclick = async () => {
       for (const c of st.channels.filter((x) => x.mapMode !== 'auto')) await api.put(`/api/channels/${encodeURIComponent(c.id)}`, { mapMode: 'auto' });
       await api.post('/api/guides/refresh');
@@ -199,13 +240,107 @@ const SettingsView = {
       $('[data-k="show"]', tr).onchange = (e) => put({ hidden: !e.target.checked });
       $('[data-k="fav"]', tr).onclick = () => put({ favorite: !c.favorite });
       $('[data-k="change"]', tr).onclick = () => this.matchDialog(c);
+      $('[data-k="num"]', tr).onclick = () => this.numberDialog(c);
+    });
+  },
+
+  // Your own number for one channel; "Use the provider's" puts theirs back.
+  numberDialog(c) {
+    const theirs = c.sourceNumber ?? c.number;
+    return Modal.open((m, close) => {
+      m.innerHTML = `<div class="title">Channel number for ${esc(c.name)}</div>
+        <div class="field"><label>Your number (the provider's is ${esc(theirs || 'none')})</label><input id="nnum" class="nav" inputmode="decimal" maxlength="9" value="${esc(c.alias || '')}" placeholder="${esc(theirs)}"></div>
+        <div class="s" id="nwarn" style="min-height:1.2em"></div>
+        <div class="actions"><div class="btn nav primary" id="nok">Save</div>${c.alias ? `<div class="btn nav" id="nback">Use the provider's (${esc(theirs)})</div>` : ''}<div class="btn nav" id="nno">Cancel</div></div>`;
+      const input = $('#nnum', m);
+      const warn = () => {
+        const v = input.value.trim(), other = v && App.state.channels.find((x) => x.id !== c.id && !x.hidden && String(x.number) === v);
+        $('#nwarn', m).textContent = other ? `${other.name} has ${v} too; they'll sit side by side.` : '';
+      };
+      const save = async (alias) => {
+        try {
+          await api.put(`/api/channels/${encodeURIComponent(c.id)}`, { alias });
+          toast(alias ? `${c.name} is now channel ${alias}` : `${c.name} is back on ${theirs}`);
+          close({ number: alias || theirs });
+        } catch (e) { toast(e.message); }
+      };
+      input.onclick = () => input.focus(); // OK on it brings up the keyboard; just landing on it doesn't
+      input.oninput = warn;
+      input.addEventListener('keydown', (e) => { // stopped here so the screen underneath doesn't get it too
+        if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); save(input.value.trim()); }
+        if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); input.blur(); Nav.focus($('#nok', m)); }
+      });
+      $('#nok', m).onclick = () => save(input.value.trim());
+      if (c.alias) $('#nback', m).onclick = () => save('');
+      $('#nno', m).onclick = () => close(null);
+      warn();
+    });
+  },
+
+  // Number many channels at once: the ones the filter shows, one provider's, or all of them,
+  // in the order you pick, from a starting number. Hidden channels are left alone.
+  renumberDialog(shown, filterText) {
+    const st = App.state;
+    const visible = (cs) => cs.filter((c) => !c.hidden);
+    const sets = [];
+    if (filterText) sets.push({ key: 'shown', label: `The ones matching "${filterText}"`, list: visible(shown) });
+    for (const src of st.sources) {
+      const cs = visible(st.channels.filter((c) => c.sourceId === src.id));
+      if (cs.length) sets.push({ key: `src:${src.id}`, label: `Everything from ${src.name}`, list: cs });
+    }
+    sets.push({ key: 'all', label: 'Every channel', list: visible(st.channels) });
+    const rows = new Map((App.guideRows || []).map((r) => [r.id, r])); // the guide's rows know what's on, for channels with no group
+    const rank = (c) => { const i = CATEGORY_RULES.findIndex(([n]) => n === categoryOf(rows.get(c.id) || c)); return i < 0 ? 99 : i; };
+    const theirs = (c) => parseFloat(c.sourceNumber ?? c.number) || 1e9;
+    const orders = {
+      now: ['As they are now', byNumber],
+      name: ['A to Z by name', (a, b) => byName(a, b)],
+      cat: ['By category (Sports, News, Kids...), then name', (a, b) => rank(a) - rank(b) || (a.group || '').localeCompare(b.group || '', undefined, { numeric: true }) || byName(a, b)],
+      provider: ["The provider's order", (a, b) => theirs(a) - theirs(b)],
+    };
+    return Modal.open((m, close) => {
+      m.innerHTML = `<div class="title">Renumber channels</div>
+        <div class="field"><label>Which channels</label><select id="rset" class="nav">${sets.map((x) => `<option value="${esc(x.key)}">${esc(x.label)} (${x.list.length})</option>`).join('')}</select></div>
+        <div class="field"><label>In this order</label><select id="rord" class="nav">${Object.entries(orders).map(([k, [label]]) => `<option value="${k}">${esc(label)}</option>`).join('')}</select></div>
+        <div class="field"><label>Starting at</label><input id="rstart" class="nav" inputmode="numeric" maxlength="5" value="1"></div>
+        <div class="s" id="rsum" style="min-height:2.4em"></div>
+        <div class="actions"><div class="btn nav primary" id="rgo">Renumber</div><div class="btn nav" id="rback">Use the provider's numbers</div><div class="btn nav" id="rno">Cancel</div></div>`;
+      const pick = () => {
+        const set = sets.find((x) => x.key === $('#rset', m).value);
+        return { set, list: [...set.list].sort(orders[$('#rord', m).value][1]), start: parseInt($('#rstart', m).value, 10) };
+      };
+      const sum = () => {
+        const { list, start } = pick();
+        if (!(start > 0)) { $('#rsum', m).textContent = 'Give the first channel number.'; return; }
+        const ids = new Set(list.map((c) => c.id)), end = start + list.length - 1;
+        const clash = visible(st.channels).filter((c) => !ids.has(c.id) && parseFloat(c.number) >= start && parseFloat(c.number) <= end).length;
+        $('#rsum', m).innerHTML = `${list.length === 1 ? '1 channel becomes' : `${list.length} channels become`} ${start}${end > start ? ` to ${end}` : ''}: ${esc(list.slice(0, 3).map((c, i) => `${start + i} ${c.name}`).join(', '))}${list.length > 3 ? '...' : ''}`
+          + (clash ? `<br><span style="color:var(--yellow)">${clash} other channels already use numbers in that range; they'll sit side by side.</span>` : '');
+      };
+      const send = async (body, done) => {
+        try { const r = await api.post('/api/channels/renumber', body); toast(done(r.count), 5000); close(true); } catch (e) { toast(e.message); }
+      };
+      $('#rset', m).onchange = sum;
+      $('#rord', m).onchange = sum;
+      const start = $('#rstart', m);
+      start.oninput = sum;
+      start.onclick = () => start.focus();
+      start.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); start.blur(); Nav.focus($('#rgo', m)); } });
+      $('#rgo', m).onclick = () => { const { list, start: n } = pick(); send({ ids: list.map((c) => c.id), start: n }, (k) => `Renumbered ${k} channel${k === 1 ? '' : 's'} from ${n}.`); };
+      $('#rback', m).onclick = () => { const { set } = pick(); send({ ids: set.list.map((c) => c.id), clear: true }, (k) => `${k} channel${k === 1 ? ' is' : 's are'} back on the provider's numbers.`); };
+      $('#rno', m).onclick = () => close(null);
+      sum();
     });
   },
 
   matchDialog(c) {
     const all = App.state.guideChannels;
     return Modal.open((m, close) => {
-      m.innerHTML = `<div class="title">Guide listing for ${esc(c.number)} ${esc(c.name)}</div>
+      const theirs = c.sourceNumber ?? c.number;
+      m.innerHTML = `<div class="title">${esc(c.number)} ${esc(c.name)}</div>
+        <div class="row" style="align-items:flex-end;gap:.6rem"><div class="field" style="margin:0"><label>Channel number (the provider's is ${esc(theirs || 'none')})</label><input id="mnum" class="nav" inputmode="decimal" maxlength="9" style="width:9rem" value="${esc(c.number)}"></div>
+          <div class="btn nav" id="mnumok">Save number</div>${c.alias ? `<div class="btn nav" id="mnumback">Use ${esc(theirs)}</div>` : ''}</div>
+        <div class="s" style="margin:.8rem 0 .3rem">Guide listing</div>
         <div class="field"><input id="mq" placeholder="Search guide channels (number, call sign, name)..."></div>
         <div class="list" id="ml" style="max-height:45vh"></div>
         <div class="actions"><div class="btn nav" data-v="auto">Match automatically</div><div class="btn nav" data-v="none">No guide for this channel</div><div class="btn nav" data-v="">Cancel</div></div>`;
@@ -215,6 +350,19 @@ const SettingsView = {
         $('#ml', m).innerHTML = hits.map((g) => `<div class="item nav" data-g="${esc(g.id)}"><div class="main"><div class="t">${esc(g.number || '')} ${esc(g.names[0])}</div><div class="s">${esc(g.names.slice(1).join(' · '))} · ${esc(g.providerName)}</div></div></div>`).join('') || '<div class="empty">No guide channels match.</div>';
         $$('[data-g]', m).forEach((el) => { el.onclick = async () => { await api.put(`/api/channels/${encodeURIComponent(c.id)}`, { guideId: el.dataset.g }); close(true); }; });
       };
+      // The number here too: just this channel; the provider's is kept.
+      const saveNum = async (v) => {
+        const alias = v === theirs ? '' : v;
+        try { await api.put(`/api/channels/${encodeURIComponent(c.id)}`, { alias }); toast(alias ? `${c.name} is now channel ${alias}` : `${c.name} is on ${theirs}`); close(true); } catch (e) { toast(e.message); }
+      };
+      const num = $('#mnum', m);
+      num.onclick = () => num.focus(); // OK on it brings up the keyboard; just landing on it doesn't
+      num.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); saveNum(num.value.trim()); }
+        if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); num.blur(); Nav.focus($('#ml .nav', m) || $('[data-v]', m)); }
+      });
+      $('#mnumok', m).onclick = () => saveNum(num.value.trim());
+      if (c.alias) $('#mnumback', m).onclick = () => saveNum('');
       $('#mq', m).oninput = (e) => paint(e.target.value);
       paint(c.number || '');
       $('#mq', m).value = c.number || '';
@@ -227,6 +375,27 @@ const SettingsView = {
         };
       });
     });
+  },
+
+  // ---------- what this TV opens to ----------
+  // Kept on this TV only, so each TV (and each person's) can start its own way.
+  startup(pane) {
+    const s = startChoice(), lists = App.state.favLists || [];
+    const opens = [{ value: 'home', label: 'The Home screen' }, { value: 'guide', label: 'The Guide' }, { value: 'live', label: 'The last channel watched, playing' }];
+    const shows = [{ value: 'last', label: 'Whatever was showing last time' }, { value: '', label: 'All channels' },
+      ...(lists.length > 1 ? [{ value: '*', label: '★ All favorites' }] : []), ...lists.map((l) => ({ value: l.id, label: `★ ${l.name}` }))];
+    const last = App.lastChannel && App.state.channels.find((c) => c.id === App.lastChannel);
+    pane.innerHTML = `<div class="box"><h3>When GarysTV starts on this TV</h3>
+      <div class="s">Saved on this TV only, so every TV can start its own way. Use ← → (or OK) to change each one.</div>
+      <div id="stRows" style="display:grid;gap:.5rem;margin:.8rem 0;max-width:40rem"></div>
+      <div class="s">${last ? `Last channel watched here: ${esc(last.number)} ${esc(last.name)}` : 'No channel watched on this TV yet; until then it opens the Guide.'}</div></div>`;
+    const cur = { ...s };
+    const save = () => { try { localStorage.setItem('gtv.start', JSON.stringify(cur)); } catch (_) { /* private mode */ } };
+    const at = (vals, v) => Math.max(0, vals.findIndex((x) => x.value === v));
+    const rows = $('#stRows', pane);
+    rows.append(optionRow('Open', opens, at(opens, s.open), (v) => { cur.open = v; save(); }));
+    rows.append(optionRow('Guide shows', shows, at(shows, s.list), (v) => { cur.list = v; save(); }));
+    rows.firstChild.dataset.key = 'st-open'; rows.lastChild.dataset.key = 'st-list';
   },
 
   // ---------- recording ----------
@@ -288,12 +457,157 @@ const SettingsView = {
     $('#tmdbClear', pane).onclick = async () => { await api.post('/api/tmdb/clear'); toast('Saved movie & show info cleared. It is looked up again as you browse.'); };
   },
 
+  // ---------- Arlo cameras ----------
+  // Motion on a ticked camera pops its clip up in the corner while TV plays (core/arlo.js,
+  // player.js MotionPopup). Saved on the GarysTV engine, so every TV shares it.
+  async arlo(pane) {
+    const cur = () => ({ enabled: false, url: 'http://127.0.0.1:8090', cameras: [], ...(App.state.settings.arlo || {}) });
+    const save = async (patch, msg) => {
+      try { await api.put('/api/settings', { arlo: { ...cur(), ...patch } }); App.state.settings.arlo = { ...cur(), ...patch }; if (msg) toast(msg); } catch (e) { toast(e.message); }
+    };
+    const s = cur();
+    pane.innerHTML = `<div class="box"><h3>Arlo cameras</h3>
+        <div class="s">When a ticked camera sees motion, its clip shows (without sound) in the lower-left corner for 10 seconds while you watch live TV or a recording. The TV keeps playing, and the remote keeps working as usual. The clips come from <b>Arlo Keeper</b>.</div>
+        <label class="check nav" data-key="arlo-on" style="margin:.8rem 0"><input type="checkbox" id="arloOn" ${s.enabled ? 'checked' : ''}> Enable Arlo integration</label>
+        <div class="field"><label>Arlo Keeper address</label><input id="arloUrl" class="nav" data-key="arlo-url" value="${esc(s.url)}" placeholder="http://192.168.5.210:8090"></div>
+        <div class="actions"><div class="btn nav" id="arloUrlSave" data-key="arlo-url-save">Save address</div><div class="btn nav" id="arloTest" data-key="arlo-test">Show a test pop-up</div></div>
+        <div class="s" style="font-size:.85rem">The test starts Live TV here (last channel), then shows Arlo Keeper's newest clip on every screen that's playing TV. Press Back to come back.</div></div>
+      <div class="box"><h3>Cameras that pop up</h3><div id="arloCams" class="s">Asking Arlo Keeper...</div></div>`;
+    $('#arloOn', pane).onchange = (e) => save({ enabled: e.target.checked }, e.target.checked ? 'Arlo turned on' : 'Arlo turned off');
+    const url = $('#arloUrl', pane);
+    url._onFocus = () => url.focus();
+    $('#arloUrlSave', pane).onclick = async () => { await save({ url: url.value.trim() || 'http://127.0.0.1:8090' }, 'Address saved'); this.arloCameras(pane, save, cur); };
+    // The pop-up only shows over TV that's playing full screen, and Settings isn't: start Live TV
+    // on the last channel, wait for its picture (up to 20s), then send the test.
+    $('#arloTest', pane).onclick = async () => {
+      const ch = App.lastChannel || (App.guideRows && App.guideRows[0] && App.guideRows[0].id) || (App.state.channels.find((c) => !c.hidden) || {}).id;
+      if (!ch) return toast('No channels yet to test over - add your tuner first.', 6000);
+      if (!(Player.mode === 'full' && Player.kind === 'live')) Player.play('live', ch);
+      toast('Starting Live TV for the test...', 4000);
+      const video = $('#video'), until = Date.now() + 20000;
+      while (Date.now() < until && !(Player.mode === 'full' && video && video.readyState >= 2 && video.currentTime > 0)) await new Promise((r) => setTimeout(r, 300));
+      if (Player.mode !== 'full') return toast('Live TV was closed, so the test was not sent.', 6000);
+      await new Promise((r) => setTimeout(r, 1500)); // let the picture settle
+      try { const r = await api.post('/api/arlo/test'); toast(`Test pop-up sent (${r.camera}). The camera takes a few seconds to show.`, 6000); } catch (e) { toast(e.message, 6000); }
+    };
+    this.arloCameras(pane, save, cur);
+  },
+
+  // Drawn at once from the last answer (each save redraws Settings, and a box that vanished
+  // while Arlo Keeper was being asked would lose a click), then again with a fresh one.
+  async arloCameras(pane, save, cur) {
+    if (this.arloLast) this.paintArloCameras(pane, save, cur, this.arloLast);
+    try { this.arloLast = await api.get('/api/arlo/cameras'); } catch (e) { const box = $('#arloCams', pane); if (box && !this.arloLast) box.innerHTML = `⚠️ ${esc(e.message)}`; return; }
+    this.paintArloCameras(pane, save, cur, this.arloLast);
+  },
+
+  paintArloCameras(pane, save, cur, r) {
+    const box = $('#arloCams', pane);
+    if (!box || !document.body.contains(box)) return;
+    const on = new Set(cur().cameras.map(String)); // what's saved now (the answer may be older)
+    r = { ...r, cameras: r.cameras.map((c) => ({ ...c, on: on.has(c.id) })) };
+    const modes = Object.values(r.modes || {}).filter(Boolean);
+    box.classList.remove('s');
+    box.innerHTML = `${r.connected ? '' : '<div class="s">⚠️ Arlo Keeper isn\'t signed in to Arlo right now, so no motion will come through. Sign in on its own page.</div>'}
+      ${r.cameras.map((c) => `<label class="check nav" data-key="arlo-cam-${esc(c.id)}" style="margin:.4rem 0"><input type="checkbox" data-cam="${esc(c.id)}" data-name="${esc(c.name)}" ${c.on ? 'checked' : ''}> ${esc(c.name)}
+        <span class="s">${[c.model, c.battery != null && c.battery > 0 ? `battery ${c.battery}%` : '', c.unavailable ? 'offline' : '', c.lastMotion ? `last motion ${fmt.when(c.lastMotion * 1000)}` : ''].filter(Boolean).map(esc).join(' · ')}</span></label>`).join('') || '<div class="s">Arlo Keeper has no cameras.</div>'}
+      ${modes.length ? `<div class="s" style="margin-top:.6rem">Arlo mode: ${modes.map(esc).join(', ')}. Cameras only report motion when Arlo is armed (set in the Arlo app).</div>` : ''}
+      ${r.error ? `<div class="s">⚠️ ${esc(r.error)}</div>` : ''}`;
+    $$('[data-cam]', box).forEach((el) => {
+      el.onchange = () => save({ cameras: $$('[data-cam]', box).filter((x) => x.checked).map((x) => x.dataset.cam) }, `${el.dataset.name}: ${el.checked ? 'pops up' : 'no pop-ups'}`);
+    });
+  },
+
+  // ---------- other locations ----------
+  // Devices on this home network just use GarysTV. From anywhere else (over Tailscale /
+  // headscale), a device signs in once with the password set here (core/auth.js).
+  async remote(pane) {
+    let r;
+    try { r = await api.get('/api/remote'); } catch (e) { pane.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+    const again = () => { if (document.body.contains(pane)) this.remote(pane); };
+    const devices = r.logins.map((l) => `<div style="display:flex;gap:.8rem;align-items:center;margin:.3rem 0"><div style="flex:1"><b>${esc(l.device)}</b>${l.id === r.me ? ' (this one)' : ''}
+      <span class="s">signed in ${fmt.when(l.created)} · last used ${fmt.when(l.lastSeen)} from ${esc(l.ip)}</span></div>
+      <span class="btn nav" data-out="${esc(l.id)}" data-key="rm-out-${esc(l.id)}">Sign out</span></div>`).join('');
+    pane.innerHTML = `<div class="box"><h3>Using GarysTV from another location</h3>
+        <div class="s">On this home network nothing is asked, as always. From somewhere else (another house, over Tailscale or headscale), a device has to sign in once with this password; then it's remembered for a year. Without a password, other locations can't use this GarysTV at all.</div>
+        <div style="margin:.6rem 0">${r.passwordSet ? '✅ A password is set: other locations can sign in.' : '🔒 No password: other locations are turned away.'}</div>
+        <div class="actions"><div class="btn nav primary" id="rmSet" data-key="rm-set">${r.passwordSet ? 'Change the password' : 'Set a password'}</div>${r.passwordSet ? '<div class="btn nav" id="rmOff" data-key="rm-off">Turn off other locations</div>' : ''}</div></div>
+      <div class="box"><h3>Devices signed in from other locations</h3>
+        ${devices || '<div class="s">None.</div>'}
+        ${r.logins.length > 1 ? '<div class="actions"><div class="btn nav" id="rmAll" data-key="rm-all">Sign them all out</div></div>' : ''}</div>`;
+    $('#rmSet', pane).onclick = async () => {
+      const pw = await Modal.prompt(r.passwordSet ? 'Change the password' : 'Set a password', 'Password for other locations (at least 6 characters)', '', 'Save');
+      if (!pw) return;
+      try { await api.put('/api/remote/password', { password: pw }); toast('Saved. Devices already signed in stay signed in.', 5000); again(); } catch (e) { toast(e.message); }
+    };
+    const off = $('#rmOff', pane);
+    if (off) {
+      off.onclick = async () => {
+        if (!await Modal.confirm('Turn off other locations?', 'Every device signed in from another location is signed out, and none can sign in until you set a password again.', 'Turn off')) return;
+        await api.put('/api/remote/password', { password: '' }).catch((e) => toast(e.message));
+        again();
+      };
+    }
+    const all = $('#rmAll', pane);
+    if (all) all.onclick = () => api.del('/api/remote/logins').then(again).catch((e) => toast(e.message));
+    $$('[data-out]', pane).forEach((el) => { el.onclick = () => api.del(`/api/remote/logins/${encodeURIComponent(el.dataset.out)}`).then(again).catch((e) => toast(e.message)); });
+    this.linked(pane, again);
+  },
+
+  // Other GarysTVs linked with this one (core/peers.js): manage them from here; home and work also share plans.
+  async linked(pane, again) {
+    let o;
+    try { o = await api.get('/api/peers'); } catch (e) { return; }
+    const box = document.createElement('div');
+    box.className = 'box';
+    const rows = o.peers.map((p) => `<div style="display:flex;gap:.8rem;align-items:center;margin:.3rem 0;flex-wrap:wrap"><div style="flex:1;min-width:14rem"><b>${esc(p.name)}</b> <span class="s">${esc(p.url.replace(/^https?:\/\//, ''))} · ${p.share ? 'shares plans, lists and recordings' : 'manage only'}${p.seen ? ` · last heard from ${fmt.when(p.seen)}` : ''}</span></div>
+      <span class="btn nav primary" data-manage="${esc(p.id)}" data-key="pe-m-${esc(p.id)}">Manage</span><span class="btn nav" data-unlink="${esc(p.id)}" data-key="pe-u-${esc(p.id)}">Unlink</span></div>`).join('');
+    box.innerHTML = `<h3>Your other GarysTVs</h3>
+      <div class="s">This one is called <b>${esc(o.me.name)}</b>. Link another GarysTV (at work, at your parents') to manage it from here: its guide, channels, lists, timers and settings, as if you were there. Home and work can also share: then they never both use a one-stream plan, and each lists the other's recordings.</div>
+      ${rows || '<div class="s" style="margin:.5rem 0">None linked yet.</div>'}
+      <div class="actions"><div class="btn nav" id="peAdd" data-key="pe-add">Link another GarysTV</div><div class="btn nav" id="peName" data-key="pe-name">Rename this one</div></div>
+      <div class="s">To link, the other GarysTV needs a password set under its own Other locations, and this one must reach it (both on your Tailscale / headscale network). Type its Tailscale address, like 100.64.0.5.</div>`;
+    pane.append(box);
+    $('#peAdd', box).onclick = async () => {
+      const url = await Modal.prompt('Link another GarysTV', 'Its address (its Tailscale address, like 100.64.0.5)', '', 'Next');
+      if (!url) return;
+      const password = await Modal.prompt('Link another GarysTV', 'Its password (from its Settings > Other locations)', '', 'Next');
+      if (!password) return;
+      const share = await Modal.menu('Share with it?', '<div class="s">Share when both places use the same IPTV plans (home and work): they take turns with each plan and list each other\'s recordings. Don\'t share with a GarysTV that has its own plans (your parents\'): you can still manage it.</div>',
+        [{ label: 'Manage only', value: 'no' }, { label: 'Share plans and recordings', value: 'yes' }]);
+      if (!share) return;
+      toast('Linking...');
+      try { const p = await api.post('/api/peers', { url, password, share: share === 'yes' }); toast(`Linked with ${p.name}.`, 5000); again(); } catch (e) { toast(e.message, 8000); }
+    };
+    $('#peName', box).onclick = async () => {
+      const name = await Modal.prompt('Rename this GarysTV', 'Name (for example, Home or Work)', o.me.name);
+      if (!name) return;
+      await api.put('/api/settings', { serverName: name }).catch((e) => toast(e.message));
+      again();
+    };
+    $$('[data-manage]', box).forEach((el) => { el.onclick = () => manageGarysTV(o.peers.find((p) => p.id === el.dataset.manage)); });
+    $$('[data-unlink]', box).forEach((el) => {
+      el.onclick = async () => {
+        const p = o.peers.find((x) => x.id === el.dataset.unlink);
+        if (!await Modal.confirm(`Unlink ${p.name}?`, 'You can link it again later with its password.', 'Unlink')) return;
+        await api.del(`/api/peers/${encodeURIComponent(p.id)}`).catch((e) => toast(e.message));
+        again();
+      };
+    });
+  },
+
   // ---------- updates ----------
   async updates(pane) {
     const st = App.state.status;
-    const server = `<div class="s">${window.GTV_SERVER ? 'The GarysTV this screen is connected to' : 'This GarysTV'} is version <b>${esc(st.version)}</b>${st.platform === 'linux' ? ' on the home server, which is updated by hand' : ''}.</div>`;
-    if (Updates.android) return this.androidUpdates(pane, server);
-    if (Updates.windowsApp) return this.windowsUpdates(pane, server);
+    const linux = st.platform === 'linux'; // a home server: it updates itself too, set here
+    const server = `<div class="s">${window.GTV_SERVER ? 'The GarysTV this screen is connected to' : 'This GarysTV'} is version <b>${esc(st.version)}</b>${linux ? ' on the home server' : ''}.</div>`;
+    if (Updates.android) {
+      pane.innerHTML = '<div id="updApp"></div><div id="updServer"></div>';
+      this.androidUpdates($('#updApp', pane), linux ? '' : server);
+      if (linux) this.windowsUpdates($('#updServer', pane), '');
+      return;
+    }
+    if (Updates.windowsApp || linux) return this.windowsUpdates(pane, server);
     pane.innerHTML = `<div class="box"><h3>Updates</h3>${server}
       <div>This screen comes from that GarysTV, so it changes whenever that is updated: there's nothing to install here.</div></div>`;
   },
@@ -330,23 +644,118 @@ const SettingsView = {
   async windowsUpdates(pane, server) {
     let u;
     try { u = await api.get('/api/app-update'); } catch (e) { pane.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
-    const auto = App.state.settings.autoUpdate !== false;
-    const now = !u.supported ? esc(u.reason || 'Updates work in the installed app.')
-      : u.ready ? `✨ Version <b>${esc(u.available)}</b> is downloaded. ${auto ? (u.busy ? 'It installs as soon as nothing is recording or about to.' : 'It installs in a few minutes.') : 'Restart GarysTV to install it.'}`
-        : u.available ? `Downloading version <b>${esc(u.available)}</b>${u.progress != null ? ` (${u.progress}%)` : ''}...`
-          : u.error ? `⚠️ Couldn't check: ${esc(u.error)}`
-            : u.checkedAt ? `✅ This is the newest version (checked ${fmt.when(u.checkedAt)}).` : 'Checking soon...';
-    pane.innerHTML = `<div class="box"><h3>Updates</h3>
-      <div>This app: <b>${esc(u.current || App.state.status.version)}</b></div>
-      <div>${now}</div>
-      <div class="actions">${u.ready ? '<div class="btn nav primary" id="updNow">Restart and update now</div>' : ''}${u.supported ? '<div class="btn nav" id="updCheck">Check now</div>' : ''}</div>
-      <label class="check"><input type="checkbox" id="updAuto" ${auto ? 'checked' : ''}> Install updates automatically (only while nothing is recording or about to)</label>
-      <div class="s">Updates come from GarysTV's page on GitHub and are checked every few hours. Timers, recordings and settings are kept.</div></div>`;
-    const now2 = $('#updNow', pane);
-    if (now2) now2.onclick = async () => { try { await api.post('/api/app-update/install'); toast('Updating. GarysTV starts again in a moment.'); } catch (e) { toast(e.message); } };
+    const p = u.plan || { when: App.state.settings.autoUpdate === false ? 'ask' : 'scheduled', day: 'sun', h: 3, m: 0 };
+    const days = [['sun', 'Sundays'], ['mon', 'Mondays'], ['tue', 'Tuesdays'], ['wed', 'Wednesdays'], ['thu', 'Thursdays'], ['fri', 'Fridays'], ['sat', 'Saturdays'], ['daily', 'Every day']];
+    const clock = (h, m) => fmt.time(new Date(2000, 0, 1, h, m));
+    const slot = `${(days.find(([k]) => k === p.day) || days[0])[1]} at ${clock(p.h, p.m)}`;
+    const when = p.when === 'scheduled' ? `It installs ${slot.replace('Every day', 'every day')}, then GarysTV starts again.`
+      : p.when === 'anytime' ? (u.busy ? 'It installs as soon as nothing is recording or about to.' : 'It installs in a few minutes.') : 'Choose Restart and update now when it suits you.';
+    // The home server (u.server) has nothing to download first: its helper fetches the update as it installs.
+    const now = !u.supported ? esc(u.reason || (App.state.status.platform === 'linux' ? 'This home server was set up before it could update itself. Run the installer once more (sudo ./install/install-linux.sh) to switch it on.' : 'Updates work in the installed app.'))
+      : u.installing ? `Installing version <b>${esc(u.available)}</b>. GarysTV starts again by itself in a minute or two.`
+        : u.ready ? `✨ Version <b>${esc(u.available)}</b> is ${u.server ? 'out' : 'downloaded'}. ${when}`
+          : u.available ? `Downloading version <b>${esc(u.available)}</b>${u.progress != null ? ` (${u.progress}%)` : ''}...`
+            : u.error ? `⚠️ Couldn't check: ${esc(u.error)}`
+              : u.checkedAt ? `✅ This is the newest version (checked ${fmt.when(u.checkedAt)}).` : 'Checking soon...';
+    pane.innerHTML = `<div class="box"><h3>${u.server ? 'Home server updates' : 'Updates'}</h3>
+      <div>${u.server ? 'The home server' : 'This app'}: <b>${esc(u.current || App.state.status.version)}</b></div>
+      <div>${now}</div>${u.lastProblem ? `<div class="s" style="color:var(--yellow)">⚠️ ${esc(u.lastProblem)}</div>` : ''}
+      <div class="actions">${u.ready && !u.installing ? `<div class="btn nav primary" id="updNow" data-key="upd-now">${u.server ? 'Update the home server now' : 'Restart and update now'}</div>` : ''}${u.supported ? '<div class="btn nav" id="updCheck" data-key="upd-check">Check now</div>' : ''}</div>
+      <div class="s" style="margin-top:.6rem">GarysTV always checks for updates every few hours and tells you here. Choose when they go in:</div>
+      <div id="updRows" style="display:grid;gap:.5rem;margin:.5rem 0;max-width:40rem"></div>
+      <div class="s">Updates come from GarysTV's page on GitHub. They never go in while something is recording, about to record, or someone is watching; it waits up to two hours after the time you pick, else tries again next time. Timers, recordings and settings are kept. ${u.server ? 'The TVs lose the picture for a minute while it restarts, then carry on; if the new version doesn\'t start, the one before is put back.' : 'The TVs aren\'t affected.'}</div></div>${server}`;
+    const rows = $('#updRows', pane);
+    const put = (patch) => api.put('/api/settings', { autoUpdate: true, ...patch }).then(() => toast('Saved'));
+    const times = [];
+    for (let h = 0; h < 24; h++) for (const m of [0, 30]) times.push({ value: `${String(h).padStart(2, '0')}:${m ? '30' : '00'}`, label: clock(h, m) });
+    const whens = [{ value: 'scheduled', label: 'Automatically, at a set time' }, { value: 'anytime', label: 'Automatically, as soon as ready' }, { value: 'ask', label: 'Only when I say (just tell me)' }];
+    const at = (vals, v) => Math.max(0, vals.findIndex((x) => x.value === v));
+    const hm = `${String(p.h).padStart(2, '0')}:${String(p.m).padStart(2, '0')}`;
+    const dayRow = optionRow('Day', days.map(([value, label]) => ({ value, label })), at(days.map(([value]) => ({ value })), p.day), (v) => put({ updateDay: v }));
+    const timeRow = optionRow('Time', times, Math.max(0, times.findIndex((t) => t.value === hm)), (v) => put({ updateTime: v }));
+    const show = (w) => { dayRow.style.display = timeRow.style.display = w === 'scheduled' ? '' : 'none'; };
+    rows.append(optionRow('Install updates', whens, at(whens, p.when), (v) => { show(v); put({ updatePlan: v }); }), dayRow, timeRow);
+    [...rows.children].forEach((el, i) => { el.dataset.key = `upd-row${i}`; });
+    show(p.when);
+    const again = () => { if (document.body.contains(pane)) this.windowsUpdates(pane, server); };
+    const go = $('#updNow', pane);
+    if (go) go.onclick = () => api.post('/api/app-update/install').then(() => { toast(u.server ? 'Updating. The home server starts again in a minute or two.' : 'Updating. GarysTV starts again by itself.', 6000); setTimeout(again, 1500); }).catch((e) => toast(e.message));
     const chk = $('#updCheck', pane);
-    if (chk) chk.onclick = async () => { await api.post('/api/app-update/check'); toast('Checking for updates...'); setTimeout(() => { if (this.section === 'updates') App.render(); }, 3000); };
-    $('#updAuto', pane).onchange = (e) => api.put('/api/settings', { autoUpdate: e.target.checked });
+    if (chk) chk.onclick = () => { toast('Checking...'); api.post('/api/app-update/check').then(again).catch((e) => toast(e.message)); };
+  },
+
+  // ---------- backup & restore ----------
+  // Everything you set up, in one file: to move GarysTV to another computer, or keep a copy.
+  backup(pane) {
+    const tv = !!window.GTV_SERVER;
+    pane.innerHTML = `<div class="box"><h3>Save a backup</h3>
+        <div class="s">Saves your providers, guide sources, channel choices (shown, pinned, your numbers, guide listings), favorites lists, timers and settings in one file. Recordings and the downloaded guide aren't in it.</div>
+        <label class="check"><input type="checkbox" id="bkLogins" class="nav" data-key="bk-logins"> Include IPTV logins and the TMDb key (for a new computer; keep the file private)</label>
+        <div class="actions"><div class="btn nav primary" id="bkSave" data-key="bk-save">Save a backup file</div></div></div>
+      <div class="box"><h3>Restore a backup</h3>
+        <div class="s">Replaces this GarysTV's setup with the one in the file. Recordings stay. Providers are scanned again and your channel choices are put back as the channels arrive (a few minutes for a big list). Logins left out of the file are kept from this computer when it has the same provider; otherwise add them in Antenna & Providers.</div>
+        <input type="file" id="bkFile" accept=".json,application/json" style="display:none">
+        <div class="actions"><div class="btn nav" id="bkLoad" data-key="bk-load">Choose a backup file...</div></div></div>
+      ${tv ? '<div class="s">On a TV, saving and choosing files may not work: use the GarysTV app on the PC, or a web browser on a computer pointed at this GarysTV.</div>' : ''}`;
+    const logins = $('#bkLogins', pane);
+    $('#bkSave', pane).onclick = async () => {
+      try {
+        const b = await api.get(`/api/backup?logins=${logins.checked ? 1 : 0}`);
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([JSON.stringify(b, null, 1)], { type: 'application/json' }));
+        a.download = `GarysTV-backup-${new Date().toISOString().slice(0, 10)}${b.logins ? '-with-logins' : ''}.json`;
+        document.body.append(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+        toast(`Saved ${a.download}`, 5000);
+      } catch (e) { toast(e.message); }
+    };
+    const file = $('#bkFile', pane);
+    $('#bkLoad', pane).onclick = () => file.click();
+    file.onchange = async () => {
+      const f = file.files[0];
+      file.value = '';
+      if (!f) return;
+      let b;
+      try { b = JSON.parse(await f.text()); } catch (_) { toast("That file can't be read as a GarysTV backup."); return; }
+      if (!b || b.garystv !== 'backup') { toast("That isn't a GarysTV backup file."); return; }
+      const what = `<div class="s">Made ${b.madeAt ? esc(new Date(b.madeAt).toLocaleString()) : 'at an unknown time'}${b.version ? ` by GarysTV ${esc(b.version)}` : ''}.<br>
+        ${(b.sources || []).length} providers (${esc((b.sources || []).map((x) => x.name).join(', '))}), ${(b.favlists || []).length} favorites lists, ${(b.rules || []).length} timers, choices for ${(b.channels || []).length} channels.
+        ${b.logins ? '<br>It includes logins.' : '<br>No logins in it.'}<br><br>This replaces what's set up here now.</div>`;
+      if (!await Modal.menu('Restore this backup?', what, [{ label: 'Restore', value: true, cls: 'danger' }, { label: 'Cancel', value: false }])) return;
+      try {
+        const r = await api.post('/api/backup', b);
+        await App.loadAll();
+        toast(r.needLogin.length ? `Restored. Add the login for ${r.needLogin.join(', ')} in Antenna & Providers.` : 'Restored. Channels and the guide are coming in now.', 8000);
+        App.render();
+      } catch (e) { toast(e.message); }
+    };
+  },
+
+  // ---------- CTA ----------
+  // Live Chicago 'L' arrivals: the Tapper Train Tracker site, full screen over GarysTV.
+  // Back (remote), Esc or the Back button returns here.
+  CTA_URL: 'https://trains.tapper.co/',
+  cta(pane) {
+    pane.innerHTML = `<div class="box"><h3>CTA</h3>
+        <div class="s">Live Chicago 'L' train arrivals and the system map, from the Tapper Train Tracker.</div>
+        <div class="actions"><div class="btn nav primary" id="ctaLookup" data-key="cta-lookup">🚆 Lookup</div></div>
+        <div class="s" style="font-size:.85rem">Press Back on the remote (or Esc) to come back to GarysTV.</div></div>`;
+    $('#ctaLookup', pane).onclick = () => this.ctaOpen();
+  },
+
+  ctaOpen() {
+    return Modal.open((m, close) => {
+      m.classList.add('modal-full');
+      m.innerHTML = `<div class="full-bar"><div class="btn nav" id="ctaBack" data-key="cta-back">← Back to GarysTV</div>
+          <span class="s">CTA train arrivals</span></div>
+        <iframe class="full-frame nav" data-key="cta-page" src="${esc(this.CTA_URL)}" title="CTA train arrivals" allow="geolocation"></iframe>`;
+      $('#ctaBack', m).onclick = () => close();
+      // The Back button has the highlight first, so Back/Esc work straight away. ↓ (or a click)
+      // moves into the train page to use it; the remote's Back still comes back to GarysTV on the
+      // Fire TV (the app hands Back to GarysTV itself), and the Back button stays at the top.
+      const frame = $('iframe', m);
+      frame._onFocus = () => frame.focus();
+    });
   },
 
   // ---------- status ----------
@@ -372,7 +781,9 @@ const SettingsView = {
         ${window.GTVAndroid ? `<div>${GTVAndroid.hasVlc && GTVAndroid.hasVlc() ? '✅ The VLC app is on this TV, for when the built-in player has trouble.' : 'The VLC app is not on this TV. It is a backup player: get it from the app store, or choose Play in VLC (hold OK while watching) to be taken there.'}</div>` : ''}
         <div>💾 ${st.diskFree != null ? `${fmt.size(st.diskFree)} free in the recordings folder` : 'Disk space unknown'}</div>
         <div>⏺ ${st.recordingNow} recording right now</div></div>
-      ${here}<div class="box"><h3>Activity log</h3><pre class="log">${esc(st.log.join('\n')) || 'Nothing yet.'}</pre></div>`;
+      ${(st.plans || []).length ? `<div class="box"><h3>Plans in use right now</h3>${st.plans.map((p) => `<div><b>${esc(p.name)}</b> <span class="s">${p.using.length} of ${p.capacity}</span>${p.using.length ? `: ${esc(p.using.join(', '))}` : ''}</div>`).join('')}
+        <div class="s">Watching and recording each use one stream of a plan. When a plan is full, GarysTV uses the same channel on another plan.</div></div>` : ''}
+      ${here}<div class="box"><h3>Activity log</h3><div class="s">Move down onto the log, then ↑↓ scroll it.</div><pre class="log nav" data-key="status-log">${esc(st.log.join('\n')) || 'Nothing yet.'}</pre></div>`;
     if (here) {
       $('#switchPc', pane).onclick = () => window.GTV_SWITCH();
       api.get('/api/ping').then((p) => { const el = $('#whichPc'); if (el) el.innerHTML = `<b>${esc(p.name)}</b> at ${esc(window.GTV_SERVER.replace(/^https?:\/\//, ''))} · ${st.platform === 'linux' ? 'home server' : 'Windows PC'}`; }).catch(() => {});
@@ -384,3 +795,15 @@ const SettingsView = {
     });
   },
 };
+
+// Lowest channel number first (5.1 before 12), then by name.
+function byNumber(a, b) { return (parseFloat(a.number) || 1e9) - (parseFloat(b.number) || 1e9) || byName(a, b); }
+// Names with numbers in order: PPV 2 before PPV 10.
+function byName(a, b) { return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }); }
+
+// What this TV opens to: { open: home | guide | live, list: last | "" (all) | * (all favorites) | a list's id }.
+function startChoice() {
+  let s = {};
+  try { s = JSON.parse(localStorage.getItem('gtv.start') || '{}') || {}; } catch (_) { /* private mode */ }
+  return { open: ['home', 'guide', 'live'].includes(s.open) ? s.open : 'home', list: typeof s.list === 'string' ? s.list : 'last' };
+}

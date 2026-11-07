@@ -1,5 +1,5 @@
-// Home menu, My Recordings (DVR), Timers and Search screens.
-/* global App, Player, GuideView, MoviesView, ShowsView */
+// Home menu, My Recordings (DVR), Timers, Arlo and Search screens.
+/* global App, Player, GuideView, MoviesView, ShowsView, SettingsView */
 const ICONS = {
   guide: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 9v11M3 14.5h18"/></svg>',
   live: '<svg viewBox="0 0 24 24"><rect x="2.5" y="5" width="19" height="13" rx="2"/><path d="M8 21h8M10 9.5v5l4.5-2.5z"/></svg>',
@@ -7,6 +7,7 @@ const ICONS = {
   movies: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 8h4M3 12h4M3 16h4M17 8h4M17 12h4M17 16h4"/></svg>',
   shows: '<svg viewBox="0 0 24 24"><rect x="2.5" y="7" width="19" height="13" rx="2"/><path d="M8 3l4 4 4-4M6 4.5h0"/><path d="M10 11v5l4-2.5z"/></svg>',
   timers: '<svg viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l3 2M9 2h6"/></svg>',
+  arlo: '<svg viewBox="0 0 24 24"><path d="M4 7h3l1.5-2h7L17 7h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1z"/><circle cx="12" cy="12.5" r="3.5"/></svg>',
   search: '<svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg>',
   settings: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg>',
 };
@@ -25,10 +26,10 @@ const HomeView = {
         <div class="home-head"><img class="logo" src="logo.jpg" alt=""><h1>${greet}. <b>What would you like to watch?</b></h1>${window.GTV_SERVER ? `<div class="on-pc">On <b>${esc(App.state.status.platform === 'linux' ? 'the home server' : 'the Windows PC')}</b><br>${esc(window.GTV_SERVER.replace(/^https?:\/\//, '').replace(/:5480$/, ''))}</div>` : ''}</div>
         <div class="tiles">
           ${[['guide', 'Guide', 'See what\'s on'], ['live', 'Live TV', 'Last channel'], ['movies', 'Movies', 'On demand'], ['shows', 'Shows', 'Every episode'], ['dvr', 'My Recordings', `${App.recordings.length} shows`],
-            ['timers', 'Timers', `${App.state.rules.length} set`], ['search', 'Search', 'Find a show'], ['settings', 'Settings', 'Antenna, guide, channels']]
+            ['arlo', 'Arlo', 'Cameras & clips'], ['search', 'Search', 'Find a show'], ['settings', 'Settings', 'Antenna, guide, channels']]
             .map(([k, l, s]) => `<div class="tile nav" data-key="${k}" data-go="${k}">${ICONS[k]}<div>${l}</div><small>${esc(s)}</small></div>`).join('')}
         </div>
-        <div class="strip"><h2>Favorites</h2><div class="cards">${(App.state.favLists || []).map((l) => `
+        <div class="strip"><h2>Favorites</h2><div class="cards">${((l) => (l.length > 1 ? [allFavorites(l), ...l] : l))(App.state.favLists || []).map((l) => `
           <div class="card nav" data-key="f-${esc(l.id)}" data-fav="${esc(l.id)}"><div class="t"><span class="fav">★</span>${esc(l.name)}</div>
           <div class="s">${l.channelIds.length} channel${l.channelIds.length === 1 ? '' : 's'}</div></div>`).join('')}
           <div class="card nav" data-key="f-new" data-favnew="1"><div class="t">＋ New favorites list</div><div class="s">For example, Gary's Favorites</div></div></div></div>
@@ -110,7 +111,10 @@ const DvrView = {
     } else {
       entries = this.groups().map((g) => (g.items.length > 1 ? { folder: g } : { rec: g.items[0] }));
     }
+    // Timers live here now (Home has the Arlo tile in their place); T still jumps straight to them.
     root.innerHTML = `
+      <div class="tabs"><div class="tab nav on" data-key="tab-rec">Recordings</div>
+        <div class="tab nav" data-key="tab-timers" id="timersTab">Timers · ${App.state.rules.length} set</div></div>
       <div class="split">
         <div class="col">
           <h2>${this.folder ? `<span class="btn nav" data-key="up" id="upBtn">‹ All recordings</span> ${esc(entries[0] ? entries[0].rec.title : '')}` : 'All recordings'}
@@ -123,6 +127,7 @@ const DvrView = {
         </div>
         <div class="col"><h2>Details</h2><div class="detail" id="dvrDetail"><div class="empty">Highlight a recording to see details.</div></div></div>
       </div>`;
+    $('#timersTab', root).onclick = () => App.go('timers');
     const up = $('#upBtn', root);
     if (up) up.onclick = () => this.onBack();
     $$('[data-folder]', root).forEach((el) => {
@@ -147,7 +152,7 @@ const DvrView = {
     $('#dvrDetail').innerHTML = `<div class="title">${esc(r.title)}</div>
       <div class="sub">${esc([fmt.se(r), r.subtitle].filter(Boolean).join('  ·  '))}</div>
       <div class="meta"><span>${esc(r.channelNumber)} ${esc(r.channelName)}</span><span>${fmt.when(r.start)}</span><span>${fmt.dur(r.end - r.start)}</span><span>${fmt.size(r.size)}</span>
-        <span class="status-pill st-${r.status}">${r.status === 'recording' ? '● Recording' : r.status}</span>${r.simulated ? '<span class="tag">PRACTICE</span>' : ''}</div>
+        <span class="status-pill st-${r.status}">${r.status === 'recording' ? '● Recording' : r.status}</span>${r.simulated ? '<span class="tag">PRACTICE</span>' : ''}${r.at ? `<span class="tag">AT ${esc(r.at.toUpperCase())}</span>` : ''}</div>
       ${r.error ? `<div class="s" style="color:var(--yellow)">${esc(r.error)}</div>` : ''}
       <div class="desc">${esc(r.desc || '')}</div>
       ${r.position > 30 ? `<div class="s">Stopped at ${fmt.clock(r.position)}</div>` : ''}`;
@@ -158,7 +163,7 @@ const DvrView = {
     const choices = [];
     if (r.position > 30 && !r.watched) choices.push({ label: `▶  Resume from ${fmt.clock(r.position)}`, value: 'resume', cls: 'primary' });
     choices.push({ label: r.position > 30 ? '⟲  Start over' : '▶  Play', value: 'play', cls: r.position > 30 ? '' : 'primary' });
-    if (r.status === 'recording') choices.push({ label: '■  Stop recording', value: 'stop' });
+    if (r.status === 'recording' && !r.at) choices.push({ label: '■  Stop recording', value: 'stop' }); // one at the other place is stopped there
     choices.push({ label: r.watched ? 'Mark as not watched' : 'Mark as watched', value: 'watched' });
     choices.push({ label: '🗑  Delete', value: 'delete', cls: 'danger' }, { label: 'Cancel', value: null });
     const v = await Modal.menu(r.title, `<div class="s">${esc([fmt.se(r), r.subtitle, fmt.when(r.start)].filter(Boolean).join('  ·  '))}</div>`, choices);
@@ -192,6 +197,7 @@ const DvrView = {
     const items = r ? this.menuFor(r) : [];
     if (d.folder) items.push({ label: 'Open this folder', run: () => Nav.current.click(), cls: 'primary' });
     if (this.folder) items.push({ label: '‹ All recordings', run: () => this.onBack() });
+    items.push({ label: 'Timers', run: () => App.go('timers') });
     return { title: r ? r.title : this.title, body: r ? `<div class="s">${esc([fmt.se(r), r.subtitle, fmt.when(r.start)].filter(Boolean).join('  ·  '))}</div>` : '', items };
   },
 
@@ -249,7 +255,8 @@ const TimersView = {
           <div class="m">${fmt.when(j.start)}<br><span class="status-pill st-${j.status}">${j.status === 'scheduled' ? 'Will record' : j.status}</span></div></div>`).join('')
         : '<div class="empty">Nothing is scheduled to record.</div>');
     root.innerHTML = `
-      <div class="tabs"><div class="tab nav ${this.tab === 'schedule' ? 'on' : ''}" data-key="tab-s" data-tab="schedule">Upcoming recordings</div>
+      <div class="tabs"><div class="tab nav" data-key="tab-dvr" id="dvrTab">‹ My Recordings</div>
+        <div class="tab nav ${this.tab === 'schedule' ? 'on' : ''}" data-key="tab-s" data-tab="schedule">Upcoming recordings</div>
         <div class="tab nav ${this.tab === 'rules' ? 'on' : ''}" data-key="tab-r" data-tab="rules">Timers &amp; priority</div>
         <div class="tab nav" data-key="manual" id="manualBtn">+ Manual timer</div></div>
       <div class="split"><div class="col"><div class="list">${listHtml}</div></div>
@@ -258,6 +265,8 @@ const TimersView = {
           : 'Shows marked <b>conflict</b> can\'t record because all tuners are busy. Raise that timer\'s priority, or skip another show.'}</div></div></div></div>`;
     $$('[data-tab]', root).forEach((el) => { el.onclick = () => { this.tab = el.dataset.tab; App.render(); }; });
     $('#manualBtn', root).onclick = () => App.manualDialog();
+    // Came from My Recordings: step back (so Back from there still goes Home), else open it.
+    $('#dvrTab', root).onclick = () => (App.history[App.history.length - 1] === 'dvr' ? App.back() : App.go('dvr'));
     $$('[data-rule]', root).forEach((el) => {
       const r = () => App.state.rules.find((x) => x.id === el.dataset.rule);
       el.onclick = () => this.ruleMenu(r());
@@ -325,6 +334,133 @@ const TimersView = {
   },
 };
 
+// ---------------- Arlo ----------------
+// Home > Arlo: the clips Arlo Keeper has saved, newest first, from every camera or one
+// (core/arlo.js). OK plays a clip big, as pictures like the motion pop-up; Back closes it.
+const ArloView = {
+  title: 'Arlo cameras',
+  camera: null, // a camera id, or null for all of them
+  cams: null, clips: null, error: null, loadedAt: 0, loading: false, playing: null,
+  hints: [['↑↓', 'Move'], ['OK', 'Play'], ['←→', 'Camera'], ['M', 'Menu'], ['Esc', 'Back']],
+
+  async load() {
+    if (this.loading) return;
+    this.loading = true;
+    try {
+      const [cams, clips] = await Promise.all([api.get('/api/arlo/cameras'), api.get(`/api/arlo/clips?limit=80${this.camera ? `&camera=${encodeURIComponent(this.camera)}` : ''}`)]);
+      this.cams = cams; this.clips = clips; this.error = null;
+    } catch (e) { this.error = e.message; }
+    this.loading = false;
+    this.loadedAt = Date.now();
+    if (App.view === this && !this.playing) App.render();
+  },
+
+  pick(id) {
+    this.camera = id || null;
+    this.clips = null;
+    App.render(`cam-${this.camera || 'all'}`);
+    this.load();
+  },
+
+  render(root) {
+    const s = App.state.settings.arlo || {};
+    if (!s.enabled) {
+      root.innerHTML = `<div class="empty">Arlo isn't turned on in GarysTV yet.<br>Turn it on and give it Arlo Keeper's address in Settings › Arlo.</div>
+        <div class="actions"><div class="btn nav primary" data-key="arlo-settings" id="arloSet">Open Settings › Arlo</div></div>`;
+      $('#arloSet', root).onclick = () => { SettingsView.section = 'arlo'; App.go('settings'); };
+      return;
+    }
+    if (this.playing) return this.renderPlaying(root);
+    if (!this.loading && (!this.clips || Date.now() - this.loadedAt > 20000)) setTimeout(() => this.load(), 0);
+    const cams = (this.cams && this.cams.cameras) || [];
+    const clips = this.clips || [];
+    const camName = (id) => (cams.find((c) => c.id === id) || {}).name;
+    root.innerHTML = `
+      <div class="tabs"><div class="tab nav ${this.camera ? '' : 'on'}" data-key="cam-all" data-cam="">All cameras</div>
+        ${cams.map((c) => `<div class="tab nav ${this.camera === c.id ? 'on' : ''}" data-key="cam-${esc(c.id)}" data-cam="${esc(c.id)}">${esc(c.name)}${c.unavailable ? ' <span class="tag">OFFLINE</span>' : ''}</div>`).join('')}</div>
+      ${this.cams && !this.cams.connected ? '<div class="s" style="margin-bottom:.8rem;color:var(--yellow)">Arlo Keeper isn\'t signed in to Arlo right now, so new clips won\'t come in. Sign in on its own page.</div>' : ''}
+      <div class="split">
+        <div class="col"><h2>${esc(this.camera ? camName(this.camera) || 'Camera' : 'All cameras')}<span class="r">${this.clips ? `${clips.length} clips` : ''}</span></h2>
+          <div class="list" id="arloList">${this.error && !this.clips ? `<div class="empty">⚠️ ${esc(this.error)}</div>`
+            : !this.clips ? '<div class="empty">Asking Arlo Keeper...</div>'
+            : clips.length ? clips.map((c) => `
+            <div class="item nav" data-key="clip-${esc(c.key)}" data-clip="${esc(c.key)}">
+              ${c.thumb ? `<img class="athumb" src="${esc(server(c.thumb))}" alt="" onerror="this.style.visibility='hidden'">` : '<div class="athumb"></div>'}
+              <div class="main"><div class="t">${c.starred ? '<span class="fav">★</span>' : ''}${esc(c.camera)}</div><div class="s">${esc([c.trigger, c.duration ? `${Math.round(c.duration)}s` : ''].filter(Boolean).join(' · '))}</div></div>
+              <div class="m">${fmt.when(c.time)}</div></div>`).join('')
+            : '<div class="empty">No clips saved yet.</div>'}
+          </div></div>
+        <div class="col"><h2>Clip</h2><div class="detail" id="arloDetail"><div class="empty">Highlight a clip to see it. Press OK to play it.</div></div></div>
+      </div>`;
+    $$('[data-cam]', root).forEach((el) => { el.onclick = () => this.pick(el.dataset.cam); });
+    $$('[data-clip]', root).forEach((el) => {
+      const c = () => clips.find((x) => x.key === el.dataset.clip);
+      el.onclick = () => this.play(c());
+      el._onFocus = () => {
+        const x = c();
+        if (!x) return;
+        $('#arloDetail').innerHTML = `${x.thumb ? `<img class="athumb big" src="${esc(server(x.thumb))}" alt="">` : ''}
+          <div class="title">${esc(x.camera)}</div><div class="meta"><span>${fmt.when(x.time)}</span>${x.duration ? `<span>${Math.round(x.duration)} seconds</span>` : ''}${x.trigger ? `<span class="tag">${esc(x.trigger.toUpperCase())}</span>` : ''}</div>
+          <div class="s">Press OK to play.</div>`;
+      };
+    });
+  },
+
+  play(c) {
+    if (!c) return;
+    this.playing = c;
+    App.render();
+  },
+
+  renderPlaying(root) {
+    const c = this.playing;
+    root.innerHTML = `<div class="arlo-play waiting" id="arloPlay"><img id="arloImg" alt=""><div class="cap"><b>${esc(c.camera)}</b> <span>${fmt.when(c.time)}</span></div></div>
+      <div class="actions" style="justify-content:center"><div class="btn nav" data-key="arlo-close" id="arloClose">‹ Back to clips</div><div class="btn nav" data-key="arlo-again" id="arloAgain">⟲ Play again</div></div>`;
+    const box = $('#arloPlay', root), img = $('#arloImg', root);
+    img.onerror = () => { box.classList.remove('waiting'); box.classList.add('failed'); };
+    img.src = server(c.view);
+    // Like the pop-up: the picture has arrived once the image has a size.
+    const poll = setInterval(() => { if (!document.body.contains(img)) return clearInterval(poll); if (img.naturalWidth) { box.classList.remove('waiting'); clearInterval(poll); } }, 200);
+    $('#arloClose', root).onclick = () => this.onBack();
+    $('#arloAgain', root).onclick = () => App.render();
+  },
+
+  stop() {
+    const img = $('#arloImg');
+    if (img) { img.onerror = null; img.removeAttribute('src'); } // ends the picture stream (and ffmpeg on the engine)
+  },
+
+  onBack() {
+    if (!this.playing) return false;
+    const key = this.playing.key;
+    this.stop();
+    this.playing = null;
+    App.render(`clip-${key}`);
+    return true;
+  },
+
+  menu() {
+    const d = (Nav.current && Nav.current.dataset) || {};
+    const c = d.clip && (this.clips || []).find((x) => x.key === d.clip);
+    const items = [];
+    if (c) items.push({ label: `▶ Play ${c.camera}, ${fmt.when(c.time)}`, run: () => this.play(c), cls: 'primary' });
+    if (this.playing) items.push({ label: '‹ Back to clips', run: () => this.onBack() });
+    items.push({ label: '⟳ Check for new clips', run: () => this.load() });
+    items.push({ label: 'Arlo settings', run: () => { this.stop(); this.playing = null; SettingsView.section = 'arlo'; App.go('settings'); } });
+    return { title: this.title, items };
+  },
+
+  // ←→ on a clip: the next or previous camera.
+  onKey(e) {
+    if (this.playing || !(e.key === 'ArrowLeft' || e.key === 'ArrowRight')) return false;
+    if (!Nav.current || Nav.current.classList.contains('tab') || Nav.current.closest('#topnav')) return false;
+    const ids = [null, ...((this.cams && this.cams.cameras) || []).map((c) => c.id)];
+    const i = ids.indexOf(this.camera);
+    this.pick(ids[(i + (e.key === 'ArrowRight' ? 1 : ids.length - 1)) % ids.length]);
+    return true;
+  },
+};
+
 // ---------------- Search ----------------
 // One box for everything: channels, what's on TV, recordings, movies and shows.
 // Movies and shows come from the IPTV provider's library and can take a moment, so
@@ -381,7 +517,7 @@ const SearchView = {
         key: `c-${c.id}`,
         html: `<div class="main"><div class="t">${c.logo ? `<img class="slogo" src="${esc(c.logo)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}${esc(c.number)} ${esc(c.name)}</div><div class="s">${esc(c.group || 'Channel')}</div></div><div class="m">Watch</div>`,
         open: () => Player.play('live', c.id),
-        more: [...App.channelFavItems(c), ...App.recordItems(c, null), { label: '▦ Find it in the Guide', run: () => { GuideView.filter = null; GuideView.setList(null, c.id); App.go('guide'); } }],
+        more: [...App.channelFavItems(c), ...App.numberItem(c, async (n) => { c.number = n; await App.loadAll(); App.render(); }), ...App.recordItems(c, null), { label: '▦ Find it in the Guide', run: () => { GuideView.filter = null; GuideView.setList(null, c.id); App.go('guide'); } }],
       }));
     }
     if (kind === 'programs') {
