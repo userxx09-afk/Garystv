@@ -28,6 +28,10 @@ const { Tuners, capacity } = require('./tuners');
 
 const GUIDES = [require('./guide/xmltv'), require('./guide/hdhomerun-guide'), require('./guide/demo-guide')];
 const guideType = (t) => GUIDES.find((g) => g.type === t) || (() => { throw new Error(`Unknown guide type ${t}`); })();
+// Listings for channels a provider's own guide leaves out (Marquee Sports Network, ...): the one
+// place to add more is guide/extra-guides.json.
+const EXTRA_GUIDES = require('./guide/extra-guides.json').guides || [];
+const normWords = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 const newId = () => crypto.randomBytes(5).toString('hex');
 
 const DEFAULT_SETTINGS = {
@@ -101,6 +105,7 @@ class DvrCore extends EventEmitter {
       this.store.write('networkDefaultOn', true);
     }
     this.store.write('initialized', true);
+    this.syncExtraGuides();
     // Anything that was "recording" when the app last closed did not finish cleanly.
     const recs = this.recordings.map((r) => (r.status === 'recording' ? { ...r, status: 'partial', error: 'App was closed during recording' } : r));
     this.store.write('recordings', recs);
@@ -275,12 +280,49 @@ class DvrCore extends EventEmitter {
   }
 
   // ---------- guide ----------
-  addGuide({ type, name, config, sourceId = null }) {
+  addGuide({ type, name, config, sourceId = null, builtin = undefined }, { refresh = true } = {}) {
     const g = { id: newId(), type, name: name || guideType(type).label, config: config || {}, sourceId, lastRefresh: null, info: '' };
+    if (builtin) g.builtin = builtin;
     this.store.write('guides', [...this.guides, g]);
     this.changed('guides');
-    this.refreshSoon(); // its listings now, not at the next start
+    if (refresh) this.refreshSoon(); // its listings now, not at the next start
     return g;
+  }
+
+  // The extra guides (guide/extra-guides.json): each is added once, kept in step with the file
+  // (its link and channels) at every start, and stays gone if you remove it in Settings.
+  syncExtraGuides() {
+    const removed = new Set(this.store.read('extraGuidesRemoved', []));
+    for (const x of EXTRA_GUIDES) {
+      const config = { url: x.url, only: x.channels.map((c) => c.guideId) };
+      const have = this.guides.find((g) => g.builtin === x.id);
+      if (have) {
+        if (have.name !== x.name || JSON.stringify(have.config) !== JSON.stringify(config)) this.updateGuide(have.id, { name: x.name, config });
+      } else if (!removed.has(x.id)) {
+        this.addGuide({ type: 'xmltv', name: x.name, config, builtin: x.id }, { refresh: false }); // init refreshes next
+      }
+    }
+  }
+
+  // Channels the extra guides say they cover (by words in the channel's name), for channels on
+  // automatic matching. These win over a guess from the provider's guide, which doesn't list them.
+  extraMatches(channels) {
+    const out = new Map();
+    const has = (name, words) => (words || []).some((w) => ` ${name} `.includes(` ${normWords(w)} `));
+    const known = new Set(this.guideData.channels.map((c) => c.id));
+    for (const x of EXTRA_GUIDES) {
+      const g = this.guides.find((gg) => gg.builtin === x.id);
+      if (!g) continue;
+      for (const rule of x.channels) {
+        const guideId = `${g.id}|${rule.guideId}`;
+        if (!known.has(guideId)) continue; // not downloaded yet, or that file stopped carrying it
+        for (const ch of channels) {
+          const name = normWords(ch.name);
+          if (!out.has(ch.id) && has(name, rule.match) && !has(name, rule.except)) out.set(ch.id, { guideId, score: 100, reason: `extra guide (${rule.name})` });
+        }
+      }
+    }
+    return out;
   }
 
   // Download the listings again shortly (a guide was added or changed). Waits for a refresh
@@ -299,6 +341,8 @@ class DvrCore extends EventEmitter {
   }
 
   removeGuide(id) {
+    const gone = this.guides.find((g) => g.id === id);
+    if (gone && gone.builtin) this.store.write('extraGuidesRemoved', [...new Set([...this.store.read('extraGuidesRemoved', []), gone.builtin])]);
     this.store.write('guides', this.guides.filter((g) => g.id !== id));
     const data = this.guideData;
     this.store.writeSoon('guidedata', {
@@ -339,8 +383,9 @@ class DvrCore extends EventEmitter {
   reconcileChannels() {
     const auto = this.channels.filter((c) => c.mapMode === 'auto');
     const matches = reconcile(auto, this.guideData.channels);
+    const extra = this.extraMatches(auto);
     this.store.write('channels', this.channels.map((c) => {
-      const m = matches.get(c.id);
+      const m = extra.get(c.id) || matches.get(c.id);
       return m ? { ...c, guideId: m.guideId, matchScore: m.score, matchReason: m.reason } : c;
     }));
     this.changed('channels');

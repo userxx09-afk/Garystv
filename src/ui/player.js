@@ -450,8 +450,9 @@ const Player = {
 // Arlo camera motion (Settings > Arlo, core/arlo.js): while live TV or a recording is playing full
 // screen, the camera's clip shows muted in the lower-left corner for 10 seconds, then goes. It's
 // only a picture over the video: the TV keeps playing and the remote keeps controlling it.
-// Arlo cameras take ~10s to send their first picture, so the camera name shows first and the 10
-// seconds start once the picture does.
+// Arlo cameras take ~10s to send their first picture. That happens out of sight (the box is laid
+// out but invisible, so the picture still loads), and the pop-up appears with live video once
+// the first picture is in; the 10 seconds start then. No picture within WAIT_MS: nothing shows.
 const MotionPopup = {
   SHOW_MS: 10000, WAIT_MS: 25000, // no picture by then: give up
   timer: null, waitTimer: null, poll: null,
@@ -461,7 +462,7 @@ const MotionPopup = {
     this.hide();
     const box = $('#motion'), img = $('img', box);
     $('.cam', box).innerHTML = `<b>${esc(m.camera)}</b> <span>Motion · ${fmt.time(m.time || Date.now())}</span>`;
-    box.classList.add('waiting');
+    box.classList.add('pending');
     box.classList.remove('hide');
     img.onerror = () => this.hide();
     img.src = server(m.view);
@@ -470,7 +471,7 @@ const MotionPopup = {
       if (!img.naturalWidth) return;
       clearInterval(this.poll); this.poll = null;
       clearTimeout(this.waitTimer);
-      box.classList.remove('waiting');
+      box.classList.remove('pending');
       this.timer = setTimeout(() => this.hide(), this.SHOW_MS);
     }, 200);
     this.waitTimer = setTimeout(() => this.hide(), this.WAIT_MS);

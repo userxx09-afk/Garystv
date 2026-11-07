@@ -6,7 +6,19 @@ const SettingsView = {
   section: 'sources',
   chFilter: '',
   hints: [['↑↓←→', 'Move'], ['OK', 'Select'], ['Tab', 'Next field'], ['Esc', 'Back']],
-  sections: [['sources', 'Antenna & Providers'], ['guide', 'Guide data'], ['channels', 'Channels & matching'], ['startup', 'When it starts'], ['recording', 'Recording'], ['media', 'Movies & Shows'], ['arlo', 'Arlo'], ['remote', 'Other locations'], ['updates', 'Updates'], ['backup', 'Backup & restore'], ['status', 'Status']],
+  sections: [['sources', 'Antenna & Providers'], ['guide', 'Guide data'], ['channels', 'Channels & matching'], ['startup', 'When it starts'], ['recording', 'Recording'], ['media', 'Movies & Shows'], ['arlo', 'Arlo'], ['cta', 'CTA'], ['remote', 'Other locations'], ['updates', 'Updates'], ['backup', 'Backup & restore'], ['status', 'Status']],
+
+  // With the activity log highlighted (Status), ↑↓ scroll it; at its top, ↑ moves on as usual.
+  onKey(e) {
+    const log = Nav.current;
+    if (!log || !log.matches('pre.log') || !['ArrowUp', 'ArrowDown'].includes(e.key)) return false;
+    const down = e.key === 'ArrowDown';
+    const atTop = log.scrollTop <= 0;
+    const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 2;
+    if ((!down && atTop) || (down && atEnd)) return false; // let the highlight move
+    log.scrollBy({ top: (down ? 1 : -1) * Math.max(40, log.clientHeight * 0.6) });
+    return true;
+  },
 
   render(root) {
     root.innerHTML = `<div class="settings">
@@ -719,6 +731,33 @@ const SettingsView = {
     };
   },
 
+  // ---------- CTA ----------
+  // Live Chicago 'L' arrivals: the Tapper Train Tracker site, full screen over GarysTV.
+  // Back (remote), Esc or the Back button returns here.
+  CTA_URL: 'https://trains.tapper.co/',
+  cta(pane) {
+    pane.innerHTML = `<div class="box"><h3>CTA</h3>
+        <div class="s">Live Chicago 'L' train arrivals and the system map, from the Tapper Train Tracker.</div>
+        <div class="actions"><div class="btn nav primary" id="ctaLookup" data-key="cta-lookup">🚆 Lookup</div></div>
+        <div class="s" style="font-size:.85rem">Press Back on the remote (or Esc) to come back to GarysTV.</div></div>`;
+    $('#ctaLookup', pane).onclick = () => this.ctaOpen();
+  },
+
+  ctaOpen() {
+    return Modal.open((m, close) => {
+      m.classList.add('modal-full');
+      m.innerHTML = `<div class="full-bar"><div class="btn nav" id="ctaBack" data-key="cta-back">← Back to GarysTV</div>
+          <span class="s">CTA train arrivals</span></div>
+        <iframe class="full-frame nav" data-key="cta-page" src="${esc(this.CTA_URL)}" title="CTA train arrivals" allow="geolocation"></iframe>`;
+      $('#ctaBack', m).onclick = () => close();
+      // The Back button has the highlight first, so Back/Esc work straight away. ↓ (or a click)
+      // moves into the train page to use it; the remote's Back still comes back to GarysTV on the
+      // Fire TV (the app hands Back to GarysTV itself), and the Back button stays at the top.
+      const frame = $('iframe', m);
+      frame._onFocus = () => frame.focus();
+    });
+  },
+
   // ---------- status ----------
   status(pane) {
     const st = App.state.status;
@@ -744,7 +783,7 @@ const SettingsView = {
         <div>⏺ ${st.recordingNow} recording right now</div></div>
       ${(st.plans || []).length ? `<div class="box"><h3>Plans in use right now</h3>${st.plans.map((p) => `<div><b>${esc(p.name)}</b> <span class="s">${p.using.length} of ${p.capacity}</span>${p.using.length ? `: ${esc(p.using.join(', '))}` : ''}</div>`).join('')}
         <div class="s">Watching and recording each use one stream of a plan. When a plan is full, GarysTV uses the same channel on another plan.</div></div>` : ''}
-      ${here}<div class="box"><h3>Activity log</h3><pre class="log">${esc(st.log.join('\n')) || 'Nothing yet.'}</pre></div>`;
+      ${here}<div class="box"><h3>Activity log</h3><div class="s">Move down onto the log, then ↑↓ scroll it.</div><pre class="log nav" data-key="status-log">${esc(st.log.join('\n')) || 'Nothing yet.'}</pre></div>`;
     if (here) {
       $('#switchPc', pane).onclick = () => window.GTV_SWITCH();
       api.get('/api/ping').then((p) => { const el = $('#whichPc'); if (el) el.innerHTML = `<b>${esc(p.name)}</b> at ${esc(window.GTV_SERVER.replace(/^https?:\/\//, ''))} · ${st.platform === 'linux' ? 'home server' : 'Windows PC'}`; }).catch(() => {});
