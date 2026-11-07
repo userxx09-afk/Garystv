@@ -767,7 +767,7 @@ const SettingsView = {
         <div class="s">Live Chicago 'L' train arrivals, from the Tapper Train Tracker.</div>
         <div class="actions"><div class="btn nav primary" id="ctaLookup" data-key="cta-lookup">🚆 Lookup</div>
           <div class="btn nav" id="ctaMap" data-key="cta-map">🗺 Full map (mouse or touch)</div></div>
-        <div class="s" style="font-size:.85rem">Lookup: ↑↓ pick a station, its trains show on the right; OK on ★ keeps it at the top. Back (or Esc) comes back here.</div></div>`;
+        <div class="s" style="font-size:.85rem">Lookup: ↑↓ pick a station, its trains show on the right; OK on ★ keeps it at the top. It opens on your first ★ station, or Clark/Division. Back (or Esc) comes back here.</div></div>`;
     $('#ctaLookup', pane).onclick = () => this.ctaBoard();
     $('#ctaMap', pane).onclick = () => this.ctaOpen();
   },
@@ -793,7 +793,7 @@ const SettingsView = {
           <div class="cta-main" id="ctaArr"><div class="empty">Pick a station.</div></div>
         </div>`;
       let stations = [];
-      let current = this.ctaStore('last') || null;
+      let current = null; // opens on your first ★ station, else Clark/Division
       let filter = '';
       let timer = null;
       const saved = () => this.ctaStore('saved') || [];
@@ -804,7 +804,6 @@ const SettingsView = {
       const showArrivals = async (id) => {
         if (!id) return;
         current = id;
-        this.ctaStore('last', id);
         star();
         const st = stations.find((s) => s.id === id);
         const box = $('#ctaArr', m);
@@ -862,7 +861,8 @@ const SettingsView = {
       fetch(`${base}api/stations`, { cache: 'no-store' }).then((r) => r.json()).then((list) => {
         if (!document.body.contains(m)) return;
         stations = Array.isArray(list) ? list : [];
-        if (!current || !stations.some((s) => s.id === current)) current = saved()[0] || (stations.find((s) => /clark\/lake/i.test(s.name)) || stations[0] || {}).id;
+        const first = saved().find((id) => stations.some((s) => s.id === id));
+        current = first || (stations.find((s) => /^clark\/division/i.test(s.name)) || stations[0] || {}).id;
         paintList();
         const here = $(`[data-st="${current}"]`, m);
         if (here) Nav.focus(here);
