@@ -333,21 +333,36 @@ const SettingsView = {
     });
   },
 
+  // What to search the guide for at first: the channel's name without the provider's tags
+  // ("US| MARQUEE SPORTS NETWORK HD" -> "marquee sports network"). Its number rarely finds an
+  // IPTV channel's listing.
+  searchGuess(c) {
+    return String(c.name || '').replace(/^[^|]{1,15}\|\s*/, '').replace(/[^\x20-\x7e]/g, ' ')
+      .replace(/\b(F?HD|UHD|4K|SD|HEVC|H265|RAW|BACKUP|EAST|WEST)\b/gi, ' ').replace(/[()[\]{}|:]/g, ' ')
+      .replace(/\s+/g, ' ').trim().toLowerCase() || String(c.number || '');
+  },
+
   matchDialog(c) {
     const all = App.state.guideChannels;
+    const byId = new Map(all.map((g) => [g.id, g]));
     return Modal.open((m, close) => {
       const theirs = c.sourceNumber ?? c.number;
+      const now = c.guideId && byId.get(c.guideId);
       m.innerHTML = `<div class="title">${esc(c.number)} ${esc(c.name)}</div>
-        <div class="row" style="align-items:flex-end;gap:.6rem"><div class="field" style="margin:0"><label>Channel number (the provider's is ${esc(theirs || 'none')})</label><input id="mnum" class="nav" inputmode="decimal" maxlength="9" style="width:9rem" value="${esc(c.number)}"></div>
+        <div class="row" style="align-items:flex-end;gap:.6rem"><div class="field" style="margin:0"><label>Channel number (the provider's is ${esc(theirs || 'none')})</label><input id="mnum" class="nav" data-key="mnum" inputmode="decimal" maxlength="9" style="width:9rem" value="${esc(c.number)}"></div>
           <div class="btn nav" id="mnumok">Save number</div>${c.alias ? `<div class="btn nav" id="mnumback">Use ${esc(theirs)}</div>` : ''}</div>
-        <div class="s" style="margin:.8rem 0 .3rem">Guide listing</div>
-        <div class="field"><input id="mq" placeholder="Search guide channels (number, call sign, name)..."></div>
+        <div class="s" style="margin:.8rem 0 .3rem">Guide listing now: <b>${now ? `${esc(now.names[0])}</b> · ${esc(now.providerName)}` : 'none</b>'}</div>
+        <div class="field"><label for="mq">🔍 Search the guide for this channel (OK to type, ↓ for the results)</label><input id="mq" class="nav" data-key="mq" placeholder="Type a name, call sign or number..." autocomplete="off" spellcheck="false"></div>
         <div class="list" id="ml" style="max-height:45vh"></div>
         <div class="actions"><div class="btn nav" data-v="auto">Match automatically</div><div class="btn nav" data-v="none">No guide for this channel</div><div class="btn nav" data-v="">Cancel</div></div>`;
+      // Every word typed must appear, in any order ("marquee sports" finds "US| MARQUEE SPORTS NETWORK HD").
+      const find = (q) => {
+        const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+        return all.filter((g) => { const t = `${g.number} ${g.names.join(' ')}`.toLowerCase(); return words.every((w) => t.includes(w)); }).slice(0, 80);
+      };
       const paint = (q) => {
-        q = q.toLowerCase();
-        const hits = all.filter((g) => !q || `${g.number} ${g.names.join(' ')}`.toLowerCase().includes(q)).slice(0, 80);
-        $('#ml', m).innerHTML = hits.map((g) => `<div class="item nav" data-g="${esc(g.id)}"><div class="main"><div class="t">${esc(g.number || '')} ${esc(g.names[0])}</div><div class="s">${esc(g.names.slice(1).join(' · '))} · ${esc(g.providerName)}</div></div></div>`).join('') || '<div class="empty">No guide channels match.</div>';
+        const hits = find(q);
+        $('#ml', m).innerHTML = hits.map((g) => `<div class="item nav" data-g="${esc(g.id)}"><div class="main"><div class="t">${esc(g.number || '')} ${esc(g.names[0])}${g.id === c.guideId ? ' ✓' : ''}</div><div class="s">${esc(g.names.slice(1).join(' · '))} · ${esc(g.providerName)}</div></div></div>`).join('') || '<div class="empty">No guide channels match. Try fewer or different words.</div>';
         $$('[data-g]', m).forEach((el) => { el.onclick = async () => { await api.put(`/api/channels/${encodeURIComponent(c.id)}`, { guideId: el.dataset.g }); close(true); }; });
       };
       // The number here too: just this channel; the provider's is kept.
@@ -363,9 +378,19 @@ const SettingsView = {
       });
       $('#mnumok', m).onclick = () => saveNum(num.value.trim());
       if (c.alias) $('#mnumback', m).onclick = () => saveNum('');
-      $('#mq', m).oninput = (e) => paint(e.target.value);
-      paint(c.number || '');
-      $('#mq', m).value = c.number || '';
+      const mq = $('#mq', m);
+      mq.onclick = () => mq.focus(); // OK on it brings up the keyboard; just landing on it doesn't
+      mq.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowDown' || e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); mq.blur(); Nav.focus($('#ml .nav', m) || $('[data-v]', m)); }
+      });
+      let t;
+      mq.oninput = () => { clearTimeout(t); t = setTimeout(() => paint(mq.value), 150); };
+      // Start with the channel's name; if that finds nothing, its first word, then its number.
+      const guess = this.searchGuess(c);
+      const first = guess.split(' ')[0];
+      const start = [guess, first.length >= 3 ? first : '', c.number || ''].find((q) => q && find(q).length) || guess;
+      mq.value = start;
+      paint(start);
       $$('[data-v]', m).forEach((b) => {
         b.onclick = async () => {
           const v = b.dataset.v;
@@ -732,15 +757,121 @@ const SettingsView = {
   },
 
   // ---------- CTA ----------
-  // Live Chicago 'L' arrivals: the Tapper Train Tracker site, full screen over GarysTV.
-  // Back (remote), Esc or the Back button returns here.
+  // Live Chicago 'L' arrivals from the Tapper Train Tracker. Lookup is made for the remote:
+  // stations down the left (yours first), arrivals on the right. The full site (map, search)
+  // is there too for a mouse or touch screen. Back (remote), Esc or the Back button returns.
   CTA_URL: 'https://trains.tapper.co/',
+  CTA_LINES: { Red: ['Red', '#c60c30'], Blue: ['Blue', '#00a1de'], Brn: ['Brown', '#62361b'], G: ['Green', '#009b3a'], Org: ['Orange', '#f9461c'], P: ['Purple', '#522398'], Pink: ['Pink', '#e27ea6'], Y: ['Yellow', '#f9e300'] },
   cta(pane) {
     pane.innerHTML = `<div class="box"><h3>CTA</h3>
-        <div class="s">Live Chicago 'L' train arrivals and the system map, from the Tapper Train Tracker.</div>
-        <div class="actions"><div class="btn nav primary" id="ctaLookup" data-key="cta-lookup">🚆 Lookup</div></div>
-        <div class="s" style="font-size:.85rem">Press Back on the remote (or Esc) to come back to GarysTV.</div></div>`;
-    $('#ctaLookup', pane).onclick = () => this.ctaOpen();
+        <div class="s">Live Chicago 'L' train arrivals, from the Tapper Train Tracker.</div>
+        <div class="actions"><div class="btn nav primary" id="ctaLookup" data-key="cta-lookup">🚆 Lookup</div>
+          <div class="btn nav" id="ctaMap" data-key="cta-map">🗺 Full map (mouse or touch)</div></div>
+        <div class="s" style="font-size:.85rem">Lookup: ↑↓ pick a station, its trains show on the right; OK on ★ keeps it at the top. Back (or Esc) comes back here.</div></div>`;
+    $('#ctaLookup', pane).onclick = () => this.ctaBoard();
+    $('#ctaMap', pane).onclick = () => this.ctaOpen();
+  },
+
+  ctaStore(key, value) {
+    try {
+      if (value === undefined) return JSON.parse(localStorage.getItem(`gtv.cta.${key}`) || 'null');
+      localStorage.setItem(`gtv.cta.${key}`, JSON.stringify(value));
+    } catch (_) { /* private mode */ }
+    return null;
+  },
+
+  ctaBoard() {
+    const base = this.CTA_URL;
+    return Modal.open((m, close) => {
+      m.classList.add('modal-full');
+      m.innerHTML = `<div class="full-bar"><div class="btn nav" id="ctaBack" data-key="cta-back">← Back to GarysTV</div>
+          <div class="btn nav" id="ctaStar" data-key="cta-star">☆ Keep at the top</div>
+          <span class="s">CTA train arrivals</span></div>
+        <div class="cta-body">
+          <div class="cta-side"><div class="field" style="margin:0"><input id="ctaF" class="nav" data-key="cta-f" placeholder="🔍 Find a station..." autocomplete="off" spellcheck="false"></div>
+            <div class="list" id="ctaList"><div class="empty">Loading stations...</div></div></div>
+          <div class="cta-main" id="ctaArr"><div class="empty">Pick a station.</div></div>
+        </div>`;
+      let stations = [];
+      let current = this.ctaStore('last') || null;
+      let filter = '';
+      let timer = null;
+      const saved = () => this.ctaStore('saved') || [];
+      const lineChip = (l) => { const [name, color] = this.CTA_LINES[l] || [l, '#666']; return `<span class="cta-line" style="background:${color}${l === 'Y' ? ';color:#111;text-shadow:none' : ''}">${esc(name)}</span>`; };
+      const mins = (t) => (t.approaching || t.secondsAway < 60 ? 'Due' : `${Math.round(t.secondsAway / 60)} min`);
+      const star = () => { $('#ctaStar', m).textContent = saved().includes(current) ? '★ Kept at the top (OK to remove)' : '☆ Keep at the top'; };
+
+      const showArrivals = async (id) => {
+        if (!id) return;
+        current = id;
+        this.ctaStore('last', id);
+        star();
+        const st = stations.find((s) => s.id === id);
+        const box = $('#ctaArr', m);
+        if (!box) return;
+        try {
+          const r = await fetch(`${base}api/arrivals?station=${encodeURIComponent(id)}`, { cache: 'no-store' });
+          const d = await r.json();
+          if (!r.ok) throw new Error(d.error || `error ${r.status}`);
+          if (current !== id || !document.body.contains(box)) return; // moved on meanwhile
+          const groups = new Map();
+          for (const t of d.trains || []) { if (!groups.has(t.platform)) groups.set(t.platform, []); groups.get(t.platform).push(t); }
+          box.innerHTML = `<h2>${esc(d.station || (st && st.name) || '')} ${st ? st.lines.map(lineChip).join(' ') : ''}</h2>
+            <div class="s">Updated ${esc(new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }))} · refreshes every 30 seconds</div>
+            ${groups.size ? [...groups].map(([plat, list]) => `<div class="cta-plat"><h3>${esc(plat)}</h3>${list.slice(0, 6).map((t) => `
+              <div class="cta-row">${lineChip(t.line)}<span class="cta-dest">${esc(t.destination)}</span>
+                <span class="cta-min${mins(t) === 'Due' ? ' due' : ''}">${mins(t)}</span>${t.delayed ? '<span class="tag">Delayed</span>' : t.scheduled ? '<span class="tag">Scheduled</span>' : ''}</div>`).join('')}</div>`).join('')
+              : '<div class="empty">No trains predicted right now.</div>'}`;
+        } catch (e) {
+          if (current === id && document.body.contains(box)) box.innerHTML = `<div class="empty">Couldn't get arrivals: ${esc(e.message)}</div>`;
+        }
+      };
+
+      const paintList = () => {
+        const keep = saved();
+        const f = filter.toLowerCase();
+        const list = stations.filter((s) => !f || s.name.toLowerCase().includes(f))
+          .sort((a, b) => (keep.includes(b.id) - keep.includes(a.id)) || a.name.localeCompare(b.name));
+        $('#ctaList', m).innerHTML = list.map((s) => `<div class="item nav${s.id === current ? ' picked' : ''}" data-st="${esc(s.id)}" data-key="cta-st-${esc(s.id)}">
+          <div class="main"><div class="t">${keep.includes(s.id) ? '★ ' : ''}${esc(s.name.replace(/\s*\(.*\)$/, ''))}</div><div class="s">${s.lines.map(lineChip).join(' ')}</div></div></div>`).join('') || '<div class="empty">No station by that name.</div>';
+        // Just moving onto a station shows its trains (after a moment, so scrolling past is quick).
+        let wait;
+        $$('[data-st]', m).forEach((el) => {
+          el._onFocus = () => { clearTimeout(wait); wait = setTimeout(() => showArrivals(el.dataset.st), 400); };
+          el.onclick = () => showArrivals(el.dataset.st);
+        });
+      };
+
+      const fin = $('#ctaF', m);
+      fin.onclick = () => fin.focus(); // OK brings up the keyboard
+      fin.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowDown' || e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); fin.blur(); Nav.focus($('#ctaList .nav', m)); }
+      });
+      let ft;
+      fin.oninput = () => { clearTimeout(ft); ft = setTimeout(() => { filter = fin.value.trim(); paintList(); }, 200); };
+
+      $('#ctaBack', m).onclick = () => close();
+      $('#ctaStar', m).onclick = () => {
+        if (!current) return;
+        const keep = saved();
+        this.ctaStore('saved', keep.includes(current) ? keep.filter((x) => x !== current) : [...keep, current]);
+        star();
+        paintList();
+      };
+
+      fetch(`${base}api/stations`, { cache: 'no-store' }).then((r) => r.json()).then((list) => {
+        if (!document.body.contains(m)) return;
+        stations = Array.isArray(list) ? list : [];
+        if (!current || !stations.some((s) => s.id === current)) current = saved()[0] || (stations.find((s) => /clark\/lake/i.test(s.name)) || stations[0] || {}).id;
+        paintList();
+        const here = $(`[data-st="${current}"]`, m);
+        if (here) Nav.focus(here);
+        showArrivals(current);
+      }).catch((e) => { $('#ctaList', m).innerHTML = `<div class="empty">Couldn't reach the train tracker: ${esc(e.message)}</div>`; });
+
+      // Fresh times every 30 seconds while this is open.
+      timer = setInterval(() => { if (!document.body.contains(m)) { clearInterval(timer); return; } showArrivals(current); }, 30000);
+    });
   },
 
   ctaOpen() {

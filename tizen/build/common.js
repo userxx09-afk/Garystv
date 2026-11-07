@@ -127,6 +127,18 @@ const Nav = {
       const right = dir === 'right';
       const row = others.filter(({ b }) => sameRow(b) && (right ? b.left >= a.right - 2 : b.right <= a.left + 2));
       best = pick(row, ({ b }) => (right ? b.left - a.right : a.left - b.right));
+      if (!best) {
+        // Nothing level with it: the nearest thing that way, wherever it is (side menu -> the
+        // screen beside it, and back), so the top bar, side menu and screen work alike.
+        const cy = (r) => (r.top + r.bottom) / 2;
+        const side = others.filter(({ el, b }) => (right ? b.left >= a.right - 2 : b.right <= a.left + 2) && !el.closest('#topnav'));
+        best = pick(side, ({ b }) => Math.abs(cy(b) - cy(a)) * 2 + (right ? b.left - a.right : a.left - b.right));
+      }
+      // Into a side menu from beside it: its picked item (the page you're on), not whichever
+      // menu item happens to be level with you.
+      const menu = best && best.el.closest('.menu');
+      const on = menu && !menu.contains(cur) && menu.querySelector('.nav.on');
+      if (on && items.includes(on)) best = { el: on };
       if (!best) { // end of the row: the next row's first item (or the previous row's last) in this group
         const group = (el) => el.closest('.modal, #topnav, .menu, .tabs, .g-bar, .actions, .row, .list, .menu-list, .posters, .cards, .tiles, .seasons, table, .box, .pad');
         const g = group(cur);
