@@ -288,7 +288,7 @@ const GuideView = {
           ${p.subtitle ? `<div class="s">${esc(p.subtitle)}</div>` : ''}</div>`;
       }).join('');
       return `<div class="g-row ${ri === this.row ? 'sel' : ''}">
-        <div class="g-ch" data-ch="${esc(r.id)}"><span class="num">${esc(r.number)}</span>${r.logo ? `<img src="${esc(r.logo)}" alt="" referrerpolicy="no-referrer">` : ''}<span class="nm">${r.favorite ? '<span class="fav">📌</span> ' : ''}${this.inAnyList(r.id) ? '<span class="fav">★</span> ' : ''}${esc(r.name)}</span>${typeof Xfinity !== 'undefined' && Xfinity.wants({ id: r.id }) ? `<span class="xf-badge" title="Opens in Xfinity${(Xfinity.settings().channels[r.id] || '') ? ` (Xfinity ${esc(Xfinity.settings().channels[r.id])})` : ''}">Xfinity</span>` : ''}</div>
+        <div class="g-ch" data-ch="${esc(r.id)}"><span class="num">${esc(r.number)}</span>${r.logo ? `<img src="${esc(r.logo)}" alt="" referrerpolicy="no-referrer">` : ''}<span class="nm">${r.favorite ? '<span class="fav">📌</span> ' : ''}${this.inAnyList(r.id) ? '<span class="fav">★</span> ' : ''}${esc(r.name)}</span>${typeof Xfinity !== 'undefined' && Xfinity.carries({ id: r.id }) ? `<span class="xf-badge" title="${Xfinity.wants({ id: r.id }) ? 'Opens in Xfinity' : 'Xfinity has this channel if GarysTV can\'t play it'}${(Xfinity.settings().channels[r.id] || '') ? ` (Xfinity ${esc(Xfinity.settings().channels[r.id])})` : ''}">Xfinity</span>` : ''}</div>
         <div class="g-progs">${progs}</div></div>`;
     }).join('');
     $$('.g-p', body).forEach((el) => {
@@ -383,9 +383,12 @@ const GuideView = {
     const lists = App.state.favLists || [], r = this.rows[this.row], p = this.focused(), cur = this.list, now = Date.now();
     const items = [];
     const after = async () => { await App.loadAll(); this.setList(this.listId, r && r.id); };
-    const xf = r && typeof Xfinity !== 'undefined' && Xfinity.wants(App.state.channels.find((c) => c.id === r.id));
+    const rc = r && App.state.channels.find((c) => c.id === r.id);
+    const xf = rc && typeof Xfinity !== 'undefined' && Xfinity.wants(rc);
+    const xfBackup = rc && typeof Xfinity !== 'undefined' && !xf && Xfinity.carries(rc);
     if (r) items.push({ label: `▶ Watch ${r.number} ${r.name}${xf ? ' on Xfinity' : ''}`, run: () => Player.play('live', r.id), cls: 'primary' });
     if (xf) items.push({ label: '▶ Watch in GarysTV instead', run: () => Player.play('live', r.id, { here: true }) });
+    if (xfBackup) items.push({ label: '▶ Watch in Xfinity instead', run: () => Xfinity.tryChannel(rc, true) });
     if (r) items.push(...App.numberItem(r, after));
     items.push({ label: '🔢 Go to a channel number...', run: () => this.pad() });
     if (r) items.push(...App.recordItems(r, p).map((c) => ({ ...c, run: () => Promise.resolve(c.run()).then(() => this.refresh()) })));

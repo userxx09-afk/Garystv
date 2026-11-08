@@ -71,12 +71,20 @@ const Player = {
       // Every plan with this channel is in use (or a recording took this one): say what's using it.
       if (d.response && d.response.code === 409) {
         hls.stopLoad();
-        fetch(url).then((r) => r.json()).then((j) => { if (session === this.session) { this.showOsd(j.error); toast(j.error, 8000); } }).catch(() => {});
+        fetch(url).then((r) => r.json()).then((j) => {
+          if (session !== this.session) return;
+          this.showOsd(j.error);
+          if (!this.offerXfinity(j.error)) toast(j.error, 8000);
+        }).catch(() => {});
         return;
       }
       if (!d.fatal) return;
       if (d.type === Hls.ErrorTypes.MEDIA_ERROR) { hls.recoverMediaError(); return; }
-      if (this.retries++ >= MAX_RETRIES) { this.showOsd('Could not play this channel. Check the tuner or stream, then try again.'); return; }
+      if (this.retries++ >= MAX_RETRIES) {
+        this.showOsd('Could not play this channel. Check the tuner or stream, then try again.');
+        this.offerXfinity('This channel isn\'t playing in GarysTV (the stream isn\'t answering).');
+        return;
+      }
       this.showOsd('Signal lost. Reconnecting...');
       setTimeout(() => { if (session !== this.session) return; if (/^manifest/.test(d.details)) hls.loadSource(url); else hls.startLoad(); }, 2000);
     });
@@ -84,6 +92,15 @@ const Player = {
     hls.loadSource(url);
     hls.attachMedia(video);
     video.play().catch(() => {});
+  },
+
+  // GarysTV first (Settings > Xfinity): a ticked channel that won't play here can go to Xfinity.
+  // Answers whether Xfinity was offered.
+  offerXfinity(why) {
+    const ch = this.channel, session = this.session;
+    if (typeof Xfinity === 'undefined' || !ch || !Xfinity.carries(ch)) return false;
+    Xfinity.offer(ch, why).then((opened) => { if (opened && session === this.session) { this.stop(); App.render(); } });
+    return true;
   },
 
   playRec(kind, id, offset) {
@@ -359,6 +376,7 @@ const Player = {
     choices.push({ label: '▦ Guide', value: 'guide' });
     choices.push({ label: '■ Stop watching', value: 'stopWatching' });
     if (this.canVlc()) choices.push({ label: '▶ Play in VLC instead', value: 'vlc' });
+    if (typeof Xfinity !== 'undefined' && Xfinity.carries(ch)) choices.push({ label: '▶ Watch in Xfinity instead', value: 'xfinity' });
     choices.push({ label: '⌂ Home', value: 'home' });
     choices.push({ label: 'Cancel', value: null });
     const v = await Modal.menu(`${ch.number} ${ch.name}`, p && !p.filler ? `<div class="s">${esc(p.title)} · until ${fmt.time(p.end)}</div>` : '', choices);
@@ -382,6 +400,7 @@ const Player = {
       else if (v === 'num') await num[0].run();
       else if (typeof v === 'string' && v.startsWith('fav')) await favs[+v.slice(3)].run();
       else if (v === 'vlc') this.openVlc('live', ch.id);
+      else if (v === 'xfinity' && await Xfinity.tryChannel(ch, true)) { this.stop(); App.render(); }
     } catch (e) { toast(e.message); }
   },
 

@@ -582,10 +582,13 @@ const SettingsView = {
       : dev === 'tizen' ? (s.tizenAppId ? 'This Samsung TV opens the app with the ID below.' : '⚠️ Samsung TV: fill in the Xfinity app ID below first.')
         : 'On this PC, Xfinity opens in your web browser, where you sign in to Xfinity.';
     pane.innerHTML = `
-      <div class="box"><h3>Xfinity first</h3>
-        <div class="s">Browse in GarysTV's guide. When you pick a channel ticked below, GarysTV opens <b>Xfinity Stream</b> to play it. If Xfinity won't open, the channel plays in GarysTV instead. To skip Xfinity once, hold OK on the channel in the guide and choose <b>Watch in GarysTV instead</b>.</div>
+      <div class="box"><h3>Xfinity</h3>
+        <div class="s">Channels ticked below show an <span class="xf-badge">Xfinity</span> badge in the guide and can be watched in the <b>Xfinity Stream</b> app. Xfinity can't be opened on a given channel (it opens on its own Home screen), so by default GarysTV plays them itself and offers Xfinity only when one won't play here. Hold OK on a channel (in the guide or while watching) for <b>Watch in Xfinity instead</b>.</div>
         <div class="s">Your Xfinity login stays in Xfinity's own app (sign in there once on each TV). GarysTV never stores it.</div>
-        <label class="check nav" data-key="xf-on" style="margin:.8rem 0"><input type="checkbox" id="xfOn" ${s.enabled ? 'checked' : ''}> Open channels in Xfinity first</label>
+        <label class="check nav" data-key="xf-on" style="margin:.8rem 0"><input type="checkbox" id="xfOn" ${s.enabled ? 'checked' : ''}> Use Xfinity for the channels ticked below</label>
+        <div class="field"><label>When I pick one of them</label><select id="xfOrder" class="nav" data-key="xf-order">
+          <option value="garystv" ${s.order !== 'xfinity' ? 'selected' : ''}>Play in GarysTV; offer Xfinity if it won't play</option>
+          <option value="xfinity" ${s.order === 'xfinity' ? 'selected' : ''}>Open Xfinity first</option></select></div>
         <div>${here}</div></div>
       <div class="box"><h3>How each device opens Xfinity</h3>
         <div class="s">Xfinity doesn't publish a way to open its app straight to a channel, so for now it opens on Xfinity's own screen. If a link that goes to a channel turns up, put it here; <b>{channel}</b> becomes the Xfinity channel number.</div>
@@ -606,7 +609,8 @@ const SettingsView = {
             <td><input class="nav" data-key="xfn-${esc(c.id)}" data-k="num" style="width:6rem" value="${esc(on ? s.channels[c.id] : '')}"></td></tr>`;
         }).join('')}</tbody></table>
         ${f && more.length === 200 ? '<div class="s">Showing the first 200 matches. Type more of the name to narrow it.</div>' : ''}</div>`;
-    $('#xfOn', pane).onchange = (e) => save({ enabled: e.target.checked }, e.target.checked ? 'Xfinity first is on' : 'Xfinity first is off');
+    $('#xfOn', pane).onchange = (e) => save({ enabled: e.target.checked }, e.target.checked ? 'Xfinity is on for the ticked channels' : 'Xfinity is off');
+    $('#xfOrder', pane).onchange = (e) => save({ order: e.target.value }, e.target.value === 'xfinity' ? 'Ticked channels open in Xfinity first' : 'Ticked channels play in GarysTV first');
     for (const id of ['xfPkg', 'xfLink', 'xfTizen', 'xfWeb']) { const el = $(`#${id}`, pane); el._onFocus = () => el.focus(); }
     $('#xfSaveHow', pane).onclick = () => save({
       firetvPackage: $('#xfPkg', pane).value.trim() || XFINITY_DEFAULTS.firetvPackage,

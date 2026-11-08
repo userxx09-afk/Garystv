@@ -6,11 +6,15 @@
 // Xfinity doesn't document a way to open its app straight to a channel. Each device's "link"
 // can hold one once it's found on that device; {channel} becomes the Xfinity channel number.
 // With no link, the app just opens.
-/* global GTVAndroid, tizen, XFINITY_LINEUPS */
+/* global GTVAndroid, tizen, XFINITY_LINEUPS, Modal */
 const XFINITY_DEFAULTS = {
   enabled: false,
   channels: {}, // GarysTV channel id -> Xfinity channel number ('' = Xfinity has it, number unknown)
   lineup: 'chicago-popular', // which lineup Gary's suggestions come from (xfinity-lineup.js)
+  // garystv: play in GarysTV, and offer Xfinity when a ticked channel won't play here (the default:
+  // Xfinity can't be opened on a given channel, so going there first lands on its Home screen).
+  // xfinity: open Xfinity first.
+  order: 'garystv',
   firetvPackage: 'com.xfinity.cloudtvr.tenfoot',
   firetvLink: '', // e.g. a URI the app accepts; blank = just open the app
   tizenAppId: '', // the Xfinity app's ID on the Samsung TV
@@ -28,8 +32,8 @@ const Xfinity = {
     return 'web';
   },
 
-  // Whether this channel should go to Xfinity (on, carried by Xfinity, and this device can).
-  wants(channel) {
+  // Whether Xfinity can take this channel here (on, ticked in Settings > Xfinity, and this device can open it).
+  carries(channel) {
     const s = this.settings();
     if (!s.enabled || this.failed || !channel) return false;
     if (!Object.prototype.hasOwnProperty.call(s.channels, channel.id)) return false;
@@ -37,6 +41,18 @@ const Xfinity = {
     if (d === 'tizen') return !!s.tizenAppId;
     if (d === 'firetv') return !!s.firetvPackage;
     return !!s.webLink;
+  },
+
+  // Whether picking this channel goes straight to Xfinity (Xfinity first).
+  wants(channel) { return this.settings().order === 'xfinity' && this.carries(channel); },
+
+  // GarysTV first: a ticked channel that won't play here. Asks, then opens Xfinity. Answers true if it did.
+  async offer(channel, why) {
+    if (!this.carries(channel)) return false;
+    const num = this.settings().channels[channel.id];
+    const v = await Modal.menu(`${channel.number} ${channel.name}`, `<div class="s">${esc(why || 'This channel won\'t play in GarysTV right now.')}<br><br>Xfinity has it${num ? ` (Xfinity ${esc(num)})` : ''}. Xfinity opens on its own Home screen; find the channel there.</div>`,
+      [{ label: '▶ Watch in Xfinity', value: 'go', cls: 'primary' }, { label: 'Stay in GarysTV', value: null }]);
+    return v === 'go' ? this.tryChannel(channel, true) : false;
   },
 
   fill(link, channel) {
@@ -62,8 +78,8 @@ const Xfinity = {
   },
 
   // Used by Player.play for live TV. Answers true when Xfinity took the channel.
-  async tryChannel(channel) {
-    if (!this.wants(channel)) return false;
+  async tryChannel(channel, asked = false) {
+    if (!(asked ? this.carries(channel) : this.wants(channel))) return false;
     if (await this.open(channel)) {
       const num = this.settings().channels[channel.id];
       toast(`Opened Xfinity for ${channel.name}${num ? ` (Xfinity ${num})` : ''}`, 4000);
