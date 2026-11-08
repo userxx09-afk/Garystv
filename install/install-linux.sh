@@ -34,8 +34,9 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 if [ "$UNINSTALL" -eq 1 ]; then
-    systemctl disable --now garystv.service garystv-update.path 2>/dev/null || true
-    rm -f /etc/systemd/system/garystv.service /etc/systemd/system/garystv-update.path /etc/systemd/system/garystv-update.service
+    systemctl disable --now garystv.service garystv-update.path garystv-nas.path mnt-garystvnas.mount 2>/dev/null || true
+    rm -f /etc/systemd/system/garystv.service /etc/systemd/system/garystv-update.path /etc/systemd/system/garystv-update.service \
+        /etc/systemd/system/garystv-nas.path /etc/systemd/system/garystv-nas.service /etc/systemd/system/mnt-garystvnas.mount /etc/garystv/nas-credentials
     rm -rf /usr/local/lib/garystv
     systemctl daemon-reload
     rm -rf "$APP_DIR"
@@ -48,6 +49,11 @@ if ! command -v node >/dev/null || ! command -v npm >/dev/null || ! command -v f
     echo "==> Installing packages"
     apt-get update -qq
     apt-get install -y -qq nodejs npm ffmpeg curl
+fi
+# Network storage for recordings (Settings > Recording): shared folders (SMB) and NFS.
+if ! command -v mount.cifs >/dev/null || ! command -v mount.nfs >/dev/null; then
+    echo "==> Installing network-storage support"
+    apt-get install -y -qq cifs-utils nfs-common || echo "   (couldn't install them now; GarysTV tries again when you connect network storage)"
 fi
 node_major="$(node -p 'process.versions.node.split(".")[0]')"
 if [ "$node_major" -lt 18 ]; then
@@ -69,6 +75,7 @@ cp -r "$REPO_DIR/src" "$REPO_DIR/headless.js" "$REPO_DIR/package.json" "$REPO_DI
 install -d -m 755 -o "$SERVICE_USER" -g "$SERVICE_USER" "$DATA_DIR"
 install -d -m 775 -o "$SERVICE_USER" -g "$SERVICE_USER" "$RECORDINGS"
 install -d -m 755 -o "$SERVICE_USER" -g "$SERVICE_USER" "$DATA_DIR/update"
+install -d -m 700 -o "$SERVICE_USER" -g "$SERVICE_USER" "$DATA_DIR/nas"
 
 # IPTV logins live here, on this machine only (never in the code). Readable by root and the service.
 SECRETS=/etc/garystv/secrets.env
@@ -112,7 +119,7 @@ Wants=network-online.target
 User=$SERVICE_USER
 WorkingDirectory=$APP_DIR
 EnvironmentFile=-$SECRETS
-ExecStart=/usr/bin/node $APP_DIR/headless.js --data=$DATA_DIR/data --recordings=$RECORDINGS --port=$PORT --update-dir=$DATA_DIR/update
+ExecStart=/usr/bin/node $APP_DIR/headless.js --data=$DATA_DIR/data --recordings=$RECORDINGS --port=$PORT --update-dir=$DATA_DIR/update --nas-dir=$DATA_DIR/nas
 # Stopping lets recordings finish writing first.
 KillSignal=SIGTERM
 TimeoutStopSec=15
@@ -147,6 +154,28 @@ Unit=garystv-update.service
 WantedBy=multi-user.target
 EOF
 
+# Network storage: GarysTV leaves request.json in its nas folder; this root helper mounts the share.
+install -m 755 "$REPO_DIR/install/nas-linux.sh" /usr/local/lib/garystv/nas-linux.sh
+cat > /etc/systemd/system/garystv-nas.service <<EOF
+[Unit]
+Description=Connect network storage for GarysTV recordings (asked for by GarysTV, Settings > Recording)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/garystv/nas-linux.sh
+EOF
+cat > /etc/systemd/system/garystv-nas.path <<EOF
+[Unit]
+Description=Watch for GarysTV asking to connect network storage
+
+[Path]
+PathExists=$DATA_DIR/nas/request.json
+Unit=garystv-nas.service
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 if command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then
     echo "==> Opening firewall port $PORT"
     ufw allow "$PORT/tcp" comment "GarysTV" >/dev/null
@@ -155,6 +184,7 @@ fi
 systemctl daemon-reload
 systemctl enable garystv.service
 systemctl enable --now garystv-update.path
+systemctl enable --now garystv-nas.path
 systemctl restart garystv.service
 
 ip_addr="$(hostname -I | awk '{print $1}')"

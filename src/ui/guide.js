@@ -1,6 +1,6 @@
 // The program guide: channels down the side, 90 minutes across the top,
 // a details panel with a picture-in-picture preview above (DISH-style).
-/* global App, Player, toast */
+/* global App, Player, toast, Xfinity */
 const SLOT = 30 * 60000;
 const SPAN = 3 * SLOT;
 const align = (t) => Math.floor(t / SLOT) * SLOT;
@@ -288,7 +288,7 @@ const GuideView = {
           ${p.subtitle ? `<div class="s">${esc(p.subtitle)}</div>` : ''}</div>`;
       }).join('');
       return `<div class="g-row ${ri === this.row ? 'sel' : ''}">
-        <div class="g-ch" data-ch="${esc(r.id)}"><span class="num">${esc(r.number)}</span>${r.logo ? `<img src="${esc(r.logo)}" alt="" referrerpolicy="no-referrer">` : ''}<span class="nm">${r.favorite ? '<span class="fav">📌</span> ' : ''}${this.inAnyList(r.id) ? '<span class="fav">★</span> ' : ''}${esc(r.name)}</span></div>
+        <div class="g-ch" data-ch="${esc(r.id)}"><span class="num">${esc(r.number)}</span>${r.logo ? `<img src="${esc(r.logo)}" alt="" referrerpolicy="no-referrer">` : ''}<span class="nm">${r.favorite ? '<span class="fav">📌</span> ' : ''}${this.inAnyList(r.id) ? '<span class="fav">★</span> ' : ''}${esc(r.name)}</span>${typeof Xfinity !== 'undefined' && Xfinity.wants({ id: r.id }) ? `<span class="xf-badge" title="Opens in Xfinity${(Xfinity.settings().channels[r.id] || '') ? ` (Xfinity ${esc(Xfinity.settings().channels[r.id])})` : ''}">Xfinity</span>` : ''}</div>
         <div class="g-progs">${progs}</div></div>`;
     }).join('');
     $$('.g-p', body).forEach((el) => {

@@ -25,6 +25,7 @@ const PRECHECK_MS = 3 * 60000; // check a timer's stream this long before it sta
 const { findFfmpeg, findVlc } = require('./tools');
 const commercials = require('./commercials');
 const { Tuners, capacity } = require('./tuners');
+const { Storage } = require('./storage');
 
 const GUIDES = [require('./guide/xmltv'), require('./guide/hdhomerun-guide'), require('./guide/demo-guide')];
 const guideType = (t) => GUIDES.find((g) => g.type === t) || (() => { throw new Error(`Unknown guide type ${t}`); })();
@@ -58,6 +59,7 @@ class DvrCore extends EventEmitter {
     this.active = new Map(); // jobId -> { handle, recId }
     this.log = [];
     this.tuners = new Tuners(this); // which plan each stream is using (tuners.js)
+    this.storage = new Storage(this); // this computer or network storage (storage.js)
   }
 
   // ---------- persistence helpers ----------
@@ -609,7 +611,7 @@ class DvrCore extends EventEmitter {
       return; // tried again at the next tick
     }
     const channel = lease.channel;
-    const file = recordingPath(this.settings.recordingsDir, job);
+    const file = recordingPath(this.storage.recordDir(), job); // network storage, or this computer if it's not answering
     const rec = {
       id: newId(), jobId: job.id, ruleId: job.ruleId, channelId: job.channelId, channelNumber: job.channelNumber, channelName: job.channelName,
       title: job.title, subtitle: job.subtitle, desc: job.desc, season: job.season, episode: job.episode, categories: job.categories,
@@ -708,7 +710,9 @@ class DvrCore extends EventEmitter {
       recordingNow: [...this.active.keys()].length,
       plans: this.tuners.overview(),
       ffmpeg: ff, vlc,
-      diskFree: (() => { try { const s = fs.statfsSync(fs.existsSync(this.settings.recordingsDir) ? this.settings.recordingsDir : os.homedir()); return s.bavail * s.bsize; } catch (_) { return null; } })(),
+      // A share that isn't answering can take a long time to say so: don't ask it here.
+      diskFree: (() => { if (this.storage.network && this.storage.reachable !== true) return null; try { const s = fs.statfsSync(fs.existsSync(this.settings.recordingsDir) ? this.settings.recordingsDir : os.homedir()); return s.bavail * s.bsize; } catch (_) { return null; } })(),
+      storage: this.storage.status(),
       log: this.log.slice(0, 50),
     };
   }

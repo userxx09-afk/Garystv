@@ -211,7 +211,7 @@ function createServer(core) {
   };
   const timeshift = core.timeshift = new Timeshift({
     ffmpeg: () => findFfmpeg(core.settings),
-    dir: () => path.join(core.settings.recordingsDir, '.live-buffer'),
+    dir: () => path.join(core.storage.localDir, '.live-buffer'), // always this computer, even when recordings go to network storage
     minutes: () => core.settings.timeshiftMinutes || 30,
     note: (m) => core.note(m),
     // Watching uses a plan like recording does; the same channel on another plan if this one is busy.
@@ -284,6 +284,9 @@ function createServer(core) {
     ['GET', '/api/recordings', (q, b, p, req) => (req.who.peer ? core.getRecordings() : sharing.withShared(core.getRecordings()))],
     ['GET', '/api/search', (q) => core.search(q.q)],
     ['PUT', '/api/settings', (q, b) => core.updateSettings(b)],
+    // Where recordings are saved (storage.js): network storage, or back to this computer.
+    ['POST', '/api/storage/network', (q, b) => core.storage.connect(b)],
+    ['POST', '/api/storage/local', (q, b) => core.storage.useLocal(b.dir)],
     ['GET', '/api/discover', () => hdhomerun.discover()],
     ['POST', '/api/sources', (q, b) => core.addSource(b)],
     ['PUT', '/api/sources/:id', (q, b, p) => core.updateSource(p.id, b)],

@@ -428,8 +428,7 @@ const SettingsView = {
     const s = App.state.settings;
     const num = (k, label, hint) => `<div class="field"><label>${label}</label><input data-s="${k}" type="number" min="0" value="${esc(s[k])}">${hint ? `<span class="s" style="font-size:.85rem">${hint}</span>` : ''}</div>`;
     pane.innerHTML = `
-      <div class="box"><h3>Where recordings are saved</h3>
-        <div class="field"><label>Folder (an external USB drive works fine)</label><input data-s="recordingsDir" value="${esc(s.recordingsDir)}"></div></div>
+      ${this.storageBox()}
       <div class="box"><h3>Timing</h3>
         <div class="row">${num('prePadMin', 'Start recordings early (minutes)')}${num('postPadMin', 'End recordings late (minutes)', 'Helps when live sports run over')}${num('guideHours', 'Guide hours to download')}</div></div>
       <div class="box"><h3>Watching</h3>
@@ -449,11 +448,83 @@ const SettingsView = {
       const el = $('#pcAddr', pane);
       if (el && p.addresses && p.addresses.length) el.innerHTML = `The TV app finds this PC by itself. If it can't, type this PC's address on the TV: <b>${p.addresses.map(esc).join('</b> or <b>')}</b>`;
     }).catch(() => {});
+    this.storageWire(pane);
     $('#saveS', pane).onclick = async () => {
       const patch = {};
       for (const el of $$('[data-s]', pane)) patch[el.dataset.s] = el.type === 'checkbox' ? el.checked : el.type === 'number' ? +el.value : el.value.trim();
       await api.put('/api/settings', patch);
       toast('Settings saved');
+    };
+  },
+
+  // Where recordings are saved: a folder on this computer, or network storage (core/storage.js).
+  storageBox() {
+    const s = App.state.settings, st = App.state.status.storage || { mode: 'local', canNetwork: false };
+    const net = st.mode === 'network';
+    const where = window.GTV_SERVER ? (App.state.status.platform === 'linux' ? 'the home server' : 'the PC running GarysTV') : 'this computer';
+    const ok = st.reachable === false ? `⚠️ <b>${esc(st.where)}</b> isn't answering. New recordings go to ${esc(where)} (${esc(st.local)}) until it's back.`
+      : `✅ Recordings are saved on <b>${esc(st.where)}</b>${App.state.status.diskFree ? ` (${(App.state.status.diskFree / 1e9).toFixed(0)} GB free)` : ''}.`;
+    const opt = (v, l, on) => `<option value="${v}" ${on ? 'selected' : ''}>${l}</option>`;
+    return `<div class="box"><h3>Where recordings are saved</h3>
+      ${net ? `<div>${ok}</div>` : ''}
+      <div class="field"><label>Save recordings on</label><select id="stMode" class="nav" data-key="st-mode">${opt('local', `${where[0].toUpperCase()}${where.slice(1)} (a folder or USB drive)`, !net)}${opt('network', 'Network storage (a NAS or shared folder)', net)}</select></div>
+      <div id="stLocal" ${net ? 'style="display:none"' : ''}>
+        <div class="field"><label>Folder (an external USB drive works fine)</label><input ${net ? 'id="stLocalDir"' : 'data-s="recordingsDir"'} class="nav" data-key="st-dir" value="${esc(net ? st.local : s.recordingsDir)}"></div>
+        ${net ? '<div class="actions"><div class="btn nav primary" id="stUseLocal" data-key="st-use-local">Save recordings here instead</div></div>' : ''}</div>
+      <div id="stNet" ${net ? '' : 'style="display:none"'}>
+        ${st.canNetwork ? `
+        <div class="s">A NAS or another computer's shared folder. Recordings already made stay where they are, and live TV's rewind buffer stays on ${esc(where)}.</div>
+        <div class="row">
+          <div class="field"><label>Kind</label><select id="stType" class="nav" data-key="st-type">${opt('smb', 'Shared folder (SMB): most NAS boxes, Windows', st.type !== 'nfs')}${st.nfs ? opt('nfs', 'NFS', st.type === 'nfs') : ''}</select></div>
+          <div class="field"><label>NAS name or address</label><input id="stServer" class="nav" data-key="st-server" value="${esc(st.server || '')}" placeholder="192.168.1.50 or mynas"></div></div>
+        <div class="row">
+          <div class="field"><label id="stShareLabel">${st.type === 'nfs' ? 'Export path' : 'Share name'}</label><input id="stShare" class="nav" data-key="st-share" value="${esc(st.share || '')}" placeholder="${st.type === 'nfs' ? '/volume1/recordings' : 'Recordings'}"></div>
+          <div class="field"><label>Folder inside it (optional)</label><input id="stFolder" class="nav" data-key="st-folder" value="${esc(st.folder || '')}" placeholder="GarysTV"></div></div>
+        <div class="row" id="stLogin" ${st.type === 'nfs' ? 'style="display:none"' : ''}>
+          <div class="field"><label>Username (blank for guest)</label><input id="stUser" class="nav" data-key="st-user" autocomplete="off" value="${esc(st.username || '')}"></div>
+          <div class="field"><label>Password</label><input id="stPass" class="nav" data-key="st-pass" type="password" autocomplete="off" placeholder="${net && st.username ? 'Type it again to reconnect' : ''}"></div></div>
+        <div class="s" style="font-size:.85rem">The password isn't kept in GarysTV's settings: ${App.state.status.platform === 'linux' ? 'the home server keeps it in a file only its administrator (root) can read' : 'Windows keeps it in its Credential Manager'}.</div>
+        <div class="actions"><div class="btn nav primary" id="stConnect" data-key="st-connect">${net ? 'Reconnect' : 'Connect and save recordings there'}</div></div>`
+    : `<div class="s">${App.state.status.platform === 'linux' ? 'This server needs its installer run once more for network storage: <b>sudo ./install/install-linux.sh</b>' : 'Network storage works with GarysTV on Windows or on the home server.'}</div>`}</div></div>`;
+  },
+
+  storageWire(pane) {
+    const mode = $('#stMode', pane);
+    if (!mode) return;
+    mode.onchange = () => {
+      $('#stLocal', pane).style.display = mode.value === 'local' ? '' : 'none';
+      $('#stNet', pane).style.display = mode.value === 'network' ? '' : 'none';
+    };
+    for (const el of $$('#stLocal input, #stNet input', pane)) el._onFocus = () => el.focus();
+    const type = $('#stType', pane);
+    if (type) type.onchange = () => {
+      const nfs = type.value === 'nfs';
+      $('#stLogin', pane).style.display = nfs ? 'none' : '';
+      $('#stShareLabel', pane).textContent = nfs ? 'Export path' : 'Share name';
+      $('#stShare', pane).placeholder = nfs ? '/volume1/recordings' : 'Recordings';
+    };
+    const connect = $('#stConnect', pane);
+    if (connect) connect.onclick = async () => {
+      const body = { type: type.value, server: $('#stServer', pane).value, share: $('#stShare', pane).value, folder: $('#stFolder', pane).value, username: $('#stUser', pane).value, password: $('#stPass', pane).value };
+      connect.textContent = 'Connecting...';
+      try {
+        const st = await api.post('/api/storage/network', body);
+        toast(`Connected. New recordings are saved on ${st.where}.`, 6000);
+        await App.loadAll();
+        App.render('sec-recording');
+      } catch (e) {
+        connect.textContent = 'Try again';
+        toast(e.message, 9000);
+      }
+    };
+    const back = $('#stUseLocal', pane);
+    if (back) back.onclick = async () => {
+      try {
+        const st = await api.post('/api/storage/local', { dir: $('#stLocalDir', pane).value });
+        toast(`New recordings are saved on this computer: ${st.where}`, 6000);
+        await App.loadAll();
+        App.render('sec-recording');
+      } catch (e) { toast(e.message, 8000); }
     };
   },
 

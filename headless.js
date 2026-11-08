@@ -3,6 +3,7 @@
 // the home network.
 //   node headless.js --data=/var/lib/garystv [--recordings=DIR] [--port=5480] [--update-dir=DIR] [--demo]
 // --update-dir: where it asks the root helper to install an update (install-linux.sh sets it up).
+// --nas-dir: where it asks the root helper to connect network storage for recordings.
 const path = require('path');
 const { DvrCore } = require('./src/core');
 const { createServer } = require('./src/core/server');
@@ -54,6 +55,7 @@ async function main() {
   core.note(`GarysTV engine listening on port ${port} (data: ${dataDir}, recordings: ${core.settings.recordingsDir})`);
   await applySecrets(core);
   if (flag('update-dir')) setupServerUpdates(core, { dir: flag('update-dir'), version: require('./package.json').version });
+  if (flag('nas-dir')) core.storage.nasDir = flag('nas-dir'); // network storage for recordings (core/storage.js, install/nas-linux.sh)
 
   // systemd stop / Ctrl-C: let recordings finish writing, then exit.
   let stopping = false;

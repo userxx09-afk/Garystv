@@ -25,7 +25,7 @@ jobs:
       - run: npm ci
       - run: npm test
       - name: Check the Linux installer scripts
-        run: bash -n install/install-linux.sh && bash -n install/update-linux.sh && shellcheck install/install-linux.sh install/update-linux.sh
+        run: bash -n install/install-linux.sh && bash -n install/update-linux.sh && bash -n install/nas-linux.sh && shellcheck install/install-linux.sh install/update-linux.sh install/nas-linux.sh
       # What a home server downloads to update itself (install/update-linux.sh).
       - name: Home server files
         run: |

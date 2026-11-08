@@ -25,7 +25,7 @@ Closing the window asks whether to exit GarysTV or keep it running in the system
 | Need | Recommended | Why |
 |---|---|---|
 | Antenna tuner | **HDHomeRun** (Flex 4K, Connect Duo/Quatro) | A network tuner; Windows needs no drivers. GarysTV finds it automatically. |
-| Recording storage | Any internal or USB drive | Settings > Recording > folder. About 3–7 GB per hour of HD over-the-air TV. |
+| Recording storage | Any internal or USB drive, or a NAS | Settings > Recording > *Save recordings on*: a folder on this computer, or **network storage** (a NAS or shared folder: SMB, or NFS on the home server). About 3–7 GB per hour of HD over-the-air TV. With network storage, live TV's rewind buffer stays on this computer, and a recording that starts while the NAS isn't answering is saved on this computer instead. On Windows the share's password goes to Windows' Credential Manager; on the home server a root helper (`install/nas-linux.sh`) mounts the share at `/mnt/garystvnas` and keeps the password in `/etc/garystv/nas-credentials` (root only). |
 | Watching | **ffmpeg** (built-in player), **VLC** (backup player) | OTA TV is MPEG-2, which needs converting to play in-app. On Windows, GarysTV installs both when they are missing (VLC asks Windows for permission once), or use Settings > Status. The home-server installer adds ffmpeg. On a Fire TV or Android phone, the VLC app is the backup player (hold OK while watching > Play in VLC). |
 
 USB stick tuners (Hauppauge etc.) aren't supported yet. They need a different, driver-based capture path.
