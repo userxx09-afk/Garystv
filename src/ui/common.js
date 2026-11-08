@@ -78,6 +78,52 @@ function toast(msg, ms = 3500) {
   setTimeout(() => el.remove(), ms);
 }
 
+// ---------- saving a file where you choose ----------
+// Asks where to save, in whatever way this place can: the PC app's own Save dialog
+// (GTVDesktop, from src/desktop-preload.js), Android's file picker (GTVAndroid.saveFile), the
+// browser's Save picker (showSaveFilePicker: Chrome and Edge, on the PC itself or over https),
+// else an ordinary download to the Downloads folder.
+// Answers { where } once saved (the place, when it's known), or null if you cancelled.
+async function saveFile(name, text, mime = 'application/json') {
+  const ext = (name.match(/\.[^.]+$/) || ['.json'])[0];
+  if (window.GTVDesktop && window.GTVDesktop.saveFile) {
+    const r = await window.GTVDesktop.saveFile(name, text, ext);
+    if (r.error) throw new Error(`Couldn't save it: ${r.error}`);
+    return r.path ? { where: r.path } : null;
+  }
+  if (window.GTVAndroid && window.GTVAndroid.saveFile) {
+    const r = await new Promise((resolve) => {
+      window.GTV_SAVED = (state, detail) => { window.GTV_SAVED = null; resolve({ state, detail }); };
+      window.GTVAndroid.saveFile(name, mime, text);
+    });
+    if (r.state === 'saved') return { where: r.detail || name };
+    if (r.state === 'cancelled') return null;
+    if (r.state === 'error') throw new Error(`Couldn't save it: ${r.detail}`);
+    // 'nopicker': this device has no file picker; try the ways below.
+  }
+  if (window.showSaveFilePicker) {
+    let handle;
+    try {
+      handle = await window.showSaveFilePicker({ suggestedName: name, types: [{ description: 'GarysTV file', accept: { [mime]: [ext] } }] });
+    } catch (e) {
+      if (e.name === 'AbortError') return null; // cancelled
+      handle = null; // not allowed here: download it instead
+    }
+    if (handle) {
+      const w = await handle.createWritable();
+      await w.write(new Blob([text], { type: mime }));
+      await w.close();
+      return { where: handle.name };
+    }
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: mime }));
+  a.download = name;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  return { where: `${name} (in Downloads)` };
+}
+
 // ---------- remote-style navigation ----------
 // Any element with class "nav" can be focused with the arrow keys and
 // activated with Enter (or clicked with the mouse).

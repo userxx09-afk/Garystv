@@ -11,12 +11,14 @@ import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.OpenableColumns
 import android.provider.Settings
 import android.os.Handler
 import android.os.Looper
 import android.view.KeyEvent
 import android.view.WindowManager
 import android.webkit.JavascriptInterface
+import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import org.json.JSONObject
@@ -72,7 +74,7 @@ class MainActivity : Activity() {
             settings.loadWithOverviewMode = true
             settings.textZoom = 100
             settings.setSupportZoom(false)
-            webChromeClient = WebChromeClient()
+            webChromeClient = Chrome()
             addJavascriptInterface(Bridge(), "GTVAndroid")
             isFocusable = true
             isFocusableInTouchMode = true
@@ -168,6 +170,24 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun exit() = runOnUiThread { finish() }
 
+        // Saving a file (a backup): Android's file picker asks where, then it's written there.
+        // Answers through GTV_SAVED(state, detail): 'saved' (detail: the file's name), 'cancelled',
+        // 'error' (detail: why), or 'nopicker' when this device has no file picker (some Fire TVs).
+        @JavascriptInterface
+        fun saveFile(name: String, mime: String, text: String) = runOnUiThread {
+            pendingSave = text
+            val pick = Intent(Intent.ACTION_CREATE_DOCUMENT)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .setType(mime.ifBlank { "application/octet-stream" })
+                .putExtra(Intent.EXTRA_TITLE, name)
+            try {
+                startActivityForResult(pick, SAVE_FILE)
+            } catch (_: ActivityNotFoundException) {
+                pendingSave = null
+                saved("nopicker")
+            }
+        }
+
         // VLC, the backup player. url is GarysTV's /direct/ address for the video.
         // Updates: answers through GTV_UPDATE_INFO(info, error) and GTV_UPDATE_STATE(state, detail).
         @JavascriptInterface
@@ -200,6 +220,59 @@ class MainActivity : Activity() {
                 val google = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$VLC"))
                 try { startActivity(amazon) } catch (_: ActivityNotFoundException) {
                     try { startActivity(google) } catch (_: ActivityNotFoundException) { }
+                }
+            }
+        }
+    }
+
+    // ---------- files: saving where you choose, and opening one ----------
+    private var pendingSave: String? = null
+    private var pendingOpen: ValueCallback<Array<Uri>?>? = null
+
+    private fun saved(state: String, detail: String = "") =
+        js("window.GTV_SAVED && GTV_SAVED(${JSONObject.quote(state)}, ${JSONObject.quote(detail)})")
+
+    // A page's <input type="file"> (Restore a backup): Android's file picker. Without this the
+    // WebView ignores the button.
+    private inner class Chrome : WebChromeClient() {
+        override fun onShowFileChooser(view: WebView, callback: ValueCallback<Array<Uri>?>, params: WebChromeClient.FileChooserParams): Boolean {
+            pendingOpen?.onReceiveValue(null)
+            pendingOpen = callback
+            // Any kind of file: Android often doesn't know a .json file's type.
+            val pick = Intent(Intent.ACTION_GET_CONTENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
+            try {
+                startActivityForResult(Intent.createChooser(pick, params.title ?: "Choose a file"), OPEN_FILE)
+            } catch (_: ActivityNotFoundException) {
+                pendingOpen = null
+                callback.onReceiveValue(null)
+            }
+            return true
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        when (requestCode) {
+            OPEN_FILE -> {
+                pendingOpen?.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data))
+                pendingOpen = null
+            }
+            SAVE_FILE -> {
+                val text = pendingSave
+                pendingSave = null
+                val uri = data?.data
+                if (resultCode != RESULT_OK || uri == null || text == null) { saved("cancelled"); return }
+                thread {
+                    try {
+                        val out = contentResolver.openOutputStream(uri, "w") ?: throw Exception("Android didn't open the file")
+                        out.use { it.write(text.toByteArray(Charsets.UTF_8)) }
+                        val name = contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+                            if (it.moveToFirst()) it.getString(0) else null
+                        }
+                        saved("saved", name ?: "")
+                    } catch (e: Exception) {
+                        saved("error", e.message ?: "It couldn't be written")
+                    }
                 }
             }
         }
@@ -309,5 +382,7 @@ class MainActivity : Activity() {
         const val VLC = "org.videolan.vlc"
         const val RELEASES = "https://github.com/userxx09-afk/Garystv/releases/latest/download"
         const val INSTALLED = "local.garystv.INSTALLED"
+        const val SAVE_FILE = 41
+        const val OPEN_FILE = 42
     }
 }

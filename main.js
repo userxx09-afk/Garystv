@@ -1,7 +1,7 @@
 // Windows app shell. The DVR engine runs here; the window just shows the
 // screens. Closing the window asks whether to exit or keep GarysTV in the tray
 // so timers still record (Settings can remember the answer).
-const { app, BrowserWindow, Tray, Menu, nativeImage, powerSaveBlocker, globalShortcut, dialog } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, powerSaveBlocker, globalShortcut, dialog, ipcMain } = require('electron');
 const path = require('path');
 const { DvrCore } = require('./src/core');
 const { createServer } = require('./src/core/server');
@@ -36,7 +36,10 @@ function createWindow() {
     width: +(flag('w') || 1600), height: +(flag('h') || 900), minWidth: 1100, minHeight: 640, useContentSize: true, backgroundColor: '#05070c', show: false,
     title: 'GarysTV', icon: path.join(__dirname, 'src', 'ui', 'icon.png'), autoHideMenuBar: true,
     // No background throttling: a minimized or covered window still gets the time it needs, so TV keeps playing smoothly.
-    webPreferences: { contextIsolation: true, nodeIntegration: false, offscreen: !!flag('shot'), backgroundThrottling: false },
+    webPreferences: {
+      contextIsolation: true, nodeIntegration: false, offscreen: !!flag('shot'), backgroundThrottling: false,
+      preload: path.join(__dirname, 'src', 'desktop-preload.js'), // window.GTVDesktop: the Save dialog
+    },
   });
   win.setMenu(null);
   const view = flag('view');
@@ -76,6 +79,29 @@ async function askOnClose() {
   if (action === 'exit') app.quit();
   else win.hide();
 }
+
+// Saving a file from the screens (a backup, say): Windows' Save dialog, opening where the last
+// one went (Documents the first time), then the file is written there.
+let lastSaveDir = null;
+ipcMain.handle('gtv:save-file', async (e, { name, text, ext }) => {
+  // Only GarysTV's own screens may ask (not a website the window was sent to).
+  const from = (() => { try { return new URL(e.senderFrame.url).origin; } catch (_) { return ''; } })();
+  if (!win || e.sender !== win.webContents || from !== `http://127.0.0.1:${port}`) return { error: 'Not from the GarysTV screens' };
+  const safe = path.basename(name || 'GarysTV-file').replace(/[<>:"/\\|?*]/g, '_');
+  const kind = (ext || path.extname(safe)).replace(/^\./, '');
+  const r = await dialog.showSaveDialog(win, {
+    title: 'Save', defaultPath: path.join(lastSaveDir || app.getPath('documents'), safe),
+    filters: kind ? [{ name: `${kind.toUpperCase()} file`, extensions: [kind] }, { name: 'All files', extensions: ['*'] }] : [],
+  });
+  if (r.canceled || !r.filePath) return {};
+  try {
+    await require('fs').promises.writeFile(r.filePath, text, 'utf8');
+  } catch (err) {
+    return { error: err.message };
+  }
+  lastSaveDir = path.dirname(r.filePath);
+  return { path: r.filePath };
+});
 
 // Test hook: render a screen and save it as a PNG, then exit.
 async function screenshot(file) {

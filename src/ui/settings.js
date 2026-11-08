@@ -712,11 +712,12 @@ const SettingsView = {
   // ---------- backup & restore ----------
   // Everything you set up, in one file: to move GarysTV to another computer, or keep a copy.
   backup(pane) {
-    const tv = !!window.GTV_SERVER;
+    // A Samsung TV can't save or open files; the Android app can (it asks where with Android's file picker).
+    const tv = !!window.GTV_SERVER && !(window.GTVAndroid && GTVAndroid.saveFile);
     pane.innerHTML = `<div class="box"><h3>Save a backup</h3>
-        <div class="s">Saves your providers, guide sources, channel choices (shown, pinned, your numbers, guide listings), favorites lists, timers and settings in one file. Recordings and the downloaded guide aren't in it.</div>
+        <div class="s">You choose where it goes. It has your providers, guide sources, channel choices (shown, pinned, your numbers, guide listings), favorites lists, timers and settings in one file. Recordings and the downloaded guide aren't in it.</div>
         <label class="check"><input type="checkbox" id="bkLogins" class="nav" data-key="bk-logins"> Include IPTV logins and the TMDb key (for a new computer; keep the file private)</label>
-        <div class="actions"><div class="btn nav primary" id="bkSave" data-key="bk-save">Save a backup file</div></div></div>
+        <div class="actions"><div class="btn nav primary" id="bkSave" data-key="bk-save">Save a backup file...</div></div></div>
       <div class="box"><h3>Restore a backup</h3>
         <div class="s">Replaces this GarysTV's setup with the one in the file. Recordings stay. Providers are scanned again and your channel choices are put back as the channels arrive (a few minutes for a big list). Logins left out of the file are kept from this computer when it has the same provider; otherwise add them in Antenna & Providers.</div>
         <input type="file" id="bkFile" accept=".json,application/json" style="display:none">
@@ -726,12 +727,9 @@ const SettingsView = {
     $('#bkSave', pane).onclick = async () => {
       try {
         const b = await api.get(`/api/backup?logins=${logins.checked ? 1 : 0}`);
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(new Blob([JSON.stringify(b, null, 1)], { type: 'application/json' }));
-        a.download = `GarysTV-backup-${new Date().toISOString().slice(0, 10)}${b.logins ? '-with-logins' : ''}.json`;
-        document.body.append(a); a.click(); a.remove();
-        setTimeout(() => URL.revokeObjectURL(a.href), 60000);
-        toast(`Saved ${a.download}`, 5000);
+        const name = `GarysTV-backup-${new Date().toISOString().slice(0, 10)}${b.logins ? '-with-logins' : ''}.json`;
+        const saved = await saveFile(name, JSON.stringify(b, null, 1));
+        if (saved) toast(`Saved ${saved.where}`, 6000);
       } catch (e) { toast(e.message); }
     };
     const file = $('#bkFile', pane);
