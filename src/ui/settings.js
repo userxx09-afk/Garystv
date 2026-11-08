@@ -1,6 +1,6 @@
 // Settings: tuners & IPTV providers, guide sources, matching channels to the
 // guide, recording options and status.
-/* global App, Updates, GTVAndroid, categoryOf, CATEGORY_RULES, GuideView, Player, Xfinity, XFINITY_DEFAULTS */
+/* global App, Updates, GTVAndroid, categoryOf, CATEGORY_RULES, GuideView, Player, Xfinity, XFINITY_DEFAULTS, XFINITY_LINEUPS */
 const SettingsView = {
   title: 'Settings',
   section: 'sources',
@@ -494,8 +494,18 @@ const SettingsView = {
     };
     const s = cur(), st = App.state, dev = Xfinity.device();
     const srcType = new Map(st.sources.map((x) => [x.id, x.type]));
-    const list = st.channels.filter((c) => !c.hidden).sort(byNumber);
-    const ticked = list.filter((c) => Object.prototype.hasOwnProperty.call(s.channels, c.id)).length;
+    const isOn = (id) => Object.prototype.hasOwnProperty.call(s.channels, id);
+    const sugg = Xfinity.suggest(st.channels);
+    const lineup = (XFINITY_LINEUPS[s.lineup] || {}).name || 'no lineup';
+    // Ticked and suggested channels first, in Xfinity's order; the filter finds any other.
+    const f = (this.xfFilter || '').toLowerCase();
+    const xnum = (c) => parseFloat(isOn(c.id) ? s.channels[c.id] : (sugg.get(c.id) || {}).num) || 1e9;
+    const shown = st.channels.filter((c) => !c.hidden);
+    const top = shown.filter((c) => isOn(c.id) || sugg.has(c.id)).sort((a, b) => xnum(a) - xnum(b) || byNumber(a, b));
+    const more = f ? shown.filter((c) => !isOn(c.id) && !sugg.has(c.id) && `${c.number} ${c.name} ${c.group || ''}`.toLowerCase().includes(f)).sort(byNumber).slice(0, 200) : [];
+    const list = [...top, ...more];
+    const ticked = shown.filter((c) => isOn(c.id)).length;
+    const sure = [...sugg.values()].filter((g) => g.sure).length;
     const has = Xfinity.installed();
     const here = dev === 'firetv' ? (has ? '✅ The Xfinity Stream app is on this Fire TV.' : '⚠️ The Xfinity Stream app is not on this Fire TV yet. Get it from the Amazon app store and sign in there once.')
       : dev === 'tizen' ? (s.tizenAppId ? 'This Samsung TV opens the app with the ID below.' : '⚠️ Samsung TV: fill in the Xfinity app ID below first.')
@@ -514,15 +524,17 @@ const SettingsView = {
         <div class="field"><label>Windows / web browser: Xfinity address</label><input id="xfWeb" class="nav" data-key="xf-web" value="${esc(s.webLink)}"></div>
         <div class="actions"><div class="btn nav primary" id="xfSaveHow" data-key="xf-save-how">Save</div></div></div>
       <div class="box"><h3>Channels to open in Xfinity</h3>
-        <div class="s">${ticked} of ${list.length} channels open in Xfinity. Tick the ones your Xfinity package has; the Xfinity number is optional and only used by a channel link.</div>
-        <div class="actions"><div class="btn nav" id="xfAnt" data-key="xf-ant">Tick all antenna channels</div><div class="btn nav" id="xfAll" data-key="xf-all">Tick all</div><div class="btn nav" id="xfNone" data-key="xf-none">Untick all</div><div class="btn nav primary" id="xfSaveCh" data-key="xf-save-ch">Save channels</div></div>
-        <table class="chs"><thead><tr><th>Xfinity</th><th>Ch</th><th>Name</th><th>Xfinity #</th></tr></thead><tbody>
-        ${list.slice(0, 400).map((c) => {
-          const on = Object.prototype.hasOwnProperty.call(s.channels, c.id);
+        <div class="s">${ticked} channels open in Xfinity. <b>Gary's suggestions</b> are your channels that match <b>${esc(lineup)}</b> by name: ${sugg.size} found, ${sure} of them sure. <b>Apply Gary's suggestions</b> ticks them all with their Xfinity numbers; untick any you don't want and save. Look over any marked <span class="conf md">Check</span>.</div>
+        <div class="actions"><div class="btn nav primary" id="xfApply" data-key="xf-apply">Apply Gary's suggestions (${sugg.size})</div>${st.sources.some((x) => x.type === 'hdhomerun') ? '<div class="btn nav" id="xfAnt" data-key="xf-ant">Tick all antenna channels</div>' : ''}<div class="btn nav" id="xfNone" data-key="xf-none">Untick all</div><div class="btn nav primary" id="xfSaveCh" data-key="xf-save-ch">Save channels</div></div>
+        <div class="field"><input id="xff" class="nav" data-key="xff" placeholder="Find another channel to tick..." value="${esc(this.xfFilter || '')}"></div>
+        <table class="chs"><thead><tr><th>Xfinity</th><th>Ch</th><th>Name</th><th>Gary's suggestion</th><th>Xfinity #</th></tr></thead><tbody>
+        ${list.map((c) => {
+          const on = isOn(c.id), g = sugg.get(c.id);
           return `<tr data-ch="${esc(c.id)}"><td><input type="checkbox" class="nav" data-key="xf-${esc(c.id)}" data-k="on" ${on ? 'checked' : ''}></td><td><b>${esc(c.number)}</b></td><td>${esc(c.name)}</td>
+            <td>${g ? `Xfinity <b>${esc(g.num)}</b> ${esc(g.label)}${g.sure ? '' : ' <span class="conf md">Check</span>'}` : '<span class="s">—</span>'}</td>
             <td><input class="nav" data-key="xfn-${esc(c.id)}" data-k="num" style="width:6rem" value="${esc(on ? s.channels[c.id] : '')}"></td></tr>`;
         }).join('')}</tbody></table>
-        ${list.length > 400 ? `<div class="s">Showing the first 400 of ${list.length} channels.</div>` : ''}</div>`;
+        ${f && more.length === 200 ? '<div class="s">Showing the first 200 matches. Type more of the name to narrow it.</div>' : ''}</div>`;
     $('#xfOn', pane).onchange = (e) => save({ enabled: e.target.checked }, e.target.checked ? 'Xfinity first is on' : 'Xfinity first is off');
     for (const id of ['xfPkg', 'xfLink', 'xfTizen', 'xfWeb']) { const el = $(`#${id}`, pane); el._onFocus = () => el.focus(); }
     $('#xfSaveHow', pane).onclick = () => save({
@@ -534,13 +546,24 @@ const SettingsView = {
     const rows = $$('tr[data-ch]', pane);
     $$('input[data-k="num"]', pane).forEach((el) => { el._onFocus = () => el.focus(); });
     const tick = (pick) => rows.forEach((tr) => { $('[data-k="on"]', tr).checked = pick(list.find((c) => c.id === tr.dataset.ch)); });
-    $('#xfAnt', pane).onclick = () => tick((c) => c && srcType.get(c.sourceId) === 'hdhomerun');
-    $('#xfAll', pane).onclick = () => tick(() => true);
+    const ant = $('#xfAnt', pane);
+    if (ant) ant.onclick = () => tick((c) => c && srcType.get(c.sourceId) === 'hdhomerun');
     $('#xfNone', pane).onclick = () => tick(() => false);
+    $('#xfApply', pane).onclick = async () => {
+      if (!sugg.size) return toast('No suggestions: none of your channels match the Xfinity lineup by name.', 6000);
+      const channels = { ...s.channels };
+      for (const [id, g] of sugg) channels[id] = g.num;
+      await save({ channels }, `Applied Gary's suggestions: ${sugg.size} channels open in Xfinity`);
+      this.xfinity(pane);
+    };
+    const fin = $('#xff', pane);
+    fin.onclick = () => fin.focus();
+    let ft;
+    fin.oninput = () => { clearTimeout(ft); ft = setTimeout(() => { this.xfFilter = fin.value; this.xfinity(pane); const i = $('#xff'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 300); };
     $('#xfSaveCh', pane).onclick = async () => {
       const channels = {};
       for (const tr of rows) if ($('[data-k="on"]', tr).checked) channels[tr.dataset.ch] = $('[data-k="num"]', tr).value.trim();
-      for (const [id, n] of Object.entries(s.channels)) if (!list.some((c) => c.id === id)) channels[id] = n; // hidden channels keep theirs
+      for (const [id, n] of Object.entries(s.channels)) if (!list.some((c) => c.id === id)) channels[id] = n; // channels not on screen keep theirs
       await save({ channels }, `${Object.keys(channels).length} channels open in Xfinity`);
       this.xfinity(pane);
     };

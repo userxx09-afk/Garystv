@@ -6,10 +6,11 @@
 // Xfinity doesn't document a way to open its app straight to a channel. Each device's "link"
 // can hold one once it's found on that device; {channel} becomes the Xfinity channel number.
 // With no link, the app just opens.
-/* global GTVAndroid, tizen */
+/* global GTVAndroid, tizen, XFINITY_LINEUPS */
 const XFINITY_DEFAULTS = {
   enabled: false,
   channels: {}, // GarysTV channel id -> Xfinity channel number ('' = Xfinity has it, number unknown)
+  lineup: 'chicago-popular', // which lineup Gary's suggestions come from (xfinity-lineup.js)
   firetvPackage: 'com.xfinity.cloudtvr.tenfoot',
   firetvLink: '', // e.g. a URI the app accepts; blank = just open the app
   tizenAppId: '', // the Xfinity app's ID on the Samsung TV
@@ -71,6 +72,46 @@ const Xfinity = {
     this.failed = true;
     toast(`Couldn't open Xfinity on this ${this.device() === 'web' ? 'PC' : 'TV'}, so ${channel.name} plays in GarysTV. Check Settings > Xfinity.`, 7000);
     return false;
+  },
+
+  // ---------- Gary's suggestions ----------
+  // Which of this GarysTV's channels look like channels in the Xfinity lineup (xfinity-lineup.js),
+  // by name. -> Map(channel id -> { num, label, sure }), at most one channel per Xfinity channel:
+  // the provider's own feed over a free stream, HD over SD, a plain name over one with a note
+  // in brackets (a backup feed, another city's station). sure: false = only the start of the
+  // name matched; worth a look.
+  suggest(channels, lineupKey) {
+    const key = lineupKey || this.settings().lineup;
+    if (this.cache && this.cache.channels === channels && this.cache.key === key) return this.cache.out; // same channel list: same answer
+    const lineup = (typeof XFINITY_LINEUPS !== 'undefined' && XFINITY_LINEUPS[key]) || null;
+    const out = new Map();
+    this.cache = { channels, key, out };
+    if (!lineup) return out;
+    const freeSources = new Set((App.state.sources || []).filter((s) => s.type === 'free').map((s) => s.id));
+    const city = lineup.city || '';
+    const norm = (n) => String(n).replace(/^[^|]*\|\s*/, '').replace(/[^\x20-\x7E]/g, ' ').toUpperCase()
+      .replace(/\([^)]*\)/g, ' ').replace(/\b(FHD|UHD|HD|SD|4K|8K|HEVC|EAST)\b/g, ' ').replace(/\s+/g, ' ').trim();
+    // Streaming-service, event and team channels share names with real ones; leave them out.
+    const skip = /PPV|PACKAGE|VIP|EVENT|\bTEAMS?\b|\bVS\.?\b|@|CINEMANIA|NETFLIX|TUBI|PLUTO|PRIME|PEACOCK|PARAMOUNT\+|HULU|DISNEY\+|HBO MAX|SPECTRUM|FLO |MILB|NFHS|DAZN|FITE|VICTORY|ESPN ?PLUS|ESPN\+|ESPN PLAY|B1G\+|BTN\+|FIFA|DIRTVISION|VIAPLAY|VIX|APPLE TV|B\/R|TENNIS CHANNEL PLUS|\bWEST\b|PACIFIC|ESPA[NÑ]OL|SPANISH|LATINO|DEPORTES/i;
+    const cands = channels.filter((c) => !c.hidden && !/^#/.test(c.name) && !skip.test(`${c.group || ''} ${c.name}`))
+      .map((c) => ({ c, n: norm(c.name), raw: ` ${String(c.name).toUpperCase().replace(/[^\x20-\x7E]/g, ' ')} `, free: freeSources.has(c.sourceId) }));
+    for (const [num, label, ...names] of lineup.channels) {
+      const tests = names.map((a) => ({ a, call: /^[WK][A-Z]{2,3}$/.test(a), word: new RegExp(`\\b${a.replace(/[.*+?^${}()|[\]\\!&]/g, '\\$&')}\\b`) }));
+      let best = null;
+      for (const k of cands) {
+        let score = 0;
+        for (const { a, call, word } of tests) {
+          if (call) { if (city && k.raw.includes(city) && word.test(k.raw)) score = Math.max(score, 100); continue; } // call sign: this city's only
+          if (k.n === a) score = Math.max(score, 100);
+          else if (a.length >= 5 && k.n.startsWith(a) && word.test(k.n)) score = Math.max(score, 60);
+        }
+        if (!score) continue;
+        score += (k.free ? 0 : 2) + (/\bHD\b/.test(k.raw) ? 1 : 0) - (/\(/.test(k.c.name) && !k.raw.includes(city) ? 3 : 0);
+        if (!best || score > best.score) best = { k, score };
+      }
+      if (best && !out.has(best.k.c.id)) out.set(best.k.c.id, { num: String(num), label, sure: best.score >= 95 });
+    }
+    return out;
   },
 
   // For Settings: whether the Xfinity app is on this device (null = can't tell here).
