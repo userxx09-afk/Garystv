@@ -383,7 +383,9 @@ const GuideView = {
     const lists = App.state.favLists || [], r = this.rows[this.row], p = this.focused(), cur = this.list, now = Date.now();
     const items = [];
     const after = async () => { await App.loadAll(); this.setList(this.listId, r && r.id); };
-    if (r) items.push({ label: `▶ Watch ${r.number} ${r.name}`, run: () => Player.play('live', r.id), cls: 'primary' });
+    const xf = r && typeof Xfinity !== 'undefined' && Xfinity.wants(App.state.channels.find((c) => c.id === r.id));
+    if (r) items.push({ label: `▶ Watch ${r.number} ${r.name}${xf ? ' on Xfinity' : ''}`, run: () => Player.play('live', r.id), cls: 'primary' });
+    if (xf) items.push({ label: '▶ Watch in GarysTV instead', run: () => Player.play('live', r.id, { here: true }) });
     if (r) items.push(...App.numberItem(r, after));
     items.push({ label: '🔢 Go to a channel number...', run: () => this.pad() });
     if (r) items.push(...App.recordItems(r, p).map((c) => ({ ...c, run: () => Promise.resolve(c.run()).then(() => this.refresh()) })));

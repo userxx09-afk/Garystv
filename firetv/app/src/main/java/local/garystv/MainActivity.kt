@@ -207,6 +207,37 @@ class MainActivity : Activity() {
             false
         }
 
+        // Xfinity first (src/ui/xfinity.js): whether an app is installed, and opening it. With a
+        // link, the app is asked to open that (a channel, once its link format is known); without
+        // one, or if it won't take the link, it just opens. Answers whether anything opened.
+        @JavascriptInterface
+        fun hasApp(pkg: String): Boolean = try {
+            packageManager.getPackageInfo(pkg, 0)
+            true
+        } catch (_: PackageManager.NameNotFoundException) {
+            false
+        }
+
+        @JavascriptInterface
+        fun openApp(pkg: String, link: String): Boolean {
+            if (link.isNotBlank()) {
+                val view = Intent(Intent.ACTION_VIEW, Uri.parse(link)).setPackage(pkg).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                try {
+                    startActivity(view)
+                    return true
+                } catch (_: Exception) { /* falls back to just opening the app */ }
+            }
+            val open = packageManager.getLeanbackLaunchIntentForPackage(pkg)
+                ?: packageManager.getLaunchIntentForPackage(pkg)
+                ?: return false
+            return try {
+                startActivity(open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                true
+            } catch (_: Exception) {
+                false
+            }
+        }
+
         @JavascriptInterface
         fun openVlc(url: String, title: String) = runOnUiThread {
             val play = Intent(Intent.ACTION_VIEW).setPackage(VLC)

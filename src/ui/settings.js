@@ -1,12 +1,12 @@
 // Settings: tuners & IPTV providers, guide sources, matching channels to the
 // guide, recording options and status.
-/* global App, Updates, GTVAndroid, categoryOf, CATEGORY_RULES, GuideView, Player */
+/* global App, Updates, GTVAndroid, categoryOf, CATEGORY_RULES, GuideView, Player, Xfinity, XFINITY_DEFAULTS */
 const SettingsView = {
   title: 'Settings',
   section: 'sources',
   chFilter: '',
   hints: [['↑↓←→', 'Move'], ['OK', 'Select'], ['Tab', 'Next field'], ['Esc', 'Back']],
-  sections: [['sources', 'Antenna & Providers'], ['guide', 'Guide data'], ['channels', 'Channels & matching'], ['startup', 'When it starts'], ['recording', 'Recording'], ['media', 'Movies & Shows'], ['arlo', 'Arlo'], ['cta', 'CTA'], ['remote', 'Other locations'], ['updates', 'Updates'], ['backup', 'Backup & restore'], ['status', 'Status']],
+  sections: [['sources', 'Antenna & Providers'], ['guide', 'Guide data'], ['channels', 'Channels & matching'], ['startup', 'When it starts'], ['recording', 'Recording'], ['media', 'Movies & Shows'], ['xfinity', 'Xfinity'], ['arlo', 'Arlo'], ['cta', 'CTA'], ['remote', 'Other locations'], ['updates', 'Updates'], ['backup', 'Backup & restore'], ['status', 'Status']],
 
   // With the activity log highlighted (Status), ↑↓ scroll it; at its top, ↑ moves on as usual.
   onKey(e) {
@@ -482,6 +482,70 @@ const SettingsView = {
     $('#tmdbClear', pane).onclick = async () => { await api.post('/api/tmdb/clear'); toast('Saved movie & show info cleared. It is looked up again as you browse.'); };
   },
 
+  // ---------- Xfinity first ----------
+  // A live channel ticked here opens in the Xfinity app (Fire TV, Samsung) or Xfinity's website
+  // (Windows) instead of GarysTV's player; if Xfinity can't open, it plays here (src/ui/xfinity.js).
+  // Saved on the engine, so every TV shares it.
+  xfinity(pane) {
+    const cur = () => Xfinity.settings();
+    const save = async (patch, msg) => {
+      const next = { ...cur(), ...patch };
+      try { await api.put('/api/settings', { xfinity: next }); App.state.settings.xfinity = next; Xfinity.failed = false; if (msg) toast(msg); } catch (e) { toast(e.message); }
+    };
+    const s = cur(), st = App.state, dev = Xfinity.device();
+    const srcType = new Map(st.sources.map((x) => [x.id, x.type]));
+    const list = st.channels.filter((c) => !c.hidden).sort(byNumber);
+    const ticked = list.filter((c) => Object.prototype.hasOwnProperty.call(s.channels, c.id)).length;
+    const has = Xfinity.installed();
+    const here = dev === 'firetv' ? (has ? '✅ The Xfinity Stream app is on this Fire TV.' : '⚠️ The Xfinity Stream app is not on this Fire TV yet. Get it from the Amazon app store and sign in there once.')
+      : dev === 'tizen' ? (s.tizenAppId ? 'This Samsung TV opens the app with the ID below.' : '⚠️ Samsung TV: fill in the Xfinity app ID below first.')
+        : 'On this PC, Xfinity opens in your web browser, where you sign in to Xfinity.';
+    pane.innerHTML = `
+      <div class="box"><h3>Xfinity first</h3>
+        <div class="s">Browse in GarysTV's guide. When you pick a channel ticked below, GarysTV opens <b>Xfinity Stream</b> to play it. If Xfinity won't open, the channel plays in GarysTV instead. To skip Xfinity once, hold OK on the channel in the guide and choose <b>Watch in GarysTV instead</b>.</div>
+        <div class="s">Your Xfinity login stays in Xfinity's own app (sign in there once on each TV). GarysTV never stores it.</div>
+        <label class="check nav" data-key="xf-on" style="margin:.8rem 0"><input type="checkbox" id="xfOn" ${s.enabled ? 'checked' : ''}> Open channels in Xfinity first</label>
+        <div>${here}</div></div>
+      <div class="box"><h3>How each device opens Xfinity</h3>
+        <div class="s">Xfinity doesn't publish a way to open its app straight to a channel, so for now it opens on Xfinity's own screen. If a link that goes to a channel turns up, put it here; <b>{channel}</b> becomes the Xfinity channel number.</div>
+        <div class="field"><label>Fire TV: Xfinity app package</label><input id="xfPkg" class="nav" data-key="xf-pkg" value="${esc(s.firetvPackage)}"></div>
+        <div class="field"><label>Fire TV: link to open (blank = just open the app)</label><input id="xfLink" class="nav" data-key="xf-link" value="${esc(s.firetvLink)}" placeholder="blank"></div>
+        <div class="field"><label>Samsung TV: Xfinity app ID</label><input id="xfTizen" class="nav" data-key="xf-tizen" value="${esc(s.tizenAppId)}" placeholder="Found on the TV with Tizen Studio (see tizen/README.md)"></div>
+        <div class="field"><label>Windows / web browser: Xfinity address</label><input id="xfWeb" class="nav" data-key="xf-web" value="${esc(s.webLink)}"></div>
+        <div class="actions"><div class="btn nav primary" id="xfSaveHow" data-key="xf-save-how">Save</div></div></div>
+      <div class="box"><h3>Channels to open in Xfinity</h3>
+        <div class="s">${ticked} of ${list.length} channels open in Xfinity. Tick the ones your Xfinity package has; the Xfinity number is optional and only used by a channel link.</div>
+        <div class="actions"><div class="btn nav" id="xfAnt" data-key="xf-ant">Tick all antenna channels</div><div class="btn nav" id="xfAll" data-key="xf-all">Tick all</div><div class="btn nav" id="xfNone" data-key="xf-none">Untick all</div><div class="btn nav primary" id="xfSaveCh" data-key="xf-save-ch">Save channels</div></div>
+        <table class="chs"><thead><tr><th>Xfinity</th><th>Ch</th><th>Name</th><th>Xfinity #</th></tr></thead><tbody>
+        ${list.slice(0, 400).map((c) => {
+          const on = Object.prototype.hasOwnProperty.call(s.channels, c.id);
+          return `<tr data-ch="${esc(c.id)}"><td><input type="checkbox" class="nav" data-key="xf-${esc(c.id)}" data-k="on" ${on ? 'checked' : ''}></td><td><b>${esc(c.number)}</b></td><td>${esc(c.name)}</td>
+            <td><input class="nav" data-key="xfn-${esc(c.id)}" data-k="num" style="width:6rem" value="${esc(on ? s.channels[c.id] : '')}"></td></tr>`;
+        }).join('')}</tbody></table>
+        ${list.length > 400 ? `<div class="s">Showing the first 400 of ${list.length} channels.</div>` : ''}</div>`;
+    $('#xfOn', pane).onchange = (e) => save({ enabled: e.target.checked }, e.target.checked ? 'Xfinity first is on' : 'Xfinity first is off');
+    for (const id of ['xfPkg', 'xfLink', 'xfTizen', 'xfWeb']) { const el = $(`#${id}`, pane); el._onFocus = () => el.focus(); }
+    $('#xfSaveHow', pane).onclick = () => save({
+      firetvPackage: $('#xfPkg', pane).value.trim() || XFINITY_DEFAULTS.firetvPackage,
+      firetvLink: $('#xfLink', pane).value.trim(),
+      tizenAppId: $('#xfTizen', pane).value.trim(),
+      webLink: $('#xfWeb', pane).value.trim() || XFINITY_DEFAULTS.webLink,
+    }, 'Saved');
+    const rows = $$('tr[data-ch]', pane);
+    $$('input[data-k="num"]', pane).forEach((el) => { el._onFocus = () => el.focus(); });
+    const tick = (pick) => rows.forEach((tr) => { $('[data-k="on"]', tr).checked = pick(list.find((c) => c.id === tr.dataset.ch)); });
+    $('#xfAnt', pane).onclick = () => tick((c) => c && srcType.get(c.sourceId) === 'hdhomerun');
+    $('#xfAll', pane).onclick = () => tick(() => true);
+    $('#xfNone', pane).onclick = () => tick(() => false);
+    $('#xfSaveCh', pane).onclick = async () => {
+      const channels = {};
+      for (const tr of rows) if ($('[data-k="on"]', tr).checked) channels[tr.dataset.ch] = $('[data-k="num"]', tr).value.trim();
+      for (const [id, n] of Object.entries(s.channels)) if (!list.some((c) => c.id === id)) channels[id] = n; // hidden channels keep theirs
+      await save({ channels }, `${Object.keys(channels).length} channels open in Xfinity`);
+      this.xfinity(pane);
+    };
+  },
+
   // ---------- Arlo cameras ----------
   // Motion on a ticked camera pops its clip up in the corner while TV plays (core/arlo.js,
   // player.js MotionPopup). Saved on the GarysTV engine, so every TV shares it.
@@ -507,7 +571,7 @@ const SettingsView = {
     $('#arloTest', pane).onclick = async () => {
       const ch = App.lastChannel || (App.guideRows && App.guideRows[0] && App.guideRows[0].id) || (App.state.channels.find((c) => !c.hidden) || {}).id;
       if (!ch) return toast('No channels yet to test over - add your tuner first.', 6000);
-      if (!(Player.mode === 'full' && Player.kind === 'live')) Player.play('live', ch);
+      if (!(Player.mode === 'full' && Player.kind === 'live')) Player.play('live', ch, { here: true });
       toast('Starting Live TV for the test...', 4000);
       const video = $('#video'), until = Date.now() + 20000;
       while (Date.now() < until && !(Player.mode === 'full' && video && video.readyState >= 2 && video.currentTime > 0)) await new Promise((r) => setTimeout(r, 300));

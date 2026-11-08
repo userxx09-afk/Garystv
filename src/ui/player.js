@@ -6,7 +6,7 @@
 // and jump back to live (L, or fast-forward to the end). Recordings are transcoded
 // by the engine and played with mpegts.js; commercial breaks the engine found are
 // skipped (or offered to skip, see Settings).
-/* global mpegts, Hls, App */
+/* global mpegts, Hls, App, Xfinity */
 const MAX_RETRIES = 6;
 const LIVE_S = 8; // this close to the live edge counts as live
 const VIEWER = Math.random().toString(36).slice(2); // tells the engine which buffer viewers are still here
@@ -19,8 +19,18 @@ const Player = {
 
   // kind: live | rec (a recording) | vod (a movie or episode from the IPTV provider; item = { title,
   // subtitle, duration, poster, showId } from the Movies / Shows screens)
-  async play(kind, id, { offset = 0, item = null } = {}) {
+  // here: play a live channel in GarysTV even when Settings > Xfinity would send it to Xfinity.
+  async play(kind, id, { offset = 0, item = null, here = false } = {}) {
     const st = App.state.status;
+    if (kind === 'live' && !here && typeof Xfinity !== 'undefined') {
+      const ch = App.state.channels.find((c) => c.id === id);
+      if (Xfinity.wants(ch) && await Xfinity.tryChannel(ch)) {
+        if (this.mode !== 'off') this.stop();
+        App.lastChannel = id;
+        try { localStorage.setItem('gtv.lastChannel', id); } catch (_) { /* private mode */ }
+        return;
+      }
+    }
     if (!st.ffmpeg) { // the built-in player needs ffmpeg where GarysTV runs; VLC is the backup
       if (this.canVlc()) { this.openVlc(kind, id, item); return; }
       const tools = st.tools || {};

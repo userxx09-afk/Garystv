@@ -9,9 +9,11 @@
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <uses-feature android:name="android.software.leanback" android:required="false" />
 
-    <!-- Android 11+: lets the app see whether the VLC app (the backup player) is installed -->
+    <!-- Android 11+: lets the app see whether the VLC app (the backup player) and the Xfinity
+         Stream app (Settings > Xfinity) are installed, and open them -->
     <queries>
         <package android:name="org.videolan.vlc" />
+        <package android:name="com.xfinity.cloudtvr.tenfoot" />
     </queries>
 
     <!-- The GarysTV server speaks plain HTTP on the home network. -->

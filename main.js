@@ -103,6 +103,17 @@ ipcMain.handle('gtv:save-file', async (e, { name, text, ext }) => {
   return { path: r.filePath };
 });
 
+// Settings > Xfinity on this PC: a live channel Xfinity carries opens Xfinity's website in the
+// PC's browser (where the Xfinity login lives). Only https addresses on xfinity.com.
+ipcMain.handle('gtv:open-xfinity', async (e, url) => {
+  const from = (() => { try { return new URL(e.senderFrame.url).origin; } catch (_) { return ''; } })();
+  if (!win || e.sender !== win.webContents || from !== `http://127.0.0.1:${port}`) return false;
+  let u;
+  try { u = new URL(url); } catch (_) { return false; }
+  if (u.protocol !== 'https:' || !(u.hostname === 'xfinity.com' || u.hostname.endsWith('.xfinity.com'))) return false;
+  try { await require('electron').shell.openExternal(u.href); return true; } catch (_) { return false; }
+});
+
 // Test hook: render a screen and save it as a PNG, then exit.
 async function screenshot(file) {
   await new Promise((r) => setTimeout(r, +(flag('wait') || 2500)));
