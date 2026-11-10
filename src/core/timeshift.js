@@ -15,8 +15,9 @@ const STALE_MS = 60000; // a viewer that stopped asking for the playlist is gone
 class Timeshift {
   // ffmpeg(): path to ffmpeg; input(channelId, session): Promise<ffmpeg input + video options>; dir(): buffer folder; minutes(): wanted length
   // claim(channelId, onBump): a plan for the stream (tuners.js; throws when none is free); unclaim(lease)
-  constructor({ ffmpeg, input, dir, minutes, note = () => {}, claim = () => null, unclaim = () => {} }) {
-    Object.assign(this, { ffmpeg, input, dir, minutes, note, claim, unclaim });
+  // health: playback health (diagnostics.js), told how well each channel's stream keeps up
+  constructor({ ffmpeg, input, dir, minutes, note = () => {}, claim = () => null, unclaim = () => {}, health = null }) {
+    Object.assign(this, { ffmpeg, input, dir, minutes, note, claim, unclaim, health });
     this.sessions = new Map();
     this.timer = setInterval(() => this.reap(), GRACE_MS);
     try { fs.rmSync(this.dir(), { recursive: true, force: true }); } catch (_) { /* leftovers from a crash */ }
@@ -73,18 +74,31 @@ class Timeshift {
 
   async run(s, resume) {
     let args;
-    try { args = await this.input(s.channelId, s); } catch (e) { s.error = e.message; return this.stop(s.channelId); }
+    try { args = await this.input(s.channelId, s); } catch (e) { s.error = e.message; if (this.health) this.health.bufferExited(s.channelId, e.message); return this.stop(s.channelId); }
     if (s.stopped) return;
+    if (this.health) this.health.bufferStarted(s.channelId, args);
     const flags = `delete_segments+independent_segments+omit_endlist${resume ? '+append_list+discont_start' : ''}`;
-    const proc = spawn(this.ffmpeg(), ['-hide_banner', '-loglevel', 'error', ...args, '-c:a', 'aac', '-ac', '2', '-b:a', '160k',
+    // -progress: how much video has been written, so playback health can tell when the stream falls behind.
+    const proc = spawn(this.ffmpeg(), ['-hide_banner', '-loglevel', 'error', '-nostats', '-progress', 'pipe:1', ...args, '-c:a', 'aac', '-ac', '2', '-b:a', '160k',
       '-f', 'hls', '-hls_time', String(SEG_S), '-hls_list_size', String(Math.round((s.minutes * 60) / SEG_S)), '-hls_flags', flags,
-      '-hls_segment_filename', path.join(s.dir, 'seg%06d.ts'), path.join(s.dir, 'live.m3u8')], { stdio: ['ignore', 'ignore', 'pipe'] });
+      '-hls_segment_filename', path.join(s.dir, 'seg%06d.ts'), path.join(s.dir, 'live.m3u8')], { stdio: ['ignore', 'pipe', 'pipe'] });
     s.proc = proc;
     let err = '';
     const began = Date.now();
     proc.stderr.on('data', (d) => { err = (err + d).slice(-1000); });
+    let progress = '';
+    proc.stdout.on('data', (d) => {
+      progress = (progress + d).slice(-4000);
+      const lines = progress.split('\n');
+      progress = lines.pop();
+      for (const l of lines) {
+        const m = /^out_time_us=(\d+)/.exec(l);
+        if (m && this.health && !s.stopped) this.health.progress(s.channelId, +m[1]);
+      }
+    });
     proc.on('close', () => {
       if (s.stopped) return;
+      if (this.health) this.health.bufferExited(s.channelId, err.trim().split('\n').pop());
       // The source dropped: carry on in the same buffer. Give up only if it keeps failing straight away.
       s.fails = Date.now() - began > 30000 ? 0 : s.fails + 1;
       if (err) s.error = err.trim().split('\n').pop();
@@ -138,6 +152,7 @@ class Timeshift {
     if (!s) return;
     s.stopped = true;
     this.sessions.delete(channelId);
+    if (this.health) this.health.bufferStopped(channelId);
     if (s.lease) this.unclaim(s.lease);
     if (s.proc) {
       const proc = s.proc;

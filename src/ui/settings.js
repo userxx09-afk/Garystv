@@ -1050,6 +1050,31 @@ const SettingsView = {
   },
 
   // ---------- status ----------
+  // Settings > Status > Playback health (core/diagnostics.js): right now, then each recent viewing.
+  async health() {
+    let d;
+    try { d = await api.get('/api/diag'); } catch (e) { const el = $('#health'); if (el) el.textContent = `Not available: ${e.message}`; return; }
+    const el = $('#health');
+    if (!el) return;
+    const icon = { ok: '✅', minor: '⚠️', problem: '❌' };
+    const when = (t) => new Date(t).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    const mins = (a, b) => { const s = Math.round((b - a) / 1000); return s < 60 ? `${s}s` : `${Math.round(s / 60)} min`; };
+    const lines = [`${d.host}: processor ${d.cpu}% busy (${d.cores} cores)`];
+    for (const l of d.live) {
+      const pace = l.keepingUp == null ? 'starting' : l.keepingUp >= 0.9 ? 'keeping up' : `FALLING BEHIND (${Math.round(l.keepingUp * 100)}% of real time)`;
+      lines.push(`  Live buffer ${l.name}: ${pace}, ${l.transcoding ? `converting with ${l.encoder}` : 'passed straight through'}, ${l.dropsLastHour} source drop${l.dropsLastHour === 1 ? '' : 's'} in the last hour`);
+    }
+    for (const w of d.watching) lines.push(`  Watching now on ${w.device}: ${w.name} · ${icon[w.level]} ${w.headline}`);
+    lines.push('');
+    if (!d.recent.length) lines.push('No viewings checked yet. Watch something for a minute and look again.');
+    for (const r of d.recent) {
+      lines.push(`${icon[r.level]} ${when(r.started)}  ${r.device}${r.ip ? ` (${r.ip})` : ''}  ·  ${r.name}  ·  ${mins(r.started, r.ended)}`);
+      lines.push(`   ${r.headline}${r.detail ? `. ${r.detail}` : ''}`);
+      for (const e of r.evidence) lines.push(`     - ${e}`);
+    }
+    el.textContent = lines.join('\n');
+  },
+
   status(pane) {
     const st = App.state.status;
     const here = window.GTV_SERVER ? `<div class="box"><h3>Connected to</h3><div id="whichPc">${esc(window.GTV_SERVER.replace(/^https?:\/\//, ''))}</div>
@@ -1074,7 +1099,9 @@ const SettingsView = {
         <div>⏺ ${st.recordingNow} recording right now</div></div>
       ${(st.plans || []).length ? `<div class="box"><h3>Plans in use right now</h3>${st.plans.map((p) => `<div><b>${esc(p.name)}</b> <span class="s">${p.using.length} of ${p.capacity}</span>${p.using.length ? `: ${esc(p.using.join(', '))}` : ''}</div>`).join('')}
         <div class="s">Watching and recording each use one stream of a plan. When a plan is full, GarysTV uses the same channel on another plan.</div></div>` : ''}
-      ${here}<div class="box"><h3>Activity log</h3><div class="s">Move down onto the log, then ↑↓ scroll it.</div><pre class="log nav" data-key="status-log">${esc(st.log.join('\n')) || 'Nothing yet.'}</pre></div>`;
+      ${here}<div class="box"><h3>Playback health</h3><div class="s">Why live TV stuttered: the channel's own stream, the GarysTV computer, the network to the TV, or GarysTV itself. Move down onto it, then ↑↓ scroll.</div><pre class="log nav" data-key="status-health" id="health">Loading...</pre></div>
+      <div class="box"><h3>Activity log</h3><div class="s">Move down onto the log, then ↑↓ scroll it.</div><pre class="log nav" data-key="status-log">${esc(st.log.join('\n')) || 'Nothing yet.'}</pre></div>`;
+    this.health();
     if (here) {
       $('#switchPc', pane).onclick = () => window.GTV_SWITCH();
       api.get('/api/ping').then((p) => { const el = $('#whichPc'); if (el) el.innerHTML = `<b>${esc(p.name)}</b> at ${esc(window.GTV_SERVER.replace(/^https?:\/\//, ''))} · ${st.platform === 'linux' ? 'home server' : 'Windows PC'}`; }).catch(() => {});

@@ -58,6 +58,7 @@ class DvrCore extends EventEmitter {
     this.demo = demo;
     this.active = new Map(); // jobId -> { handle, recId }
     this.log = [];
+    this.loadLog();
     this.tuners = new Tuners(this); // which plan each stream is using (tuners.js)
     this.storage = new Storage(this); // this computer or network storage (storage.js)
   }
@@ -87,6 +88,28 @@ class DvrCore extends EventEmitter {
     this.log.unshift(line);
     this.log.length = Math.min(this.log.length, 200);
     console.log(line);
+    this.saveLogLine(line);
+  }
+
+  // The activity log is also kept in activity.log in the data folder, so it survives a restart
+  // (and can be sent to someone when something went wrong). Past 2 MB it moves to activity.old.log.
+  get logFile() { return path.join(this.store.dir, 'activity.log'); }
+
+  saveLogLine(line) {
+    try {
+      fs.appendFileSync(this.logFile, line + '\n');
+      if ((this.logWrites = (this.logWrites || 0) + 1) % 100 === 0 && fs.statSync(this.logFile).size > 2e6) {
+        fs.renameSync(this.logFile, path.join(this.store.dir, 'activity.old.log'));
+      }
+    } catch (_) { /* a full or read-only disk mustn't stop GarysTV */ }
+  }
+
+  // The end of the saved log, newest first: what Status shows after a restart.
+  loadLog() {
+    try {
+      const text = fs.readFileSync(this.logFile, 'utf8');
+      this.log = text.trimEnd().split('\n').filter(Boolean).slice(-200).reverse().concat(this.log).slice(0, 200);
+    } catch (_) { /* nothing saved yet */ }
   }
 
   async init() {
@@ -134,6 +157,7 @@ class DvrCore extends EventEmitter {
     const writing = [...this.active.values()].map((a) => a.handle.done);
     for (const a of this.active.values()) a.handle.stop();
     if (this.timeshift) this.timeshift.stopAll();
+    if (this.diag) this.diag.stop(); // the viewings still open go into the log
     this.comQueue = [];
     if (this.comProc) this.comProc.kill();
     await Promise.race([Promise.all(writing), new Promise((r) => setTimeout(r, 5000))]);

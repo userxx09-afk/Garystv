@@ -9,6 +9,7 @@ const { spawn, execFile } = require('child_process');
 const { findFfmpeg, findVlc } = require('./tools');
 const { bestVariant, HLS_INPUT, RECONNECT } = require('./hls');
 const { Timeshift } = require('./timeshift');
+const { Diagnostics } = require('./diagnostics');
 const hdhomerun = require('./sources/hdhomerun');
 const sourceTypes = require('./sources');
 const { Vod } = require('./vod');
@@ -209,7 +210,9 @@ function createServer(core) {
     sharing.forget(at.peerId);
     return peers.call(peers.find(at.peerId), method, `/api/recordings/${encodeURIComponent(at.recId)}`, body);
   };
+  const diag = core.diag = new Diagnostics(core); // playback health: why live TV stuttered
   const timeshift = core.timeshift = new Timeshift({
+    health: diag,
     ffmpeg: () => findFfmpeg(core.settings),
     dir: () => path.join(core.storage.localDir, '.live-buffer'), // always this computer, even when recordings go to network storage
     minutes: () => core.settings.timeshiftMinutes || 30,
@@ -308,6 +311,8 @@ function createServer(core) {
     ['POST', '/api/rules/:id/move', (q, b, p) => core.moveRule(p.id, b.delta)],
     ['POST', '/api/jobs/skip', (q, b) => core.skipJob(b.id, b.skip !== false)],
     ['PUT', '/api/recordings/:id', (q, b, p) => atPeer(p.id, 'PUT', b) || core.patchRecording(p.id, { position: b.position, watched: b.watched })],
+    ['GET', '/api/diag', () => diag.overview()], // Settings > Status > Playback health
+    ['POST', '/api/diag/playback', (q, b, p, req) => diag.report(b, req.socket.remoteAddress)], // each TV, every 15s while playing
     ['POST', '/api/timeshift/release', (q, b) => timeshift.release(b.channelId, b.viewer)],
     ['DELETE', '/api/recordings/:id', (q, b, p) => atPeer(p.id, 'DELETE') || core.deleteRecording(p.id)],
     ['POST', '/api/tools/:name/install', (q, b, p) => tools.install(p.name)],

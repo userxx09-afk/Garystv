@@ -188,6 +188,13 @@ class MainActivity : Activity() {
             }
         }
 
+        // The name given to this Fire TV (Settings > My Fire TV > About), e.g. "Living room Fire TV":
+        // playback health reports say which TV they came from.
+        @JavascriptInterface
+        fun deviceName(): String =
+            (try { Settings.Global.getString(contentResolver, Settings.Global.DEVICE_NAME) } catch (_: Exception) { null })
+                ?.takeIf { it.isNotBlank() } ?: "Fire TV (${Build.MODEL})"
+
         // VLC, the backup player. url is GarysTV's /direct/ address for the video.
         // Updates: answers through GTV_UPDATE_INFO(info, error) and GTV_UPDATE_STATE(state, detail).
         @JavascriptInterface
