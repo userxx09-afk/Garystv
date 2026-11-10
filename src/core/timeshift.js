@@ -24,9 +24,25 @@ class Timeshift {
 
   // Starts (or joins) the buffer for a channel; resolves once the first piece of video exists.
   async open(channelId, viewer) {
+    // This viewer was on another channel: they changed channel. Let go of the old one now rather
+    // than after the grace period, so a plan that allows one stream at a time is free for this one.
+    // (The player's own "release" can arrive after this request, so it can't be relied on.)
+    if (viewer) {
+      for (const [id, o] of [...this.sessions]) {
+        if (id === channelId || !o.viewers.delete(viewer)) continue;
+        if (!o.viewers.size) this.stop(id);
+      }
+    }
     let s = this.sessions.get(channelId);
     if (!s) {
-      const lease = this.claim(channelId, () => this.stop(channelId));
+      let lease;
+      try {
+        lease = this.claim(channelId, () => this.stop(channelId));
+      } catch (e) {
+        // Still busy: a buffer nobody is watching any more (waiting out its grace period) gives way.
+        if (e.status !== 409 || !this.stopIdle()) throw e;
+        lease = this.claim(channelId, () => this.stop(channelId));
+      }
       s = this.start(channelId, lease);
     }
     s.viewers.set(viewer || 'anon', Date.now());
@@ -123,8 +139,20 @@ class Timeshift {
     s.stopped = true;
     this.sessions.delete(channelId);
     if (s.lease) this.unclaim(s.lease);
-    if (s.proc) s.proc.kill();
+    if (s.proc) {
+      const proc = s.proc;
+      proc.kill();
+      // The provider counts the stream until ffmpeg's connection closes; don't let a stuck ffmpeg hold it.
+      setTimeout(() => { if (proc.exitCode === null && proc.signalCode === null) proc.kill('SIGKILL'); }, 1500).unref();
+    }
     setTimeout(() => fs.rm(s.dir, { recursive: true, force: true }, () => {}), 1000); // after ffmpeg lets go of the files
+  }
+
+  // Stops every buffer with no one watching. -> how many were stopped.
+  stopIdle() {
+    let n = 0;
+    for (const [id, s] of [...this.sessions]) if (!s.viewers.size) { this.stop(id); n++; }
+    return n;
   }
 
   stopAll() {

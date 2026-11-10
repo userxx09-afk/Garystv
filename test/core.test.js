@@ -385,3 +385,29 @@ test('Guide in parts: favorites and the top first, the rest behind', () => {
   const mine = core.guidePage(0, 3600000, { ids: ['s1:45', 's1:2', 'nope'] });
   assert.deepEqual(mine.rows.map((r) => [r.id, r.i]), [['s1:2', 3], ['s1:45', 45]]);
 });
+
+test('changing channel frees a one-stream plan at once, not after the grace period', async () => {
+  const { Timeshift } = require('../src/core/timeshift');
+  const dir = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'gtv-ts-'));
+  let held = 0;
+  const ts = new Timeshift({
+    ffmpeg: () => 'ffmpeg', dir: () => dir, minutes: () => 5,
+    input: () => new Promise(() => {}), // never starts ffmpeg
+    claim: () => { if (held >= 1) throw Object.assign(new Error('Plan is in use'), { status: 409 }); held++; return { id: 'x' }; },
+    unclaim: () => { held--; },
+  });
+  try {
+    const quiet = (p) => p.catch(() => {}); // a stopped buffer's open() rejects; that's expected here
+    quiet(ts.open('a', 'tv1'));
+    quiet(ts.open('b', 'tv1')); // same TV, next channel: no "in use"
+    assert.deepStrictEqual([...ts.sessions.keys()], ['b']);
+    assert.strictEqual(held, 1);
+    // Another TV: the first one stopped watching, so its buffer gives way without waiting.
+    ts.release('b', 'tv1');
+    quiet(ts.open('c', 'tv2'));
+    assert.deepStrictEqual([...ts.sessions.keys()], ['c']);
+    // Someone still watching keeps their stream.
+    await assert.rejects(ts.open('d', 'tv3'), /in use/);
+    assert.deepStrictEqual([...ts.sessions.keys()], ['c']);
+  } finally { ts.stopAll(); }
+});
