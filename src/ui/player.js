@@ -12,6 +12,120 @@ const LIVE_S = 8; // this close to the live edge counts as live
 const VIEWER = Math.random().toString(36).slice(2); // tells the engine which buffer viewers are still here
 const serverBase = () => (window.GTV_SERVER || location.origin) + (MANAGING ? `/peer/${MANAGING.id}` : '');
 
+// Playback health: what this TV sees while playing (stutters, how long video pieces take to
+// download, dropped frames, errors), sent to the engine every 15 seconds. The engine adds what it saw
+// of the channel's stream and says whether a stutter came from the channel itself, the GarysTV
+// computer, the network to this TV, or the player (core/diagnostics.js; Settings > Status).
+const Health = {
+  s: null,
+  hooked: false,
+
+  device() {
+    try { if (window.GTVAndroid && GTVAndroid.deviceName) return GTVAndroid.deviceName(); } catch (_) { /* older Fire TV app */ }
+    const ua = navigator.userAgent;
+    if (/Tizen/i.test(ua)) return 'Samsung TV';
+    if (/\bAFT/.test(ua)) return 'Fire TV';
+    return window.GTV_SERVER ? 'Browser' : 'This PC';
+  },
+
+  quality() {
+    const v = $('#video');
+    const q = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : null;
+    return q ? { dropped: q.droppedVideoFrames || 0, frames: q.totalVideoFrames || 0 } : { dropped: 0, frames: 0 };
+  },
+
+  ahead() {
+    const v = $('#video'), b = v.buffered;
+    for (let i = 0; i < b.length; i++) if (b.start(i) <= v.currentTime + 0.1 && b.end(i) > v.currentTime) return b.end(i) - v.currentTime;
+    return 0;
+  },
+
+  hook() {
+    if (this.hooked) return;
+    this.hooked = true;
+    const v = $('#video');
+    v.addEventListener('playing', () => {
+      const s = this.s;
+      if (!s) return;
+      if (!s.playing) { s.playing = true; s.c.startupMs = Date.now() - s.started; }
+      this.endStall();
+    });
+    v.addEventListener('seeking', () => { if (this.s) { this.s.seekAt = Date.now(); this.s.stallAt = 0; } });
+    v.addEventListener('waiting', () => {
+      const s = this.s;
+      // Not a stutter: still starting, paused, or jumping (rewind, back to live).
+      if (!s || !s.playing || v.paused || v.seeking || Date.now() - s.seekAt < 2000 || s.stallAt) return;
+      s.stallAt = Date.now();
+      s.stallBuf = this.ahead();
+    });
+    window.addEventListener('error', () => { if (this.s) this.s.c.appErrors++; });
+    window.addEventListener('unhandledrejection', () => { if (this.s) this.s.c.appErrors++; });
+  },
+
+  endStall() {
+    const s = this.s;
+    if (!s || !s.stallAt) return;
+    const ms = Date.now() - s.stallAt;
+    s.stallAt = 0;
+    if (ms < 300) return; // too short to see
+    s.c.stalls++;
+    s.c.stallMs += ms;
+    s.lastStall = Date.now();
+    if (s.stallBuf >= 1.5) s.c.stallsWithBuffer++; // video was waiting on the TV, yet it still froze
+  },
+
+  begin(kind, id, name) {
+    this.end();
+    this.hook();
+    this.s = { sid: Math.random().toString(36).slice(2, 14) || 'x0000', kind, id, name, started: Date.now(), playing: false, seekAt: 0, stallAt: 0, stallBuf: 0, lastStall: 0, told: null, q0: this.quality(),
+      c: { stalls: 0, stallMs: 0, stallsWithBuffer: 0, fragLoads: 0, slowFrags: 0, fragErrors: 0, mediaErrors: 0, fatal: 0, kbpsMin: 0, appErrors: 0, startupMs: 0 } };
+    this.s.timer = setInterval(() => this.send(false), 15000);
+  },
+
+  // hls.js (live TV): how long each 2-second piece took to download, and download errors.
+  watchHls(hls) {
+    const s = this.s;
+    hls.on(Hls.Events.FRAG_LOADED, (ev, d) => {
+      if (s !== this.s || !d.frag) return;
+      const st = d.frag.stats || {}, ld = st.loading || {};
+      const ms = ld.end - ld.start;
+      if (!(ms > 0)) return;
+      s.c.fragLoads++;
+      if (ms > d.frag.duration * 1000 * 0.8) s.c.slowFrags++; // most of its playing time spent just getting here
+      const kbps = ((st.loaded || st.total || 0) * 8) / ms;
+      if (kbps > 0 && (!s.c.kbpsMin || kbps < s.c.kbpsMin)) s.c.kbpsMin = Math.round(kbps);
+    });
+    hls.on(Hls.Events.ERROR, (ev, d) => {
+      if (s !== this.s || (d.response && d.response.code === 409)) return; // 409: every plan busy, not a playback problem
+      if (/^(frag|level|manifest)(Load(Error|TimeOut)|ParsingError)$/.test(d.details)) s.c.fragErrors++;
+      else if (d.type === Hls.ErrorTypes.MEDIA_ERROR && d.details !== 'bufferStalledError' && d.details !== 'bufferNudgeOnStall') s.c.mediaErrors++;
+      if (d.fatal) s.c.fatal++;
+    });
+  },
+
+  send(final) {
+    const s = this.s;
+    if (!s) return;
+    if (final) this.endStall();
+    const q = this.quality();
+    const body = { sid: s.sid, device: this.device(), kind: s.kind, channelId: s.id, name: s.name, started: s.started, final, ...s.c,
+      stalls: s.c.stalls + (s.stallAt ? 1 : 0), dropped: q.dropped - s.q0.dropped, frames: q.frames - s.q0.frames };
+    api.post('/api/diag/playback', body).then((r) => {
+      // Stuttering now: say once what's causing it, so it's clear whether it's GarysTV or the channel.
+      if (final || s !== this.s || !r || r.level !== 'problem' || r.cause === s.told || Date.now() - s.lastStall > 30000 || Player.mode !== 'full') return;
+      s.told = r.cause;
+      Player.showOsd(`Choppy: ${r.headline}. More in Settings > Status.`);
+    }).catch(() => {});
+  },
+
+  end() {
+    if (!this.s) return;
+    clearInterval(this.s.timer);
+    if (this.s.playing) this.send(true);
+    this.s = null;
+  },
+};
+
 const Player = {
   mode: 'off', // off | full | pip
   kind: null, id: null, offset: 0, duration: 0, rec: null, channel: null, mp: null, hls: null,
@@ -49,6 +163,7 @@ const Player = {
     if (kind === 'rec' && this.rec) this.duration = ((this.rec.finishedAt || Date.now()) - this.rec.recordedAt) / 1000;
     if (kind === 'vod') this.duration = this.rec.duration || 0; // 0: the provider didn't say
     if (this.channel) { App.lastChannel = id; try { localStorage.setItem('gtv.lastChannel', id); } catch (_) { /* private mode */ } }
+    Health.begin(kind, id, this.channel ? [this.channel.number, this.channel.name].filter(Boolean).join(' ') : this.rec ? this.rec.title : id);
     if (kind === 'live') this.playLive(id);
     else this.playRec(kind, id, offset);
     this.setMode('full');
@@ -89,6 +204,7 @@ const Player = {
       setTimeout(() => { if (session !== this.session) return; if (/^manifest/.test(d.details)) hls.loadSource(url); else hls.startLoad(); }, 2000);
     });
     hls.on(Hls.Events.FRAG_LOADED, () => { this.retries = 0; });
+    Health.watchHls(hls);
     hls.loadSource(url);
     hls.attachMedia(video);
     video.play().catch(() => {});
@@ -116,6 +232,7 @@ const Player = {
 
   stopStream() {
     this.session++; // anything still pending for the old stream (reconnects) is now ignored
+    Health.end();
     if (this.hls) { try { this.hls.destroy(); } catch (_) {} this.hls = null; }
     if (this.mp) {
       try { this.mp.pause(); this.mp.unload(); this.mp.detachMediaElement(); this.mp.destroy(); } catch (_) {}
