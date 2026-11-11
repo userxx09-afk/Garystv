@@ -119,7 +119,9 @@ jobs:
           path: out
       - name: Publish
         env:
-          GH_TOKEN: ${{ github.token }}
+          OWN_TOKEN: ${{ github.token }}
+          PROD_TOKEN: ${{ secrets.PROD_REPO_TOKEN }}
+          REPO_PRIVATE: ${{ github.event.repository.private }}
           HAS_KEY: ${{ secrets.GTV_KEYSTORE_B64 != '' }}
           CODE: ${{ github.run_number }}
           NOTES: ${{ github.event.head_commit.message }}
@@ -134,6 +136,25 @@ jobs:
           cp out/GarysTV-linux/GarysTV-linux.tar.gz rel/
           SUM="$(sha256sum rel/GarysTV-linux.tar.gz | cut -d' ' -f1)"
           echo "{\"version\":\"$GTV_VERSION\",\"code\":$CODE,\"apk\":\"GarysTV.apk\",\"linux\":\"GarysTV-linux.tar.gz\",\"linuxSha256\":\"$SUM\"}" > rel/version.json
-          # A re-run of the same build replaces its Release.
-          gh release delete "v$GTV_VERSION" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
-          gh release create "v$GTV_VERSION" rel/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "GarysTV $GTV_VERSION" --notes "${NOTES:-Update}" --latest
+          # Installable builds live in the public, releases-only prod repo (this source repo
+          # is private). One Release per build, plus "garystv-latest", whose fixed address
+          # every installed app, the Windows updater and the home server check.
+          if [ -z "$PROD_TOKEN" ]; then
+            echo "::error::No PROD_REPO_TOKEN secret: can't publish to userxx09-afk/prod."
+            exit 1
+          fi
+          export GH_TOKEN="$PROD_TOKEN"
+          PROD=userxx09-afk/prod
+          gh release delete "garystv-v$GTV_VERSION" --repo "$PROD" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "garystv-v$GTV_VERSION" rel/* --repo "$PROD" --target main --title "GarysTV $GTV_VERSION" --notes "${NOTES:-Update}" --latest=false
+          gh release delete garystv-latest --repo "$PROD" --yes --cleanup-tag 2>/dev/null || true
+          gh release create garystv-latest rel/* --repo "$PROD" --target main --title "GarysTV (latest: $GTV_VERSION)" --notes "Always the newest GarysTV. Fire TV: https://github.com/$PROD/releases/download/garystv-latest/GarysTV.apk" --latest=false
+
+          # Transition: installs from before this change still look in this repo's own
+          # Releases, so keep publishing here while the repo is public - the update they get
+          # points them at prod. Stops by itself once the repo is made private.
+          if [ "$REPO_PRIVATE" != "true" ]; then
+            export GH_TOKEN="$OWN_TOKEN"
+            gh release delete "v$GTV_VERSION" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
+            gh release create "v$GTV_VERSION" rel/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "GarysTV $GTV_VERSION" --notes "${NOTES:-Update}" --latest
+          fi

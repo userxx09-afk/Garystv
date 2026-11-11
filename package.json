@@ -33,9 +33,8 @@
     },
     "publish": [
       {
-        "provider": "github",
-        "owner": "userxx09-afk",
-        "repo": "Garystv"
+        "provider": "generic",
+        "url": "https://github.com/userxx09-afk/prod/releases/download/garystv-latest"
       }
     ]
   },
