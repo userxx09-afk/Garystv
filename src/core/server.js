@@ -10,6 +10,7 @@ const { findFfmpeg, findVlc } = require('./tools');
 const { bestVariant, HLS_INPUT, RECONNECT } = require('./hls');
 const { Timeshift } = require('./timeshift');
 const { Diagnostics } = require('./diagnostics');
+const { Sports } = require('./sports');
 const hdhomerun = require('./sources/hdhomerun');
 const sourceTypes = require('./sources');
 const { Vod } = require('./vod');
@@ -237,6 +238,7 @@ function createServer(core) {
   const arlo = core.arlo = new Arlo(core, broadcast);
   const vod = core.vod = new Vod(core);
   const tmdb = core.tmdb = new Tmdb(core);
+  const sports = core.sports = new Sports(core); // My Teams (Settings, Home)
   core.on('changed', (what) => { if (what === 'sources') vod.cache.clear(); }); // new login or server: read the library again
 
   const routes = [
@@ -311,6 +313,9 @@ function createServer(core) {
     ['POST', '/api/rules/:id/move', (q, b, p) => core.moveRule(p.id, b.delta)],
     ['POST', '/api/jobs/skip', (q, b) => core.skipJob(b.id, b.skip !== false)],
     ['PUT', '/api/recordings/:id', (q, b, p) => atPeer(p.id, 'PUT', b) || core.patchRecording(p.id, { position: b.position, watched: b.watched })],
+    ['GET', '/api/sports/leagues', () => sports.leagues()],
+    ['GET', '/api/sports/teams', (q) => sports.teams(q.league)],
+    ['GET', '/api/sports/games', () => sports.games()],
     ['GET', '/api/diag', () => diag.overview()], // Settings > Status > Playback health
     ['POST', '/api/diag/playback', (q, b, p, req) => diag.report(b, req.socket.remoteAddress)], // each TV, every 15s while playing
     ['POST', '/api/timeshift/release', (q, b) => timeshift.release(b.channelId, b.viewer)],

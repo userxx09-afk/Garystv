@@ -1,12 +1,12 @@
 // Settings: tuners & IPTV providers, guide sources, matching channels to the
 // guide, recording options and status.
-/* global App, Updates, GTVAndroid, categoryOf, CATEGORY_RULES, GuideView, Player, Xfinity, XFINITY_DEFAULTS, XFINITY_LINEUPS */
+/* global App, Teams, Updates, GTVAndroid, categoryOf, CATEGORY_RULES, GuideView, Player, Xfinity, XFINITY_DEFAULTS, XFINITY_LINEUPS */
 const SettingsView = {
   title: 'Settings',
   section: 'sources',
   chFilter: '',
   hints: [['↑↓←→', 'Move'], ['OK', 'Select'], ['Tab', 'Next field'], ['Esc', 'Back']],
-  sections: [['sources', 'Antenna & Providers'], ['guide', 'Guide data'], ['channels', 'Channels & matching'], ['startup', 'When it starts'], ['recording', 'Recording'], ['media', 'Movies & Shows'], ['xfinity', 'Xfinity'], ['arlo', 'Arlo'], ['cta', 'CTA'], ['remote', 'Other locations'], ['updates', 'Updates'], ['backup', 'Backup & restore'], ['status', 'Status']],
+  sections: [['sources', 'Antenna & Providers'], ['guide', 'Guide data'], ['channels', 'Channels & matching'], ['startup', 'When it starts'], ['recording', 'Recording'], ['media', 'Movies & Shows'], ['teams', 'My Teams'], ['xfinity', 'Xfinity'], ['arlo', 'Arlo'], ['cta', 'CTA'], ['remote', 'Other locations'], ['updates', 'Updates'], ['backup', 'Backup & restore'], ['status', 'Status']],
 
   // With the activity log highlighted (Status), ↑↓ scroll it; at its top, ↑ moves on as usual.
   onKey(e) {
@@ -529,6 +529,8 @@ const SettingsView = {
   },
 
   // ---------- movies & shows ----------
+  teams(pane) { Teams.settings(pane); },
+
   media(pane) {
     const from = App.state.settings.tmdbKeyFrom;
     pane.innerHTML = `
