@@ -10,7 +10,7 @@
 # old one is put back. What happened goes in status.json, which GarysTV shows in Settings.
 set -euo pipefail
 
-RELEASES=https://github.com/userxx09-afk/Garystv/releases/latest/download
+RELEASES=https://github.com/userxx09-afk/prod/releases/download/garystv-latest
 APP_DIR=/opt/garystv
 UPD=/var/lib/garystv/update
 UNIT=/etc/systemd/system/garystv.service

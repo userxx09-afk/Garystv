@@ -418,7 +418,7 @@ class MainActivity : Activity() {
 
     private companion object {
         const val VLC = "org.videolan.vlc"
-        const val RELEASES = "https://github.com/userxx09-afk/Garystv/releases/latest/download"
+        const val RELEASES = "https://github.com/userxx09-afk/prod/releases/download/garystv-latest"
         const val INSTALLED = "local.garystv.INSTALLED"
         const val SAVE_FILE = 41
         const val OPEN_FILE = 42

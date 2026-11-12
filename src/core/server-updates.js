@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const { plan, due, quiet, newer, WINDOW_MS } = require('./update-plan');
 
-const RELEASES = 'https://github.com/userxx09-afk/Garystv/releases/latest/download';
+const RELEASES = 'https://github.com/userxx09-afk/prod/releases/download/garystv-latest';
 const CHECK_MS = 6 * 3600000;
 const TRY_MS = 10 * 60000;
 
