@@ -101,6 +101,8 @@ const Teams = {
   // ---------- Settings > My Teams ----------
   league: 'nfl',
   filter: '',
+  letter: '', // A-Z jump, for the remote (college leagues have hundreds of teams)
+  shown: 60,
 
   async settings(pane) {
     const mine = App.state.settings.sportsTeams || [];
@@ -112,10 +114,11 @@ const Teams = {
         <div id="mine">${mine.length ? mine.map((t, i) => `<div class="row">${t.logo ? `<img class="team-logo" src="${esc(t.logo)}" alt="" onerror="this.remove()">` : ''}<b>${esc(t.name)}</b> <span class="s">${esc((leagues.find((l) => l.id === t.league) || {}).label || t.league)}</span>
           <span class="btn nav" data-key="rm-${i}" data-rm="${i}">Remove</span></div>`).join('') : '<div class="s">No teams yet. Pick a league below, then a team.</div>'}</div></div>
       <div class="box"><h3>Add a team</h3><div id="leagueRow"></div>
-        <div class="field"><label>Find</label><input id="teamFind" class="nav" data-key="team-find" placeholder="City or name" value="${esc(this.filter)}"></div>
+        <div class="field"><label>Find</label><input id="teamFind" class="nav" data-key="team-find" placeholder="City or name (OK to type)" value="${esc(this.filter)}"></div>
+        <div id="teamLetters" class="team-letters"></div>
         <div id="teamList" class="team-list"><div class="s">Loading teams...</div></div></div>`;
     const idx = Math.max(0, leagues.findIndex((l) => l.id === this.league));
-    if (leagues.length) $('#leagueRow', pane).appendChild(optionRow('League', leagues.map((l) => ({ label: l.label, value: l.id })), idx, (v) => { this.league = v; this.teamList(pane); }));
+    if (leagues.length) $('#leagueRow', pane).appendChild(optionRow('League', leagues.map((l) => ({ label: l.label, value: l.id })), idx, (v) => { this.league = v; this.letter = ''; this.shown = 60; this.teamList(pane); }));
     const save = async (list) => {
       try { await api.put('/api/settings', { sportsTeams: list }); App.state.settings.sportsTeams = list; this.data = null; this.settings(pane); } catch (e) { toast(e.message); }
     };
@@ -123,7 +126,8 @@ const Teams = {
     $$('[data-rm]', pane).forEach((el) => { el.onclick = () => save(mine.filter((_, i) => i !== +el.dataset.rm)); });
     const find = $('#teamFind', pane);
     let t;
-    find.oninput = () => { clearTimeout(t); t = setTimeout(() => { this.filter = find.value; this.teamList(pane); }, 250); };
+    find.onclick = () => find.focus(); // OK on it brings up the TV's keyboard; just landing on it doesn't
+    find.oninput = () => { clearTimeout(t); t = setTimeout(() => { this.filter = find.value; this.shown = 60; this.teamList(pane); }, 250); };
     this.teamList(pane);
   },
 
@@ -135,11 +139,24 @@ const Teams = {
     if (!document.body.contains(box) || league !== this.league) return;
     const mine = App.state.settings.sportsTeams || [];
     const want = this.filter.trim().toLowerCase();
-    const list = teams.filter((x) => !want || `${x.name} ${x.abbr}`.toLowerCase().includes(want)).slice(0, 60);
+    const first = (x) => (x.name || '').trim().charAt(0).toUpperCase();
+    // A-Z row: the letters this league's teams start with, so the remote can jump straight there.
+    const letters = [...new Set(teams.map(first))].filter((l) => /[A-Z]/.test(l)).sort();
+    if (this.letter && !letters.includes(this.letter)) this.letter = '';
+    const row = $('#teamLetters', pane);
+    if (row) {
+      row.innerHTML = teams.length > 40 ? ['', ...letters].map((l) => `<span class="btn nav small${l === this.letter ? ' picked' : ''}" data-key="tl-${l || 'all'}" data-letter="${l}">${l || 'All'}</span>`).join('') : '';
+      $$('[data-letter]', row).forEach((el) => { el.onclick = () => { this.letter = el.dataset.letter; this.shown = 60; this.teamList(pane).then(() => Nav.focus($('#teamList .nav', pane) || el)); }; });
+    }
+    const matching = teams.filter((x) => (!want || `${x.name} ${x.abbr}`.toLowerCase().includes(want)) && (!this.letter || first(x) === this.letter));
+    const list = matching.slice(0, this.shown);
     box.innerHTML = list.length ? list.map((x, i) => {
       const have = mine.some((m) => m.league === x.league && m.id === x.id);
       return `<span class="btn nav ${have ? 'on' : ''}" data-key="tm-${esc(x.league)}-${esc(x.id)}" data-teamadd="${i}">${x.logo ? `<img class="team-logo" src="${esc(x.logo)}" alt="" onerror="this.remove()">` : ''}${have ? '✓ ' : ''}${esc(x.name)}</span>`;
-    }).join('') : '<div class="s">No team matches.</div>';
+    }).join('') + (matching.length > list.length ? `<span class="btn nav" data-key="tm-more" id="teamMore">More (${matching.length - list.length} left)</span>` : '')
+      : '<div class="s">No team matches.</div>';
+    const more = $('#teamMore', box);
+    if (more) more.onclick = () => { const next = list.length; this.shown += 60; this.teamList(pane).then(() => Nav.focus($(`[data-teamadd="${next}"]`, box))); };
     $$('[data-teamadd]', box).forEach((el) => {
       el.onclick = () => {
         const x = list[+el.dataset.teamadd];

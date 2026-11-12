@@ -358,3 +358,6 @@ input[type=checkbox].nav.focus { outline: 3px solid var(--focus-bg); outline-off
 .team-logo { width: 1.4rem; height: 1.4rem; object-fit: contain; vertical-align: middle; margin-right: .4rem; }
 .team-list { display: flex; flex-wrap: wrap; gap: .5rem; max-height: 26rem; overflow-y: auto; }
 .team-list .btn.on { border-color: var(--focus-bg); }
+.team-letters { display: flex; flex-wrap: wrap; gap: .3rem; margin: .4rem 0 .6rem; }
+.team-letters .btn { min-width: 2.2rem; padding: .3rem .5rem; text-align: center; }
+.team-letters .btn.picked { border-color: var(--focus-bg); }
