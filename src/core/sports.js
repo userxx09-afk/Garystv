@@ -11,15 +11,15 @@
 const API = 'https://site.api.espn.com/apis/site/v2/sports';
 
 const LEAGUES = {
-  nfl: { label: 'NFL', path: 'football/nfl', words: /\bnfl\b|football/i, hours: 3.5 },
-  ncaaf: { label: 'College football', path: 'football/college-football', words: /football|\bncaa/i, hours: 3.75, groups: 80 },
-  nba: { label: 'NBA', path: 'basketball/nba', words: /\bnba\b|basketball/i, hours: 2.5 },
-  wnba: { label: 'WNBA', path: 'basketball/wnba', words: /\bwnba\b|basketball/i, hours: 2.25 },
-  ncaam: { label: 'College basketball (men)', path: 'basketball/mens-college-basketball', words: /basketball|\bncaa/i, hours: 2.25, groups: 50 },
-  ncaaw: { label: 'College basketball (women)', path: 'basketball/womens-college-basketball', words: /basketball|\bncaa/i, hours: 2.25, groups: 50 },
-  mlb: { label: 'MLB', path: 'baseball/mlb', words: /\bmlb\b|baseball/i, hours: 3.25 },
-  nhl: { label: 'NHL', path: 'hockey/nhl', words: /\bnhl\b|hockey/i, hours: 2.75 },
-  mls: { label: 'MLS', path: 'soccer/usa.1', words: /\bmls\b|soccer|f[uú]tbol/i, hours: 2 },
+  nfl: { label: 'NFL', path: 'football/nfl', words: /\bnfl\b|football/i, pkg: /\bnfl\b/i, hours: 3.5 },
+  ncaaf: { label: 'College football', path: 'football/college-football', words: /football|\bncaa/i, pkg: /\bncaaf\b|college football/i, hours: 3.75, groups: 80 },
+  nba: { label: 'NBA', path: 'basketball/nba', words: /\bnba\b|basketball/i, pkg: /\bnba\b/i, hours: 2.5 },
+  wnba: { label: 'WNBA', path: 'basketball/wnba', words: /\bwnba\b|basketball/i, pkg: /\bwnba\b/i, hours: 2.25 },
+  ncaam: { label: 'College basketball (men)', path: 'basketball/mens-college-basketball', words: /basketball|\bncaa/i, pkg: /\bncaa[bm]\b/i, hours: 2.25, groups: 50 },
+  ncaaw: { label: 'College basketball (women)', path: 'basketball/womens-college-basketball', words: /basketball|\bncaa/i, pkg: /\bncaa[bw]\b|women/i, hours: 2.25, groups: 50 },
+  mlb: { label: 'MLB', path: 'baseball/mlb', words: /\bmlb\b|baseball/i, pkg: /\bmlb\b/i, hours: 3.25 },
+  nhl: { label: 'NHL', path: 'hockey/nhl', words: /\bnhl\b|hockey/i, pkg: /\bnhl\b/i, hours: 2.75 },
+  mls: { label: 'MLS', path: 'soccer/usa.1', words: /\bmls\b|soccer|f[uú]tbol/i, pkg: /\bmls\b/i, hours: 2 },
 };
 
 // TV networks as ESPN names them -> how they show up in channel names.
@@ -100,17 +100,54 @@ function parseEvent(ev, league) {
 const fold = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 const mentions = (text, t) => [t.name, t.short, t.nick].filter((x) => x && x.length > 2).some((x) => new RegExp(`\\b${fold(x).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(text));
 
-// channels: [{ id, number, name, guideNames[] }]; programsFor(channel) -> its listings.
+// The day an event channel's name says its game is on, if it says one:
+// "@ Nov 11 8:00 PM", "start:2026-10-28 00:00:00", "Wed 11 Nov 18:00 EST".
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+function nameDay(name, year) {
+  const t = fold(name);
+  let m = t.match(/\b(\d{4})-(\d{2})-(\d{2})[ t]\d{1,2}:\d{2}/);
+  if (m) return Date.UTC(+m[1], +m[2] - 1, +m[3]);
+  m = t.match(/\b(\d{1,2})\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/); // "11 Nov 18:00"
+  if (m) return Date.UTC(year, MONTHS.indexOf(m[2]), +m[1]);
+  m = t.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})\b(?!:)/); // "Nov 11 8:00 PM", not "Nov 18:00"
+  if (m) return Date.UTC(year, MONTHS.indexOf(m[1]), +m[2]);
+  return null;
+}
+// The name names no day, or one within a day of the game (time zones, a late game past midnight).
+// Event channels keep an old game's name until the provider renames them, so a different day is stale.
+function sameDay(name, start) {
+  const d = new Date(start);
+  const day = nameDay(name, d.getUTCFullYear());
+  if (day == null) return true;
+  const gameDay = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  const diff = Math.abs(day - gameDay) / 86400e3;
+  return diff <= 1 || diff >= 364; // around New Year the name's year is a guess
+}
+
+// channels: [{ id, number, name, group, guideNames[] }]; programsFor(channel) -> its listings.
 // -> [{ channelId, number, name, score, why, program }], best first.
 function matchChannels(game, channels, programsFor) {
   const L = LEAGUES[game.league];
   const end = game.start + L.hours * 3600e3;
   const nets = game.broadcasts.filter((b) => !b.streaming).map((b) => ({ ...b, net: networkOf(b.name) })).filter((b) => b.net);
   const out = [];
+  const now = Date.now();
+  const nearGame = now > game.start - 12 * 3600e3 && now < end + 3600e3; // event channels are renamed shortly before
   for (const c of channels) {
     const names = [c.name, ...(c.guideNames || [])].join(' | ');
     const net = nets.find((b) => reOf(b.net).test(names));
     let best = null;
+    // The channel's own name: a league package's event channel, renamed for this game.
+    const cname = fold(c.name);
+    if (sameDay(c.name, game.start) && (nearGame || nameDay(c.name, new Date(game.start).getUTCFullYear()) != null)) {
+      const where = `${c.name} ${c.group || ''}`;
+      const league = L.pkg.test(where) || L.words.test(cname);
+      // Another league's package ("US| MLB PACKAGE") is never this game, whatever its teams are called.
+      const otherLeague = !L.pkg.test(where) && Object.entries(LEAGUES).some(([k, o]) => k !== game.league && o.pkg.test(where));
+      const h = !otherLeague && mentions(cname, game.home), a = !otherLeague && mentions(cname, game.away);
+      if (h && a) best = { score: 95, why: 'the channel is named for this game' };
+      else if ((h || a) && league) best = { score: 65, why: `the channel is named for a ${(h ? game.home : game.away).short} game` };
+    }
     for (const p of programsFor(c)) {
       if (p.filler || p.end <= game.start - 30 * 60000 || p.start >= end) continue;
       // The game itself, or coverage that began a little earlier (a pregame show running into it).
@@ -123,6 +160,7 @@ function matchChannels(game, channels, programsFor) {
       else if ((h || a) && sport) { score = 90; why = 'the guide shows this game'; }
       else if (sport && mentions(desc, game.home) && mentions(desc, game.away)) { score = 85; why = 'the guide shows this game'; }
       else if (sport && net) { score = 70; why = `the guide shows a game at that time, on ${net.net}`; }
+      else if (h || a) { score = 60; why = `the guide shows ${(h ? game.home : game.away).short} at that time`; } // second choice: a team named at game time
       if (score && (!best || score > best.score)) best = { score, why, program: { start: p.start, end: p.end, title: p.title, subtitle: p.subtitle || '', desc: p.desc || '', categories: p.categories || [], programId: p.programId || '' } };
     }
     if (!best && net) {

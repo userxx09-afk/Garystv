@@ -50,13 +50,14 @@ test('games are matched to channels by the guide first, then by network', () => 
   ];
   const listings = {
     kljb: [{ start: T0 - 30 * 60000, end: T0, title: 'FOX NFL Kickoff' }, { start: T0, end: T0 + 3.5 * 3600e3, title: 'NFL Football', subtitle: 'Chicago Bears at Green Bay Packers' }],
-    kwqc: [{ start: T0, end: T0 + 3600e3, title: 'Packers Today' }], // names a team, but isn't the game
+    kwqc: [{ start: T0, end: T0 + 3600e3, title: 'Packers Today' }], // names a team at game time: a second choice, below the networks
   };
   const m = matchChannels(g, channels, (c) => listings[c.id] || []);
-  assert.deepEqual(m.map((c) => c.channelId), ['kljb', 'espn', 'wfld']);
+  assert.deepEqual(m.map((c) => c.channelId), ['kljb', 'espn', 'kwqc', 'wfld']);
+  assert.equal(m[2].score, 60);
   assert.equal(m[0].score, 100);
   assert.equal(m[0].program.subtitle, 'Chicago Bears at Green Bay Packers');
-  assert.match(m[2].why, /may show a different one/);
+  assert.match(m[3].why, /may show a different one/);
 });
 
 test('my teams: schedules, today\'s scores, and per-team limits', async () => {
@@ -89,4 +90,26 @@ test('my teams: schedules, today\'s scores, and per-team limits', async () => {
   assert.equal(r.games[0].channels[0].channelId, 'fox');
   await s.games();
   assert.equal(urls.filter((u) => u.includes('/schedule')).length, 1); // the schedule is kept for a while
+});
+
+test('league package channels: the game in the channel name, and a team named at game time', () => {
+  const bulls = { id: '4', displayName: 'Chicago Bulls', shortDisplayName: 'Bulls', name: 'Bulls', location: 'Chicago', abbreviation: 'CHI' };
+  const spurs = { id: '24', displayName: 'San Antonio Spurs', shortDisplayName: 'Spurs', name: 'Spurs', location: 'San Antonio', abbreviation: 'SA' };
+  const start = Date.parse('2026-11-12T01:00:00Z'); // Nov 11, 7 PM Central
+  const g = parseEvent({ id: '9', date: new Date(start).toISOString(), competitions: [{ date: new Date(start).toISOString(),
+    competitors: [{ homeAway: 'home', team: spurs }, { homeAway: 'away', team: bulls }],
+    broadcasts: [{ market: 'national', names: ['DAZN'] }] }] }, 'nba');
+  const channels = [
+    { id: 'a', number: '4069', group: 'US| NBA PACKAGE', name: 'Chicago Bulls vs San Antonio Spurs (Bulls) @ Nov 11 8:00 PM :NBA  04' },
+    { id: 'b', number: '4044', group: 'US| NBA NETWORK VIP', name: 'LIVE | CHI - BULLS VS NYK - KNICKS | Wed 11 Nov 18:00 EST (US) | US: NBA PASS PPV 1' },
+    { id: 'c', number: '4070', group: 'US| NBA PACKAGE', name: 'Chicago Bulls vs San Antonio Spurs (Bulls) @ Nov 4 8:00 PM :NBA  05' }, // last week's name: stale
+    { id: 'd', number: '4589', group: 'US| MLB PACKAGE', name: 'MLB 01 |  Bulls x Spurs start:2026-11-11 20:00:00' }, // wrong league
+    { id: 'e', number: '1500', group: 'US| LOCAL', name: 'WGN Chicago' },
+    { id: 'f', number: '4066', group: 'US| NBA PACKAGE', name: '##### NBA LIVE EVENTS #####' },
+  ];
+  const listings = { e: [{ start: start - 30 * 60000, end: start + 3 * 3600e3, title: 'Bulls Pregame & Game Night' }] };
+  const m = matchChannels(g, channels, (c) => listings[c.id] || []);
+  assert.deepEqual(m.map((c) => [c.number, c.score]), [['4069', 95], ['4044', 65], ['1500', 60]]);
+  assert.equal(m[0].why, 'the channel is named for this game');
+  assert.match(m[1].why, /Bulls game/);
 });
