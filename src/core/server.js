@@ -123,12 +123,16 @@ async function streamVideo(core, req, res, input, { live, seek = 0, key }) {
   req.on('close', () => proc.kill());
 }
 
-// This PC's home-network addresses (what you'd type into the TV app). Skips virtual adapters (VirtualBox, WSL,
-// VPNs); Windows often names VirtualBox's just "Ethernet 2", so its default 192.168.56.x range is skipped too.
+// This PC's home-network addresses (what you'd type into the TV app). Skips VPNs, VMware and VirtualBox
+// (Windows often names VirtualBox's just "Ethernet 2", so its default 192.168.56.x range is skipped too).
+// Hyper-V is judged by address, not name: an *external* switch ("vEthernet (HA-External)") carries the
+// PC's real home-network address, while the Default Switch and WSL use private 172.16-31.x ranges.
 function lanAddresses() {
   return Object.entries(require('os').networkInterfaces())
-    .filter(([name]) => !/virtual|vethernet|vmware|hyper-v|loopback|vpn|tailscale|zerotier/i.test(name))
-    .flatMap(([, list]) => list.filter((a) => a.family === 'IPv4' && !a.internal && !/^(169\.254|192\.168\.56)\./.test(a.address)).map((a) => a.address));
+    .filter(([name]) => !/vmware|virtualbox|loopback|vpn|tailscale|tapper|zerotier/i.test(name))
+    .flatMap(([name, list]) => list.filter((a) => a.family === 'IPv4' && !a.internal
+      && !/^(169\.254|192\.168\.56|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7]))\./.test(a.address)
+      && !(/vethernet|hyper-v|virtual|wsl/i.test(name) && /^172\.(1[6-9]|2\d|3[01])\./.test(a.address))).map((a) => a.address));
 }
 
 // ffmpeg's drawtext can't find fonts on Windows without fontconfig, so point it at one directly.
