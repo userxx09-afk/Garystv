@@ -281,6 +281,7 @@ function createServer(core) {
     ['GET', '/api/tmdb', (q) => tmdb.lookup(q.kind, q.name, q.year)],
     ['POST', '/api/tmdb/clear', () => tmdb.clearCache()],
     ['PUT', '/api/vod/progress/:id', (q, b, p) => vod.saveProgress(decodeURIComponent(p.id), b)],
+    ['PUT', '/api/vod/watched/:id', (q, b, p) => vod.markWatched(decodeURIComponent(p.id), String(b.showId || ''), b.on !== false)],
     ['GET', '/api/vod/:kind/categories', (q, b, p) => vod.categories(p.kind)],
     ['GET', '/api/vod/:kind/category/:id', (q, b, p) => vod.items(p.kind, decodeURIComponent(p.id))],
     // With ids or start/count, part of it ({ total, rows }); without, all of it (older TV apps).

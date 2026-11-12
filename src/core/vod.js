@@ -112,7 +112,9 @@ class Vod {
         plot: (e.info && e.info.plot) || '', duration: (e.info && +e.info.duration_secs) || 0, poster: (e.info && e.info.movie_image) || '',
       })).sort((a, b) => a.episode - b.episode),
     }));
-    return { id, name: clean(info.name), poster: info.cover || '', year: year(info), rating: rating(info), plot: info.plot || '', genre: info.genre || '', seasons };
+    const w = this.watched[id] || {};
+    return { id, name: clean(info.name), poster: info.cover || '', year: year(info), rating: rating(info), plot: info.plot || '', genre: info.genre || '', seasons,
+      watched: Object.keys(w.eps || {}), next: nextEpisode(seasons, w) };
   }
 
   // -> { url, title } for the player.
@@ -125,17 +127,62 @@ class Vod {
     return { url: `${base}/${kind === 'm' ? 'movie' : 'series'}/${enc(username)}/${enc(password)}/${itemId}.${ext}`, title: '' };
   }
 
-  // Where each movie or episode was stopped, for Resume and "Continue watching".
+  // Where each movie or episode was stopped, for Resume and "Continue watching". A show's finished
+  // episode is remembered as watched, and its next episode goes on "Continue watching" as Up next.
   get progress() { return this.core.store.read('vodprogress', {}); }
-  saveProgress(id, { position, duration, title, subtitle, poster, showId }) {
+  async saveProgress(id, { position, duration, title, subtitle, poster, showId, remove }) {
     const all = { ...this.progress };
     const done = duration > 0 && position / duration > 0.92;
-    if (done || position < 30) delete all[id];
-    else all[id] = { position, duration, title: String(title || ''), subtitle: String(subtitle || ''), poster: String(poster || ''), showId: showId || null, at: Date.now() };
+    const had = all[id];
+    if (done || remove || (position < 30 && !(had && had.next))) delete all[id]; // a peek at Up next (under 30s) leaves it there
+    else if (position >= 30) all[id] = { position, duration, title: String(title || ''), subtitle: String(subtitle || ''), poster: String(poster || ''), showId: showId || null, at: Date.now() };
+    this.writeProgress(all);
+    if (done && showId && String(id).startsWith('e~')) {
+      this.setWatched(id, showId, true);
+      await this.queueNext(showId, { title, poster }).catch(() => {}); // provider down: no Up next this time
+    }
+    return { saved: !done };
+  }
+  writeProgress(all) {
     // Keep the 40 most recent.
     const keep = Object.entries(all).sort((a, b) => b[1].at - a[1].at).slice(0, 40);
     this.core.store.write('vodprogress', Object.fromEntries(keep));
-    return { saved: !done };
+  }
+
+  // Watched episodes, per show: { [showId]: { eps: { [episodeId]: at }, last: episodeId, at } }.
+  get watched() { return this.core.store.read('vodwatched', {}); }
+  setWatched(epId, showId, on) {
+    if (!/^e~/.test(String(epId)) || !/^s~/.test(String(showId))) throw new Error('Only an episode of a show can be marked watched.');
+    const all = { ...this.watched };
+    const w = { eps: {}, ...(all[showId] || {}) };
+    w.eps = { ...w.eps };
+    if (on) { w.eps[epId] = Date.now(); w.last = epId; w.at = Date.now(); } else { delete w.eps[epId]; if (w.last === epId) delete w.last; }
+    all[showId] = w;
+    // Keep the 200 most recently watched shows.
+    this.core.store.write('vodwatched', Object.fromEntries(Object.entries(all).sort((a, b) => (b[1].at || 0) - (a[1].at || 0)).slice(0, 200)));
+    return { on: !!on };
+  }
+  // Mark from the episode list (watched on another device, or by mistake), then refresh Up next.
+  async markWatched(epId, showId, on) {
+    const r = this.setWatched(epId, showId, on);
+    const all = { ...this.progress };
+    if (on && all[epId]) { delete all[epId]; this.writeProgress(all); }
+    const show = await this.show(showId).catch(() => null);
+    if (show) await this.queueNext(showId, { title: show.name, poster: show.poster }, show);
+    return r;
+  }
+
+  // Up next: the first episode after the last one watched that isn't watched yet, replacing this show's old Up next.
+  async queueNext(showId, { title, poster }, show = null) {
+    show ||= await this.show(showId);
+    const all = { ...this.progress };
+    for (const [k, v] of Object.entries(all)) if (v.next && v.showId === showId) delete all[k];
+    const n = show.next && show.seasons.flatMap((x) => x.episodes).find((e) => e.id === show.next);
+    if (n && !all[n.id]) {
+      all[n.id] = { position: 0, duration: n.duration || 0, title: String(title || show.name || ''), subtitle: epLabel(n), poster: String(poster || show.poster || ''),
+        showId, next: true, at: Date.now() };
+    }
+    this.writeProgress(all);
   }
   continueList() { return Object.entries(this.progress).map(([id, p]) => ({ id, ...p })).sort((a, b) => b.at - a.at); }
 
@@ -150,6 +197,20 @@ class Vod {
     return { on: !!on };
   }
   favoriteList() { return Object.entries(this.favorites).map(([id, f]) => ({ id, ...f })).sort((a, b) => b.at - a.at); }
+}
+
+// "S1 E4 · Title", as the player and Continue watching show it.
+function epLabel(e) { return `S${e.season} E${e.episode}${e.title && !/^episode \d+$/i.test(e.title) ? ` · ${e.title}` : ''}`; }
+
+// The episode to watch next: after the last one watched, the first not yet watched (in order,
+// across seasons). Nothing watched yet, or the last episode there is watched: none.
+function nextEpisode(seasons, w) {
+  const eps = seasons.flatMap((x) => x.episodes);
+  const seen = (w && w.eps) || {};
+  if (!eps.length || !Object.keys(seen).length) return null;
+  const from = w.last ? eps.findIndex((e) => e.id === w.last) : -1;
+  const after = eps.slice(from + 1).find((e) => !seen[e.id]);
+  return (after || {}).id || null;
 }
 
 const listAction = (kind) => (kind === 'shows' ? 'get_series' : 'get_vod_streams');
@@ -169,4 +230,4 @@ function year(v) {
 }
 function rating(v) { const r = parseFloat(v.rating); return r > 0 ? Math.round(r * 10) / 10 : null; }
 
-module.exports = { Vod, clean, wordsOf };
+module.exports = { Vod, clean, wordsOf, nextEpisode };
