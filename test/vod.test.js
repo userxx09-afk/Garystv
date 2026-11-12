@@ -101,3 +101,40 @@ test('Provider name tags are tidied', () => {
   assert.equal(clean('USA | Show'), 'Show');
   assert.equal(clean('Up'), 'Up');
 });
+
+test('Shows: finished episodes are remembered and the next one goes on Continue watching', async () => {
+  const fs2 = require('fs'), os2 = require('os'), path2 = require('path');
+  const dir = fs2.mkdtempSync(path2.join(os2.tmpdir(), 'gtv-eps-'));
+  const { Store } = require('../src/core/store');
+  const core = { store: new Store(dir) };
+  const vod = new Vod(core);
+  const ep = (n, s = 1) => ({ id: `e~src1~${s}0${n}~mp4`, season: s, episode: n, title: `Episode ${n}`, duration: 1800 });
+  const seasons = [{ season: 1, episodes: [ep(1), ep(2), ep(3), ep(4)] }, { season: 2, episodes: [ep(1, 2)] }];
+  vod.show = async (id) => { const w = vod.watched[id] || {}; return { id, name: 'A Show', poster: 'p.jpg', seasons, watched: Object.keys(w.eps || {}), next: require('../src/core/vod').nextEpisode(seasons, w) }; };
+  try {
+    const show = 's~src1~44';
+    for (const n of [1, 2, 3]) await vod.saveProgress(ep(n).id, { position: 1790, duration: 1800, title: 'A Show', subtitle: `S1 E${n}`, showId: show });
+    assert.deepEqual(Object.keys(vod.watched[show].eps).sort(), [ep(1).id, ep(2).id, ep(3).id]);
+    let cont = vod.continueList();
+    assert.equal(cont.length, 1);
+    assert.deepEqual([cont[0].id, cont[0].next, cont[0].subtitle, cont[0].position], [ep(4).id, true, 'S1 E4', 0]);
+    // Peeking at it for a few seconds leaves Up next there; watching part of it turns it into a normal resume point.
+    await vod.saveProgress(ep(4).id, { position: 10, duration: 1800, showId: show });
+    assert.equal(vod.continueList()[0].next, true);
+    await vod.saveProgress(ep(4).id, { position: 600, duration: 1800, title: 'A Show', showId: show });
+    cont = vod.continueList();
+    assert.deepEqual([cont[0].position, !!cont[0].next], [600, false]);
+    // Finishing the season's last episode moves on to the next season.
+    await vod.saveProgress(ep(4).id, { position: 1795, duration: 1800, title: 'A Show', showId: show });
+    assert.equal(vod.continueList()[0].id, ep(1, 2).id);
+    // Marking by hand: un-watching episode 2 doesn't move Up next back (it's after the last watched).
+    await vod.markWatched(ep(2).id, show, false);
+    assert.equal(vod.continueList()[0].id, ep(1, 2).id);
+    // Finishing the very last episode: nothing next.
+    await vod.saveProgress(ep(1, 2).id, { position: 1799, duration: 1800, showId: show });
+    assert.equal(vod.continueList().length, 0);
+    // Taking Up next off Continue watching sticks.
+    await vod.markWatched(ep(3).id, show, true); // last = S1E3 -> next unwatched after it is... S1E4 is watched, S2E1 watched -> none
+    assert.equal(vod.continueList().length, 0);
+  } finally { fs2.rmSync(dir, { recursive: true, force: true }); }
+});
