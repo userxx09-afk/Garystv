@@ -349,7 +349,7 @@ const Player = {
   },
 
   // OK, Back or G while watching live: the guide, on this channel, with it still playing in the
-  // corner above. Back or Full screen there brings it back.
+  // corner above. The corner picture or Full screen there brings it back; Back again goes Home.
   toGuide() {
     const id = this.channel.id;
     this.setMode('pip');

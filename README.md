@@ -69,7 +69,7 @@ Settings > **Channels & matching** shows how each tuner channel was matched to a
 | R (in guide) | Record show → press again for the series → again to cancel |
 | 0–9 (in guide) | Jump to channel |
 | PgUp/PgDn, `[` `]` | Page channels, jump a day |
-| Watching live TV | ← back 10s, → ahead 30s, Space pause, L (or fast-forward to the end) back to live, ↑↓ change channel, G guide with picture-in-picture |
+| Watching live TV | ← back 10s, → ahead 30s, Space pause, L (or fast-forward to the end) back to live, ↑↓ change channel, G (or Back) guide with picture-in-picture; in the guide, OK on the picture watches again and Back goes Home |
 | Watching a recording | ← back 10s, → skip 30s, Space pause, OK skips a commercial break |
 | R while watching | Record Now: this show, 30 min to 3 hours, or until you stop it (press R again to stop) |
 | F11 | Full screen |
