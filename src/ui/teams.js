@@ -150,13 +150,13 @@ const Teams = {
       try { await api.put('/api/settings', { sportsTeams: list }); App.state.settings.sportsTeams = list; this.data = null; this.settings(pane); } catch (e) { toast(e.message); }
     };
     this.save = save;
-    $('[data-top]', pane).forEach((el) => {
+    $$('[data-top]', pane).forEach((el) => {
       el.onchange = async () => {
-        const list = $('[data-top]', pane).filter((x) => x.checked).map((x) => x.dataset.top);
+        const list = $$('[data-top]', pane).filter((x) => x.checked).map((x) => x.dataset.top);
         try { await api.put('/api/settings', { sportsTop25: list }); App.state.settings.sportsTop25 = list; this.data = null; } catch (e) { toast(e.message); }
       };
     });
-    $('[data-rm]', pane).forEach((el) => { el.onclick = () => save(mine.filter((_, i) => i !== +el.dataset.rm)); });
+    $$('[data-rm]', pane).forEach((el) => { el.onclick = () => save(mine.filter((_, i) => i !== +el.dataset.rm)); });
     const find = $('#teamFind', pane);
     let t;
     find.onclick = () => find.focus(); // OK on it brings up the TV's keyboard; just landing on it doesn't
