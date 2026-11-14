@@ -292,6 +292,56 @@ const Modal = {
   },
 };
 
+// A row of cards (Home) that runs off the side: drag it with the mouse, or use the ‹ › buttons
+// at its ends. Touch screens swipe it, trackpads and Shift + wheel scroll it, and the remote and
+// arrow keys move along it (Nav scrolls to what it lands on).
+function sideScroll(row) {
+  if (row._side) return;
+  row._side = true;
+  const strip = row.parentElement;
+  const btn = (cls, label, dir) => {
+    const b = document.createElement('button');
+    b.className = `row-arrow ${cls}`;
+    b.type = 'button';
+    b.tabIndex = -1;
+    b.setAttribute('aria-label', label);
+    b.textContent = dir < 0 ? '‹' : '›';
+    b.onclick = () => row.scrollBy({ left: dir * row.clientWidth * 0.8, behavior: 'smooth' });
+    strip.appendChild(b);
+    return b;
+  };
+  const left = btn('l', 'Scroll left', -1), right = btn('r', 'Scroll right', 1);
+  const update = () => {
+    const top = `${row.offsetTop + row.offsetHeight / 2}px`;
+    left.style.top = right.style.top = top;
+    left.classList.toggle('show', row.scrollLeft > 4);
+    right.classList.toggle('show', row.scrollLeft + row.clientWidth < row.scrollWidth - 4);
+  };
+  row.addEventListener('scroll', update, { passive: true });
+  strip.addEventListener('mouseenter', update);
+  new MutationObserver(update).observe(row, { childList: true }); // cards filled in later (My Teams)
+  window.addEventListener('resize', update);
+  update();
+
+  // Dragging with the mouse. A drag isn't a click: the card it ends on doesn't open.
+  let x0 = null, s0 = 0, dragged = false;
+  row.addEventListener('dragstart', (e) => e.preventDefault()); // logos would drag as images
+  row.addEventListener('pointerdown', (e) => {
+    if (e.pointerType !== 'mouse' || e.button !== 0) return; // touch scrolls by itself
+    x0 = e.clientX; s0 = row.scrollLeft; dragged = false;
+  });
+  row.addEventListener('pointermove', (e) => {
+    if (x0 === null) return;
+    const dx = e.clientX - x0;
+    if (!dragged && Math.abs(dx) > 6) { dragged = true; row.classList.add('dragging'); row.setPointerCapture(e.pointerId); }
+    if (dragged) row.scrollLeft = s0 - dx;
+  });
+  const end = () => { x0 = null; row.classList.remove('dragging'); };
+  row.addEventListener('pointerup', end);
+  row.addEventListener('pointercancel', end);
+  row.addEventListener('click', (e) => { if (dragged) { e.stopPropagation(); e.preventDefault(); dragged = false; } }, true);
+}
+
 // An option row that cycles values with Left/Right (like a TV menu).
 function optionRow(label, values, index, onChange) {
   const el = document.createElement('div');

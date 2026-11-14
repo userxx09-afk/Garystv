@@ -121,6 +121,16 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0
 .strip h2 { margin: 0 0 .7rem; font-size: 1.15rem; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .1em; }
 .cards { display: flex; gap: 1rem; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; padding: .3rem .25rem; margin: -.3rem -.25rem; } /* sideways with a mouse or a swipe; the remote scrolls to what it lands on */
 .cards::-webkit-scrollbar { display: none; }
+.cards.dragging { cursor: grabbing; user-select: none; scroll-behavior: auto; }
+.strip { position: relative; }
+/* ‹ › at the ends of a row that runs off the side (sideScroll in common.js); not on TVs or touch */
+.row-arrow { position: absolute; transform: translateY(-50%); z-index: 2; width: 2.8rem; height: 2.8rem; border-radius: 50%; border: 1px solid var(--line); background: var(--panel2); color: var(--text); font-size: 1.8rem; line-height: 1; cursor: pointer; display: none; place-items: center; box-shadow: 0 2px 12px #0008; padding: 0 0 .2rem; }
+.row-arrow.l { left: -.4rem; }
+.row-arrow.r { right: -.4rem; }
+.row-arrow.show { display: grid; }
+.row-arrow:hover { border-color: var(--focus-bg); }
+html.tv .row-arrow { display: none !important; }
+@media (hover: none) { .row-arrow { display: none !important; } }
 .home > * { flex: none; } /* a long Home scrolls instead of squashing its rows */
 .card { width: 17rem; flex: none; padding: 1rem 1.1rem; border-radius: .7rem; background: var(--panel); border: 2px solid var(--line); cursor: pointer; }
 .card .t { font-weight: 700; font-size: 1.1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; gap: .5rem; align-items: center; }
