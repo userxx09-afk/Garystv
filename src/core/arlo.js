@@ -182,6 +182,16 @@ class Arlo {
     }).filter((c) => c.view);
   }
 
+  // Home > Arlo > Delete: removes the saved clip (video and picture) from Arlo Keeper, for every
+  // screen and the BAN app too. Arlo's own cloud copy, if any, isn't touched.
+  async deleteClip(key) {
+    key = String(key || '');
+    if (!key || key.includes('..')) throw new Error('Which clip?');
+    const r = await this.request('DELETE', `/api/clip/${key.split('/').map(encodeURIComponent).join('/')}`);
+    if (!r || !r.ok) throw new Error("Arlo Keeper doesn't have that clip any more.");
+    return { ok: true };
+  }
+
   // A clip's still picture, passed through from Arlo Keeper (the TVs may not be able to reach it).
   thumb(req, res, src) {
     const p = safeThumb(src);

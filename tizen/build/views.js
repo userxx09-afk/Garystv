@@ -344,7 +344,7 @@ const ArloView = {
   camera: null, // a camera id, or null for all of them
   account: null, // "arlo:email" / "blink:email", or null for every account
   cams: null, clips: null, error: null, loadedAt: 0, loading: false, playing: null,
-  hints: [['↑↓', 'Move'], ['OK', 'Play'], ['←→', 'Camera'], ['M', 'Menu'], ['Esc', 'Back']],
+  hints: [['↑↓', 'Move'], ['OK', 'Play'], ['←→', 'Camera'], ['M', 'Menu · Delete'], ['Esc', 'Back']],
 
   async load() {
     if (this.loading) return;
@@ -428,7 +428,7 @@ const ArloView = {
         if (!x) return;
         $('#arloDetail').innerHTML = `${x.thumb ? `<img class="athumb big" src="${esc(server(x.thumb))}" alt="">` : ''}
           <div class="title">${esc(x.camera)}</div><div class="meta"><span>${fmt.when(x.time)}</span>${x.duration ? `<span>${Math.round(x.duration)} seconds</span>` : ''}${x.trigger ? `<span class="tag">${esc(x.trigger.toUpperCase())}</span>` : ''}</div>
-          <div class="s">Press OK to play.</div>`;
+          <div class="s">Press OK to play. Menu (M) to delete it.</div>`;
       };
     });
   },
@@ -442,7 +442,7 @@ const ArloView = {
   renderPlaying(root) {
     const c = this.playing;
     root.innerHTML = `<div class="arlo-play waiting" id="arloPlay"><img id="arloImg" alt=""><div class="cap"><b>${esc(c.camera)}</b> <span>${fmt.when(c.time)}</span></div></div>
-      <div class="actions" style="justify-content:center"><div class="btn nav" data-key="arlo-close" id="arloClose">‹ Back to clips</div><div class="btn nav" data-key="arlo-again" id="arloAgain">⟲ Play again</div></div>`;
+      <div class="actions" style="justify-content:center"><div class="btn nav" data-key="arlo-close" id="arloClose">‹ Back to clips</div><div class="btn nav" data-key="arlo-again" id="arloAgain">⟲ Play again</div><div class="btn nav danger" data-key="arlo-delete" id="arloDelete">🗑 Delete clip</div></div>`;
     const box = $('#arloPlay', root), img = $('#arloImg', root);
     img.onerror = () => { box.classList.remove('waiting'); box.classList.add('failed'); };
     img.src = server(c.view);
@@ -450,6 +450,21 @@ const ArloView = {
     const poll = setInterval(() => { if (!document.body.contains(img)) return clearInterval(poll); if (img.naturalWidth) { box.classList.remove('waiting'); clearInterval(poll); } }, 200);
     $('#arloClose', root).onclick = () => this.onBack();
     $('#arloAgain', root).onclick = () => App.render();
+    $('#arloDelete', root).onclick = () => this.remove(c);
+  },
+
+  // Delete a saved clip (asks first), then back to the list on the clip that took its place.
+  async remove(c) {
+    if (!c) return;
+    if (!(await Modal.confirm('Delete clip?', `${c.camera}, ${fmt.when(c.time)} will be deleted from Arlo Keeper, for every TV and phone.`, 'Delete'))) return;
+    try { await api.del(`/api/arlo/clip?key=${encodeURIComponent(c.key)}`); } catch (e) { return toast(e.message, 6000); }
+    const list = this.clips || [];
+    const i = list.findIndex((x) => x.key === c.key);
+    this.clips = list.filter((x) => x.key !== c.key);
+    const next = this.clips[Math.min(Math.max(i, 0), this.clips.length - 1)];
+    if (this.playing) { this.stop(); this.playing = null; }
+    toast('Clip deleted');
+    App.render(next ? `clip-${next.key}` : 'cam-all');
   },
 
   stop() {
@@ -472,13 +487,21 @@ const ArloView = {
     const items = [];
     if (c) items.push({ label: `▶ Play ${c.camera}, ${fmt.when(c.time)}`, run: () => this.play(c), cls: 'primary' });
     if (this.playing) items.push({ label: '‹ Back to clips', run: () => this.onBack() });
+    const del = this.playing || c;
+    if (del) items.push({ label: `🗑 Delete ${del.camera}, ${fmt.when(del.time)}...`, run: () => this.remove(del), cls: 'danger' });
     items.push({ label: '⟳ Check for new clips', run: () => this.load() });
     items.push({ label: 'Arlo settings', run: () => { this.stop(); this.playing = null; SettingsView.section = 'arlo'; App.go('settings'); } });
     return { title: this.title, items };
   },
 
-  // ←→ on a clip: the next or previous camera.
+  // ←→ on a clip: the next or previous camera. Del: delete the clip.
   onKey(e) {
+    if (e.key === 'Delete') {
+      const key = this.playing ? this.playing.key : Nav.current && Nav.current.dataset.clip;
+      const c = key && (this.clips || []).find((x) => x.key === key);
+      if (c || this.playing) { this.remove(c || this.playing); return true; }
+      return false;
+    }
     if (this.playing || !(e.key === 'ArrowLeft' || e.key === 'ArrowRight')) return false;
     if (!Nav.current || Nav.current.classList.contains('tab') || Nav.current.closest('#topnav')) return false;
     const ids = [null, ...this.shownCams().map((c) => c.id)];
