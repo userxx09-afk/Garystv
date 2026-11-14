@@ -70,6 +70,7 @@ const HomeView = {
     $$('[data-rec]', root).forEach((el) => { el.onclick = () => DvrView.recordingMenu(App.recordings.find((r) => r.id === el.dataset.rec)); });
     $$('[data-job]', root).forEach((el) => { el.onclick = () => App.go('timers'); });
     Teams.wire(root);
+    $$('.cards', root).forEach(sideScroll); // drag, or ‹ ›, to see the rest of a long row
   },
 
   menu() {
