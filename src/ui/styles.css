@@ -255,7 +255,7 @@ pre.log { margin: 0; font-size: .8rem; color: var(--muted); white-space: pre-wra
 /* Still connecting to the camera: laid out (so the picture loads) but not seen. */
 .motion.pending { visibility: hidden; }
 .motion.pending img { visibility: hidden; }
-/* Home > Arlo (views.js ArloView): clips with their pictures, and one playing big */
+/* Home > Cameras (views.js ArloView): clips with their pictures, and one playing big */
 .item .athumb { width: 7rem; aspect-ratio: 16 / 9; object-fit: cover; border-radius: .35rem; background: #000; flex: none; }
 .detail .athumb.big { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: .5rem; background: #000; }
 .arlo-play { position: relative; flex: 1; min-height: 0; background: #000; border-radius: .8rem; overflow: hidden; display: grid; place-items: center; margin-bottom: 1rem; }

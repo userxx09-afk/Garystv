@@ -26,7 +26,7 @@ const HomeView = {
         <div class="home-head"><img class="logo" src="logo.jpg" alt=""><h1>${greet}. <b>What would you like to watch?</b></h1>${window.GTV_SERVER ? `<div class="on-pc">On <b>${esc(App.state.status.platform === 'linux' ? 'the home server' : 'the Windows PC')}</b><br>${esc(window.GTV_SERVER.replace(/^https?:\/\//, '').replace(/:5480$/, ''))}</div>` : ''}</div>
         <div class="tiles">
           ${[['guide', 'Guide', 'See what\'s on'], ['live', 'Live TV', 'Last channel'], ['movies', 'Movies', 'On demand'], ['shows', 'Shows', 'Every episode'], ['dvr', 'My Recordings', `${App.recordings.length} shows`],
-            ['arlo', 'Arlo', 'Cameras & clips'], ['search', 'Search', 'Find a show'], ['settings', 'Settings', 'Antenna, guide, channels']]
+            ['arlo', 'Cameras', 'Motion clips & pop-ups'], ['search', 'Search', 'Find a show'], ['settings', 'Settings', 'Antenna, guide, channels']]
             .map(([k, l, s]) => `<div class="tile nav" data-key="${k}" data-go="${k}">${ICONS[k]}<div>${l}</div><small>${esc(s)}</small></div>`).join('')}
         </div>
         <div class="strip"><h2>Favorites</h2><div class="cards">${((l) => (l.length > 1 ? [allFavorites(l), ...l] : l))(App.state.favLists || []).map((l) => `
@@ -341,7 +341,7 @@ const TimersView = {
 // Home > Arlo: the clips Camera Keeper has saved, newest first, from every camera or one
 // (core/arlo.js). OK plays a clip big, as pictures like the motion pop-up; Back closes it.
 const ArloView = {
-  title: 'Arlo cameras',
+  title: 'Cameras',
   camera: null, // a camera id, or null for all of them
   account: null, // "arlo:email" / "blink:email", or null for every account
   cams: null, clips: null, error: null, loadedAt: 0, loading: false, playing: null,
@@ -383,8 +383,8 @@ const ArloView = {
   render(root) {
     const s = App.state.settings.arlo || {};
     if (!s.enabled) {
-      root.innerHTML = `<div class="empty">Arlo isn't turned on in GarysTV yet.<br>Turn it on and give it Camera Keeper's address in Settings › Arlo.</div>
-        <div class="actions"><div class="btn nav primary" data-key="arlo-settings" id="arloSet">Open Settings › Arlo</div></div>`;
+      root.innerHTML = `<div class="empty">Cameras aren't turned on in GarysTV yet.<br>Turn them on and give it Camera Keeper's address in Settings › Cameras.</div>
+        <div class="actions"><div class="btn nav primary" data-key="arlo-settings" id="arloSet">Open Settings › Cameras</div></div>`;
       $('#arloSet', root).onclick = () => { SettingsView.section = 'arlo'; App.go('settings'); };
       return;
     }
@@ -491,7 +491,7 @@ const ArloView = {
     const del = this.playing || c;
     if (del) items.push({ label: `🗑 Delete ${del.camera}, ${fmt.when(del.time)}...`, run: () => this.remove(del), cls: 'danger' });
     items.push({ label: '⟳ Check for new clips', run: () => this.load() });
-    items.push({ label: 'Arlo settings', run: () => { this.stop(); this.playing = null; SettingsView.section = 'arlo'; App.go('settings'); } });
+    items.push({ label: 'Camera settings', run: () => { this.stop(); this.playing = null; SettingsView.section = 'arlo'; App.go('settings'); } });
     return { title: this.title, items };
   },
 

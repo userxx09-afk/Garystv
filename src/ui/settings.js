@@ -6,7 +6,7 @@ const SettingsView = {
   section: 'sources',
   chFilter: '',
   hints: [['↑↓←→', 'Move'], ['OK', 'Select'], ['Tab', 'Next field'], ['Esc', 'Back']],
-  sections: [['sources', 'Antenna & Providers'], ['guide', 'Guide data'], ['channels', 'Channels & matching'], ['startup', 'When it starts'], ['recording', 'Recording'], ['media', 'Movies & Shows'], ['teams', 'My Teams'], ['xfinity', 'Xfinity'], ['arlo', 'Arlo'], ['cta', 'CTA'], ['remote', 'Other locations'], ['updates', 'Updates'], ['backup', 'Backup & restore'], ['status', 'Status']],
+  sections: [['sources', 'Antenna & Providers'], ['guide', 'Guide data'], ['channels', 'Channels & matching'], ['startup', 'When it starts'], ['recording', 'Recording'], ['media', 'Movies & Shows'], ['teams', 'My Teams'], ['xfinity', 'Xfinity'], ['arlo', 'Cameras'], ['cta', 'CTA'], ['remote', 'Other locations'], ['updates', 'Updates'], ['backup', 'Backup & restore'], ['status', 'Status']],
 
   // With the activity log highlighted (Status), ↑↓ scroll it; at its top, ↑ moves on as usual.
   onKey(e) {
@@ -700,15 +700,15 @@ const SettingsView = {
       try { await api.put('/api/settings', { arlo: { ...cur(), ...patch } }); App.state.settings.arlo = { ...cur(), ...patch }; if (msg) toast(msg); } catch (e) { toast(e.message); }
     };
     const s = cur();
-    pane.innerHTML = `<div class="box"><h3>Arlo cameras</h3>
+    pane.innerHTML = `<div class="box"><h3>Cameras</h3>
         <div class="s">When a ticked camera sees motion, its clip shows (without sound) in the lower-left corner for 10 seconds while you watch live TV or a recording. The TV keeps playing, and the remote keeps working as usual. The clips come from <b>Camera Keeper</b>, which handles Arlo, Blink, and Laview or other IP cameras.</div>
-        <label class="check nav" data-key="arlo-on" style="margin:.8rem 0"><input type="checkbox" id="arloOn" ${s.enabled ? 'checked' : ''}> Enable Arlo integration</label>
+        <label class="check nav" data-key="arlo-on" style="margin:.8rem 0"><input type="checkbox" id="arloOn" ${s.enabled ? 'checked' : ''}> Turn on cameras (Arlo, Blink, Laview and other IP cameras)</label>
         <div class="field"><label>Camera Keeper address</label><input id="arloUrl" class="nav" data-key="arlo-url" value="${esc(s.url)}" placeholder="http://192.168.5.210:8090"></div>
         <div class="s" style="font-size:.85rem">At home or over the VPN: http://its-address:8090 (motion pop-ups need this). Over the internet: https://name:password@bcn.tapper.co, with the away-from-home name and password and no :8090 (clips only, no pop-ups).</div>
         <div class="actions"><div class="btn nav" id="arloUrlSave" data-key="arlo-url-save">Save address</div><div class="btn nav" id="arloTest" data-key="arlo-test">Show a test pop-up</div></div>
         <div class="s" style="font-size:.85rem">The test starts Live TV here (last channel), then shows Camera Keeper's newest clip on every screen that's playing TV. Press Back to come back.</div></div>
       <div class="box"><h3>Cameras that pop up</h3><div id="arloCams" class="s">Asking Camera Keeper...</div></div>`;
-    $('#arloOn', pane).onchange = (e) => save({ enabled: e.target.checked }, e.target.checked ? 'Arlo turned on' : 'Arlo turned off');
+    $('#arloOn', pane).onchange = (e) => save({ enabled: e.target.checked }, e.target.checked ? 'Cameras turned on' : 'Cameras turned off');
     const url = $('#arloUrl', pane);
     url._onFocus = () => url.focus();
     $('#arloUrlSave', pane).onclick = async () => { await save({ url: url.value.trim() || 'http://127.0.0.1:8090' }, 'Address saved'); this.arloCameras(pane, save, cur); };
