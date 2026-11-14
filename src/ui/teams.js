@@ -1,4 +1,5 @@
-// My Teams (core/sports.js): the Home row of upcoming games for the teams picked in Settings,
+// My Teams (core/sports.js): the Home row of upcoming games for the teams picked in Settings (and a
+// Top 25 row for each college league ticked there),
 // what to do with a game (watch it, record it), and the team picker in Settings.
 /* global App, Player, SettingsView */
 const Teams = {
@@ -13,9 +14,22 @@ const Teams = {
     return this.loading;
   },
 
-  game(id) { return this.data && this.data.games.find((g) => g.id === id); },
+  game(id) { return this.data && [...this.data.games, ...(this.data.top25 || []).flatMap((t) => t.games)].find((g) => g.id === id); },
 
-  title(g) { return `${g.away.short || g.away.name} ${g.neutral ? 'vs' : 'at'} ${g.home.short || g.home.name}`; },
+  // "#5 Ohio State at #12 Michigan"
+  title(g) { const n = (t) => `${t.rank ? `#${t.rank} ` : ''}${t.short || t.name}`; return `${n(g.away)} ${g.neutral ? 'vs' : 'at'} ${n(g.home)}`; },
+
+  // Top 25 leagues ticked in Settings, and their row titles.
+  TOP25: [['ncaaf', 'Top 25 college football'], ['ncaam', "Top 25 men's basketball"]],
+  tops() { const on = App.state.settings.sportsTop25 || []; return this.TOP25.filter(([l]) => on.includes(l)); },
+
+  cards(games) {
+    const logo = (t) => (t.logo ? `<img src="${esc(t.logo)}" alt="" onerror="this.remove()">` : '');
+    return games.map((g) => `
+        <div class="card nav team-card" data-key="g-${esc(g.id)}" data-game="${esc(g.id)}">
+          <div class="t">${g.state === 'in' ? '<span class="dot pulse"></span>' : ''}${logo(g.away)}${esc(this.title(g))}${logo(g.home)}</div>
+          <div class="s">${esc(this.when(g))}</div><div class="s">${esc(this.where(g))}</div></div>`).join('');
+  },
 
   // "Sun 12:00 PM", "Live · Q3 4:12", "Final · 24-17"
   when(g) {
@@ -36,28 +50,38 @@ const Teams = {
   // The Home row. Fills itself in once the schedules arrive.
   strip() {
     const teams = App.state.settings.sportsTeams || [];
+    const tops = this.tops().map(([l, label]) => `<div class="strip"><h2>${esc(label)}</h2><div class="cards" data-top25="${l}"><div class="empty">Getting the schedules...</div></div></div>`).join('');
     if (!teams.length) {
-      return `<div class="strip"><h2>My Teams</h2><div class="cards"><div class="card nav" data-key="t-pick" data-teampick="1"><div class="t">＋ Pick your teams</div><div class="s">See when they play and which channel has the game</div></div></div></div>`;
+      return `<div class="strip"><h2>My Teams</h2><div class="cards"><div class="card nav" data-key="t-pick" data-teampick="1"><div class="t">＋ Pick your teams</div><div class="s">See when they play and which channel has the game</div></div></div></div>${tops}`;
     }
-    return `<div class="strip"><h2>My Teams</h2><div class="cards" id="teamCards"><div class="empty">Getting the schedules...</div></div></div>`;
+    return `<div class="strip"><h2>My Teams</h2><div class="cards" id="teamCards"><div class="empty">Getting the schedules...</div></div></div>${tops}`;
   },
 
   wire(root) {
     $$('[data-teampick]', root).forEach((el) => { el.onclick = () => this.openSettings(); });
     const box = $('#teamCards', root);
-    if (!box) return;
+    const tops = $$('[data-top25]', root);
+    if (!box && !tops.length) return;
+    const recent = (g) => g.state !== 'post' || g.start > Date.now() - 3 * 3600e3;
+    const fill = (el, html) => {
+      el.innerHTML = html;
+      $$('[data-teampick]', el).forEach((x) => { x.onclick = () => this.openSettings(); });
+      $$('[data-game]', el).forEach((x) => { x.onclick = () => this.gameMenu(this.game(x.dataset.game)); });
+    };
     this.load().then((d) => {
-      if (!document.body.contains(box)) return;
-      const cards = d.games.filter((g) => g.state !== 'post' || g.start > Date.now() - 3 * 3600e3).slice(0, 8);
-      box.innerHTML = cards.length ? cards.map((g) => `
-        <div class="card nav team-card" data-key="g-${esc(g.id)}" data-game="${esc(g.id)}">
-          <div class="t">${g.state === 'in' ? '<span class="dot pulse"></span>' : ''}${g.away.logo ? `<img src="${esc(g.away.logo)}" alt="" onerror="this.remove()">` : ''}${esc(this.title(g))}${g.home.logo ? `<img src="${esc(g.home.logo)}" alt="" onerror="this.remove()">` : ''}</div>
-          <div class="s">${esc(this.when(g))}</div><div class="s">${esc(this.where(g))}</div></div>`).join('')
-        : `<div class="empty">No games in the next two weeks${d.errors.length ? ` (${esc(d.errors[0])})` : ''}.</div>`;
-      box.insertAdjacentHTML('beforeend', '<div class="card nav" data-key="t-pick" data-teampick="1"><div class="t">✎ My teams</div><div class="s">Add or remove teams</div></div>');
-      $$('[data-teampick]', box).forEach((el) => { el.onclick = () => this.openSettings(); });
-      $$('[data-game]', box).forEach((el) => { el.onclick = () => this.gameMenu(this.game(el.dataset.game)); });
-    }).catch((e) => { if (document.body.contains(box)) box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
+      if (box && document.body.contains(box)) {
+        const cards = d.games.filter(recent).slice(0, 8);
+        fill(box, (cards.length ? this.cards(cards) : `<div class="empty">No games in the next two weeks${d.errors.length ? ` (${esc(d.errors[0])})` : ''}.</div>`)
+          + '<div class="card nav" data-key="t-pick" data-teampick="1"><div class="t">✎ My teams</div><div class="s">Add or remove teams</div></div>');
+      }
+      for (const el of tops) {
+        if (!document.body.contains(el)) continue;
+        const t = (d.top25 || []).find((x) => x.league === el.dataset.top25);
+        const cards = t ? t.games.filter(recent) : [];
+        fill(el, (cards.length ? this.cards(cards) : `<div class="empty">No ranked teams playing in the next few days${t && t.errors.length ? ` (${esc(t.errors[0])})` : ''}.</div>`)
+          + `<div class="card nav" data-key="t25-${el.dataset.top25}" data-teampick="1"><div class="t">✎ Top 25</div><div class="s">${t && t.poll ? `${esc(t.poll)} · ` : ''}Turn on or off in Settings</div></div>`);
+      }
+    }).catch((e) => { for (const el of [box, ...tops]) if (el && document.body.contains(el)) el.innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
   },
 
   openSettings() { SettingsView.section = 'teams'; App.go('settings'); },
@@ -113,6 +137,9 @@ const Teams = {
         <div class="s">Home shows your teams' next games and which of your channels has each one: from the guide listings, and from the TV network the game is on (schedules from ESPN).</div>
         <div id="mine">${mine.length ? mine.map((t, i) => `<div class="row">${t.logo ? `<img class="team-logo" src="${esc(t.logo)}" alt="" onerror="this.remove()">` : ''}<b>${esc(t.name)}</b> <span class="s">${esc((leagues.find((l) => l.id === t.league) || {}).label || t.league)}</span>
           <span class="btn nav" data-key="rm-${i}" data-rm="${i}">Remove</span></div>`).join('') : '<div class="s">No teams yet. Pick a league below, then a team.</div>'}</div></div>
+      <div class="box"><h3>Top 25</h3>
+        <div class="s">Adds a row to Home with every game that has a ranked team, with the same times and likely channels.</div>
+        ${this.TOP25.map(([l, label]) => `<label class="check nav" data-key="t25-${l}" style="margin:.5rem 0"><input type="checkbox" data-top="${l}" ${(App.state.settings.sportsTop25 || []).includes(l) ? 'checked' : ''}> ${esc(label)}</label>`).join('')}</div>
       <div class="box"><h3>Add a team</h3><div id="leagueRow"></div>
         <div class="field"><label>Find</label><input id="teamFind" class="nav" data-key="team-find" placeholder="City or name (OK to type)" value="${esc(this.filter)}"></div>
         <div id="teamLetters" class="team-letters"></div>
@@ -123,7 +150,13 @@ const Teams = {
       try { await api.put('/api/settings', { sportsTeams: list }); App.state.settings.sportsTeams = list; this.data = null; this.settings(pane); } catch (e) { toast(e.message); }
     };
     this.save = save;
-    $$('[data-rm]', pane).forEach((el) => { el.onclick = () => save(mine.filter((_, i) => i !== +el.dataset.rm)); });
+    $('[data-top]', pane).forEach((el) => {
+      el.onchange = async () => {
+        const list = $('[data-top]', pane).filter((x) => x.checked).map((x) => x.dataset.top);
+        try { await api.put('/api/settings', { sportsTop25: list }); App.state.settings.sportsTop25 = list; this.data = null; } catch (e) { toast(e.message); }
+      };
+    });
+    $('[data-rm]', pane).forEach((el) => { el.onclick = () => save(mine.filter((_, i) => i !== +el.dataset.rm)); });
     const find = $('#teamFind', pane);
     let t;
     find.onclick = () => find.focus(); // OK on it brings up the TV's keyboard; just landing on it doesn't
