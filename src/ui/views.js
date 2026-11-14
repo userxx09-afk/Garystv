@@ -396,7 +396,7 @@ const ArloView = {
     const cams = this.shownCams();
     const clips = this.clips || [];
     const camName = (id) => (all.find((c) => c.id === id) || {}).name;
-    const accName = (a) => `${a.brand === 'blink' ? 'Blink' : 'Arlo'} · ${a.username}`;
+    const accName = (a) => (a.brand === 'ipcam' ? a.username : `${a.brand === 'blink' ? 'Blink' : 'Arlo'} · ${a.username}`);
     const curAcc = accounts.find((a) => a.id === this.account);
     const waiting = accounts.filter((a) => a.waitingForCode);
     root.innerHTML = `
