@@ -333,7 +333,7 @@ function createServer(core) {
     ['POST', '/api/timeshift/release', (q, b) => timeshift.release(b.channelId, b.viewer)],
     ['DELETE', '/api/recordings/:id', (q, b, p) => atPeer(p.id, 'DELETE') || core.deleteRecording(p.id)],
     ['POST', '/api/tools/:name/install', (q, b, p) => tools.install(p.name)],
-    // Arlo cameras (core/arlo.js): Settings > Arlo, and Arlo Keeper saying a motion clip has started.
+    // Arlo cameras (core/arlo.js): Settings > Arlo, and Camera Keeper saying a motion clip has started.
     ['GET', '/api/arlo/cameras', () => arlo.cameras()],
     ['GET', '/api/arlo/clips', (q) => arlo.clips(q.camera, q.limit, q.account)], // Home > Arlo
     ['DELETE', '/api/arlo/clip', (q) => arlo.deleteClip(q.key)], // Home > Arlo > Delete

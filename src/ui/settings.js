@@ -701,13 +701,13 @@ const SettingsView = {
     };
     const s = cur();
     pane.innerHTML = `<div class="box"><h3>Arlo cameras</h3>
-        <div class="s">When a ticked camera sees motion, its clip shows (without sound) in the lower-left corner for 10 seconds while you watch live TV or a recording. The TV keeps playing, and the remote keeps working as usual. The clips come from <b>Arlo Keeper</b>, which handles Arlo, Blink, and Laview or other IP cameras.</div>
+        <div class="s">When a ticked camera sees motion, its clip shows (without sound) in the lower-left corner for 10 seconds while you watch live TV or a recording. The TV keeps playing, and the remote keeps working as usual. The clips come from <b>Camera Keeper</b>, which handles Arlo, Blink, and Laview or other IP cameras.</div>
         <label class="check nav" data-key="arlo-on" style="margin:.8rem 0"><input type="checkbox" id="arloOn" ${s.enabled ? 'checked' : ''}> Enable Arlo integration</label>
-        <div class="field"><label>Arlo Keeper address</label><input id="arloUrl" class="nav" data-key="arlo-url" value="${esc(s.url)}" placeholder="http://192.168.5.210:8090"></div>
-        <div class="s" style="font-size:.85rem">At home or over the VPN: http://its-address:8090 (motion pop-ups need this). Over the internet: https://name:password@ban.tapper.co, with the away-from-home name and password and no :8090 (clips only, no pop-ups).</div>
+        <div class="field"><label>Camera Keeper address</label><input id="arloUrl" class="nav" data-key="arlo-url" value="${esc(s.url)}" placeholder="http://192.168.5.210:8090"></div>
+        <div class="s" style="font-size:.85rem">At home or over the VPN: http://its-address:8090 (motion pop-ups need this). Over the internet: https://name:password@bcn.tapper.co, with the away-from-home name and password and no :8090 (clips only, no pop-ups).</div>
         <div class="actions"><div class="btn nav" id="arloUrlSave" data-key="arlo-url-save">Save address</div><div class="btn nav" id="arloTest" data-key="arlo-test">Show a test pop-up</div></div>
-        <div class="s" style="font-size:.85rem">The test starts Live TV here (last channel), then shows Arlo Keeper's newest clip on every screen that's playing TV. Press Back to come back.</div></div>
-      <div class="box"><h3>Cameras that pop up</h3><div id="arloCams" class="s">Asking Arlo Keeper...</div></div>`;
+        <div class="s" style="font-size:.85rem">The test starts Live TV here (last channel), then shows Camera Keeper's newest clip on every screen that's playing TV. Press Back to come back.</div></div>
+      <div class="box"><h3>Cameras that pop up</h3><div id="arloCams" class="s">Asking Camera Keeper...</div></div>`;
     $('#arloOn', pane).onchange = (e) => save({ enabled: e.target.checked }, e.target.checked ? 'Arlo turned on' : 'Arlo turned off');
     const url = $('#arloUrl', pane);
     url._onFocus = () => url.focus();
@@ -729,7 +729,7 @@ const SettingsView = {
   },
 
   // Drawn at once from the last answer (each save redraws Settings, and a box that vanished
-  // while Arlo Keeper was being asked would lose a click), then again with a fresh one.
+  // while Camera Keeper was being asked would lose a click), then again with a fresh one.
   async arloCameras(pane, save, cur) {
     if (this.arloLast) this.paintArloCameras(pane, save, cur, this.arloLast);
     try { this.arloLast = await api.get('/api/arlo/cameras'); } catch (e) { const box = $('#arloCams', pane); if (box && !this.arloLast) box.innerHTML = `⚠️ ${esc(e.message)}`; return; }
@@ -742,19 +742,19 @@ const SettingsView = {
     const on = new Set(cur().cameras.map(String)); // what's saved now (the answer may be older)
     r = { ...r, cameras: r.cameras.map((c) => ({ ...c, on: on.has(c.id) })) };
     const modes = Object.values(r.modes || {}).filter(Boolean);
-    // Filter by account (Arlo and Blink logins), when Arlo Keeper has more than one.
+    // Filter by account (Arlo and Blink logins), when Camera Keeper has more than one.
     const accounts = r.accounts || [];
     const accName = (a) => (a.brand === 'ipcam' ? a.username : `${a.brand === 'blink' ? 'Blink' : 'Arlo'} · ${a.username}`);
     if (this.arloAccount && !accounts.some((a) => a.id === this.arloAccount)) this.arloAccount = null;
     const shown = this.arloAccount ? r.cameras.filter((c) => c.account === this.arloAccount) : r.cameras;
     const waiting = accounts.filter((a) => a.waitingForCode);
     box.classList.remove('s');
-    box.innerHTML = `${r.connected ? '' : '<div class="s">⚠️ Arlo Keeper isn\'t signed in to Arlo right now, so no motion will come through. Sign in on its own page.</div>'}
-      ${waiting.length ? `<div class="s" style="color:var(--yellow)">⚠️ Waiting for a verification code: ${waiting.map((a) => esc(accName(a))).join(', ')}. Enter it on Arlo Keeper's Arlo page.</div>` : ''}
+    box.innerHTML = `${r.connected ? '' : '<div class="s">⚠️ Camera Keeper isn\'t signed in to Arlo right now, so no motion will come through. Sign in on its own page.</div>'}
+      ${waiting.length ? `<div class="s" style="color:var(--yellow)">⚠️ Waiting for a verification code: ${waiting.map((a) => esc(accName(a))).join(', ')}. Enter it on Camera Keeper's Arlo page.</div>` : ''}
       ${accounts.length > 1 ? `<div class="tabs" style="flex-wrap:wrap;margin-top:.6rem"><div class="tab nav ${this.arloAccount ? '' : 'on'}" data-key="arlo-acct-all" data-acct="">All accounts</div>
         ${accounts.map((a) => `<div class="tab nav ${this.arloAccount === a.id ? 'on' : ''}" data-key="arlo-acct-${esc(a.id)}" data-acct="${esc(a.id)}">${esc(accName(a))}${a.connected ? '' : ' <span class="tag">OFF</span>'}</div>`).join('')}</div>` : ''}
       ${shown.map((c) => `<label class="check nav" data-key="arlo-cam-${esc(c.id)}" style="margin:.4rem 0"><input type="checkbox" data-cam="${esc(c.id)}" data-name="${esc(c.name)}" ${c.on ? 'checked' : ''}> ${esc(c.name)}
-        <span class="s">${[c.model, c.battery != null && c.battery > 0 ? `battery ${c.battery}%` : '', c.unavailable ? 'offline' : '', c.lastMotion ? `last motion ${fmt.when(c.lastMotion * 1000)}` : ''].filter(Boolean).map(esc).join(' · ')}</span></label>`).join('') || `<div class="s">${this.arloAccount ? 'No cameras on this account.' : 'Arlo Keeper has no cameras.'}</div>`}
+        <span class="s">${[c.model, c.battery != null && c.battery > 0 ? `battery ${c.battery}%` : '', c.unavailable ? 'offline' : '', c.lastMotion ? `last motion ${fmt.when(c.lastMotion * 1000)}` : ''].filter(Boolean).map(esc).join(' · ')}</span></label>`).join('') || `<div class="s">${this.arloAccount ? 'No cameras on this account.' : 'Camera Keeper has no cameras.'}</div>`}
       ${modes.length ? `<div class="s" style="margin-top:.6rem">Arlo mode: ${modes.map(esc).join(', ')}. Cameras only report motion when Arlo is armed (set in the Arlo app).</div>` : ''}
       ${r.error ? `<div class="s">⚠️ ${esc(r.error)}</div>` : ''}`;
     $$('[data-acct]', box).forEach((el) => {

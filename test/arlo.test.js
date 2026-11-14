@@ -12,7 +12,7 @@ function fakeCore(arlo) {
   return core;
 }
 
-test('Arlo: only clip paths from Arlo Keeper can be shown', () => {
+test('Arlo: only clip paths from Camera Keeper can be shown', () => {
   assert.strictEqual(safePath('/live/AF824A75D022B-1793845876033.ts'), '/live/AF824A75D022B-1793845876033.ts');
   assert.strictEqual(safePath('/media/Front_Door/2026-11-04/20-31-16.mp4'), '/media/Front_Door/2026-11-04/20-31-16.mp4');
   for (const bad of ['/media/../clips.db', '/media/x/../../etc/passwd.mp4', '/connect', 'http://evil/x.mp4', '/live/a/b.ts', '', null]) assert.strictEqual(safePath(bad), null, String(bad));
@@ -37,7 +37,7 @@ test('Arlo: motion pops up only when turned on and the camera is ticked', () => 
   assert.throws(() => make({ enabled: true, cameras: ['AF824A75D022B'] }).motion({ ...ev, live: '/media/../x', clip: '/etc/passwd' }));
 });
 
-test('Arlo: cameras, check-in and test pop-up go to Arlo Keeper', async () => {
+test('Arlo: cameras, check-in and test pop-up go to Camera Keeper', async () => {
   const calls = [];
   const keeper = http.createServer((req, res) => {
     let body = '';
@@ -77,7 +77,7 @@ test('Arlo: cameras, check-in and test pop-up go to Arlo Keeper', async () => {
 
 test('Arlo: a wrong address gives a plain answer', async () => {
   const arlo = new Arlo(fakeCore({ enabled: true, url: 'http://127.0.0.1:1', cameras: [] }), () => {});
-  await assert.rejects(arlo.cameras(), /Couldn't reach Arlo Keeper/);
+  await assert.rejects(arlo.cameras(), /Couldn't reach Camera Keeper/);
 });
 
 test('Arlo: a name and password in the address are sent with every request, accounts come through', async () => {
@@ -105,7 +105,7 @@ test('Arlo: a name and password in the address are sent with every request, acco
     const cams = await arlo.cameras();
     assert.deepStrictEqual(cams.cameras.map((c) => c.account), ['arlo:a@x', 'blink:b@x']);
     assert.deepStrictEqual(cams.accounts.map((x) => [x.id, x.waitingForCode]), [['arlo:a@x', false], ['blink:b@x', true]]);
-    // An Arlo Keeper that ignores account= still gives only that account's clips.
+    // An Camera Keeper that ignores account= still gives only that account's clips.
     const clips = await arlo.clips(null, 10, 'blink:b@x');
     assert.deepStrictEqual(clips.map((c) => c.camera), ['Yard']);
     assert.ok(seen.some(([u]) => u.includes('account=blink%3Ab%40x')));
@@ -118,7 +118,7 @@ test('Arlo: a name and password in the address are sent with every request, acco
   }
 });
 
-test('Arlo: deleting a clip asks Arlo Keeper to delete it', async () => {
+test('Arlo: deleting a clip asks Camera Keeper to delete it', async () => {
   const seen = [];
   const keeper = http.createServer((req, res) => {
     seen.push(`${req.method} ${req.url}`);

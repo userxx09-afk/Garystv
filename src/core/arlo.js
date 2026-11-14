@@ -1,4 +1,4 @@
-// Arlo camera pop-ups. Arlo Keeper (a separate service, usually on the home server) records a
+// Arlo camera pop-ups. Camera Keeper (a separate service, usually on the home server) records a
 // clip when a camera sees motion and tells GarysTV straight away (POST /api/arlo/motion). If
 // the camera is ticked in Settings > Arlo, every screen playing live TV or a recording shows
 // that clip, muted, in its lower-left corner for a few seconds (player.js).
@@ -12,8 +12,8 @@ const { spawn } = require('child_process');
 const { findFfmpeg } = require('./tools');
 
 const DEFAULTS = { enabled: false, url: 'http://127.0.0.1:8090', cameras: [] };
-const RENEW_MS = 5 * 60000; // Arlo Keeper forgets a GarysTV that hasn't checked in for 30 minutes
-// What /arlo/view may fetch from Arlo Keeper: a clip as it records, or a saved one.
+const RENEW_MS = 5 * 60000; // Camera Keeper forgets a GarysTV that hasn't checked in for 30 minutes
+// What /arlo/view may fetch from Camera Keeper: a clip as it records, or a saved one.
 const LIVE_PATH = /^\/live\/[A-Za-z0-9_-]+\.ts$/;
 const CLIP_PATH = /^\/media\/[\w\-. ]+(\/[\w\-. ]+)*\.mp4$/;
 // A clip's still picture, for the Arlo screen's list (/arlo/thumb).
@@ -29,9 +29,9 @@ function safeThumb(p) {
   return !p.includes('..') && THUMB_PATH.test(p) ? p : null;
 }
 
-// The Arlo Keeper address from Settings, split into the address itself and its sign-in.
-// A name and password in the address (https://name:password@ban.tapper.co) are sent with every
-// request, the clips (ffmpeg) included, so Arlo Keeper never has to ask for them.
+// The Camera Keeper address from Settings, split into the address itself and its sign-in.
+// A name and password in the address (https://name:password@bcn.tapper.co) are sent with every
+// request, the clips (ffmpeg) included, so Camera Keeper never has to ask for them.
 function keeperAddress(raw) {
   const base = String(raw || DEFAULTS.url).trim().replace(/\/+$/, '');
   let url;
@@ -46,7 +46,7 @@ function keeperAddress(raw) {
   return { base: url.toString().replace(/\/+$/, ''), auth, host: url.hostname, port: url.port };
 }
 
-// A hint for the usual mistake: a Cloudflare name (ban.tapper.co) with the home port on it.
+// A hint for the usual mistake: a Cloudflare name (bcn.tapper.co) with the home port on it.
 // Cloudflare only passes the web ports, so :8090 there never answers.
 function addressHint(a) {
   const lan = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(a.host) || !a.host.includes('.');
@@ -71,7 +71,7 @@ class Arlo {
 
   get address() { return keeperAddress(this.settings.url); }
 
-  // JSON request to Arlo Keeper.
+  // JSON request to Camera Keeper.
   request(method, path, body) {
     const a = this.address;
     if (a.error) return Promise.reject(new Error(a.error));
@@ -88,41 +88,41 @@ class Arlo {
             let why = '';
             try { why = JSON.parse(text).error || ''; } catch (_) { why = /^[^<]{1,200}$/.test(text.trim()) ? text.trim() : ''; }
             if (res.statusCode === 401) {
-              why = a.auth ? `${why || 'It turned down the name and password in the address.'} Use the away-from-home name and password from Arlo Keeper's Alerts page.`
-                : 'It asks for a password: put the away-from-home name and password in the address, like https://name:password@ban.tapper.co';
+              why = a.auth ? `${why || 'It turned down the name and password in the address.'} Use the away-from-home name and password from Camera Keeper's Alerts page.`
+                : 'It asks for a password: put the away-from-home name and password in the address, like https://name:password@bcn.tapper.co';
             } else if (res.statusCode >= 300 && res.statusCode < 400) why = `it sent GarysTV to ${res.headers.location || 'another page'}; check the address (https:// instead of http://?)`;
-            return reject(new Error(`Arlo Keeper answered ${res.statusCode}${why ? `: ${why}` : ''}`));
+            return reject(new Error(`Camera Keeper answered ${res.statusCode}${why ? `: ${why}` : ''}`));
           }
-          try { resolve(JSON.parse(text)); } catch (_) { reject(new Error("That address answered, but it isn't Arlo Keeper.")); }
+          try { resolve(JSON.parse(text)); } catch (_) { reject(new Error("That address answered, but it isn't Camera Keeper.")); }
         });
       });
       req.on('timeout', () => req.destroy(new Error('timed out')));
-      req.on('error', (e) => reject(new Error(`Couldn't reach Arlo Keeper at ${a.base} (${e.message}).${addressHint(a)}`)));
+      req.on('error', (e) => reject(new Error(`Couldn't reach Camera Keeper at ${a.base} (${e.message}).${addressHint(a)}`)));
       if (data) req.write(data);
       req.end();
     });
   }
 
-  // Settings > Arlo: the cameras Arlo Keeper knows, with which are ticked.
+  // Settings > Arlo: the cameras Camera Keeper knows, with which are ticked.
   async cameras() {
     const r = await this.request('GET', '/api/cameras');
     const on = new Set(this.settings.cameras);
     const brandOf = (c) => c.brand || (String(c.id).startsWith('blink-') ? 'blink' : 'arlo');
     const cameras = (r.cameras || []).map((c) => ({ id: String(c.id), name: c.name, model: c.model, battery: c.battery, unavailable: !!c.unavailable, lastMotion: c.last_motion,
       brand: brandOf(c), account: c.account ? `${brandOf(c)}:${c.account}` : null, on: on.has(String(c.id)) }));
-    // Accounts (newer Arlo Keepers list them; older ones only name each camera's account).
+    // Accounts (newer Camera Keepers list them; older ones only name each camera's account).
     let accounts = Array.isArray(r.accounts) ? r.accounts.map((x) => ({ id: `${x.brand}:${x.username}`, brand: x.brand, username: x.username, connected: !!x.connected, waitingForCode: !!x.waiting_for_code })) : [];
     for (const c of cameras) if (c.account && !accounts.some((x) => x.id === c.account)) accounts.push({ id: c.account, brand: c.brand, username: c.account.split(':').slice(1).join(':'), connected: true, waitingForCode: false });
     return { connected: !!r.connected, modes: r.modes || {}, subscribed: this.subscribed, error: this.lastError, cameras, accounts };
   }
 
-  // Ask Arlo Keeper to tell this GarysTV about motion (while Arlo is turned on here), or to stop.
+  // Ask Camera Keeper to tell this GarysTV about motion (while Arlo is turned on here), or to stop.
   async checkIn() {
     const s = this.settings;
     try {
       if (s.enabled) {
         await this.request('POST', '/api/subscribe', { port: this.core.settings.port });
-        if (!this.subscribed) this.core.note('arlo: Arlo Keeper will tell this GarysTV about motion');
+        if (!this.subscribed) this.core.note('arlo: Camera Keeper will tell this GarysTV about motion');
         this.subscribed = true;
       } else if (this.subscribed) {
         await this.request('DELETE', '/api/subscribe', { port: this.core.settings.port });
@@ -135,7 +135,7 @@ class Arlo {
     }
   }
 
-  // From Arlo Keeper: { camera, camera_id, time, file, live, clip }. Passed to the screens if
+  // From Camera Keeper: { camera, camera_id, time, file, live, clip }. Passed to the screens if
   // Arlo is on here and that camera is ticked; they show it only while playing TV.
   motion(ev) {
     const s = this.settings, id = String(ev.camera_id || '');
@@ -153,7 +153,7 @@ class Arlo {
     const clips = await this.request('GET', '/api/clips?limit=50');
     const on = new Set(this.settings.cameras);
     const pick = (clips || []).find((c) => on.has(String(c.camera_id)) && c.video_path) || (clips || []).find((c) => c.video_path);
-    if (!pick) throw new Error('Arlo Keeper has no saved clips yet to test with.');
+    if (!pick) throw new Error('Camera Keeper has no saved clips yet to test with.');
     const src = safePath(`/media/${pick.video_path}`);
     if (!src) throw new Error('That clip has an unusual file name.');
     this.broadcast({ what: 'arlo', motion: { camera: pick.camera_name, cameraId: String(pick.camera_id), time: Date.now(), file: pick.video_path, test: true,
@@ -168,7 +168,7 @@ class Arlo {
     const qs = `limit=${n}${camera ? `&camera=${encodeURIComponent(camera)}` : ''}${account && !camera ? `&account=${encodeURIComponent(account)}` : ''}`;
     let rows = await this.request('GET', `/api/clips?${qs}`);
     rows = Array.isArray(rows) ? rows : [];
-    if (account && !camera) { // an older Arlo Keeper ignores account=: keep that account's cameras here
+    if (account && !camera) { // an older Camera Keeper ignores account=: keep that account's cameras here
       const mine = new Set((await this.cameras().catch(() => ({ cameras: [] }))).cameras.filter((c) => c.account === account).map((c) => c.id));
       rows = rows.filter((c) => mine.has(String(c.camera_id)));
     }
@@ -182,17 +182,17 @@ class Arlo {
     }).filter((c) => c.view);
   }
 
-  // Home > Arlo > Delete: removes the saved clip (video and picture) from Arlo Keeper, for every
+  // Home > Arlo > Delete: removes the saved clip (video and picture) from Camera Keeper, for every
   // screen and the BAN app too. Arlo's own cloud copy, if any, isn't touched.
   async deleteClip(key) {
     key = String(key || '');
     if (!key || key.includes('..')) throw new Error('Which clip?');
     const r = await this.request('DELETE', `/api/clip/${key.split('/').map(encodeURIComponent).join('/')}`);
-    if (!r || !r.ok) throw new Error("Arlo Keeper doesn't have that clip any more.");
+    if (!r || !r.ok) throw new Error("Camera Keeper doesn't have that clip any more.");
     return { ok: true };
   }
 
-  // A clip's still picture, passed through from Arlo Keeper (the TVs may not be able to reach it).
+  // A clip's still picture, passed through from Camera Keeper (the TVs may not be able to reach it).
   thumb(req, res, src) {
     const p = safeThumb(src);
     if (!p) { res.writeHead(400); return res.end(); }
