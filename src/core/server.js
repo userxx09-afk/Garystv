@@ -11,7 +11,6 @@ const { bestVariant, HLS_INPUT, RECONNECT } = require('./hls');
 const { Timeshift } = require('./timeshift');
 const { Diagnostics } = require('./diagnostics');
 const { Sports } = require('./sports');
-const { Family } = require('./family');
 const hdhomerun = require('./sources/hdhomerun');
 const sourceTypes = require('./sources');
 const { Vod } = require('./vod');
@@ -207,9 +206,6 @@ function createServer(core) {
   const tools = core.tools = new ToolInstaller(core);
   const auth = core.auth = new Auth(core);
   const peers = core.peers = new Peers(core, auth);
-  // Family IPTV accounts (Settings > Status, 12 taps). The home server's secrets file is read on
-  // each ask, so accounts added to it work without a restart.
-  const family = core.family = new Family(core, { secretsFile: process.env.GTV_SECRETS_FILE || (process.platform === 'linux' ? '/etc/garystv/secrets.env' : null) });
   const sharing = core.sharing = new Sharing(core, peers);
   const peerOnly = (req) => { if (!req.who.peer) throw new Error('Only for a linked GarysTV.'); return req.who.peer; };
   // A recording at the other place (sharing.js): changes go to it.
@@ -325,9 +321,6 @@ function createServer(core) {
     ['GET', '/api/sports/leagues', () => sports.leagues()],
     ['GET', '/api/sports/teams', (q) => sports.teams(q.league)],
     ['GET', '/api/sports/games', () => sports.games()],
-    // The hidden page: family IPTV accounts offered by tapper, and adding one here.
-    ['POST', '/api/family/list', (q, b) => family.list(b.code)],
-    ['POST', '/api/family/add', (q, b) => family.add(b.code, String(b.id || ''))],
     ['GET', '/api/diag', () => diag.overview()], // Settings > Status > Playback health
     ['POST', '/api/diag/playback', (q, b, p, req) => diag.report(b, req.socket.remoteAddress)], // each TV, every 15s while playing
     ['POST', '/api/timeshift/release', (q, b) => timeshift.release(b.channelId, b.viewer)],
@@ -367,10 +360,6 @@ function createServer(core) {
     // Another GarysTV linking with this one (from wherever it is): checked with this one's password (peers.js).
     if (url.pathname === '/api/peer/link' && req.method === 'POST' && !req.headers.origin) {
       try { return send(res, 200, peers.accept(req, await readBody(req))); } catch (e) { return send(res, e.status || 400, { error: e.message }); }
-    }
-    // Another GarysTV asking for a family IPTV account, with the family code (family.js).
-    if (url.pathname === '/api/family/offer' && req.method === 'POST' && !req.headers.origin) {
-      try { return send(res, 200, family.offer(req, await readBody(req))); } catch (e) { return send(res, e.status || 400, { error: e.message }); }
     }
     if (!who.home) {
       const origin = req.headers.origin;

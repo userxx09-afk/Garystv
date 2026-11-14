@@ -24,53 +24,8 @@ const SettingsView = {
     root.innerHTML = `<div class="settings">
       <div class="menu">${this.sections.map(([k, l]) => `<div class="tab nav ${this.section === k ? 'on' : ''}" data-key="sec-${k}" data-sec="${k}">${l}</div>`).join('')}</div>
       <div class="pane" id="spane"></div></div>`;
-    $$('[data-sec]', root).forEach((el) => {
-      el.onclick = () => {
-        if (el.dataset.sec === 'status' && this.secretTap()) return;
-        this.section = el.dataset.sec;
-        App.render(`sec-${el.dataset.sec}`);
-      };
-    });
+    $$('[data-sec]', root).forEach((el) => { el.onclick = () => { this.section = el.dataset.sec; App.render(`sec-${el.dataset.sec}`); }; });
     this[this.section]($('#spane', root));
-  },
-
-  // Status pressed 12 times in a row (each within 3 seconds of the last): the hidden page.
-  taps: [],
-  secretTap() {
-    const now = Date.now();
-    this.taps = [...this.taps.filter((t, i, a) => now - (a[a.length - 1] || 0) < 3000), now];
-    if (this.taps.length < 12) return false;
-    this.taps = [];
-    this.familyAccounts();
-    return true;
-  },
-
-  // Adds a family IPTV account (core/family.js): the code, then which account. Only works on
-  // TapperVPN; anywhere else it just isn't available.
-  async familyAccounts() {
-    const code = await Modal.prompt('Add an account', 'Code', '', 'Next');
-    if (!code) return;
-    let list;
-    try { list = await api.post('/api/family/list', { code: code.trim() }); } catch (e) { toast(e.message); return; }
-    if (!list.length) { toast('No accounts to add.'); return; }
-    // Several logins to one service work together (one busy, the other is used), so "all" is first.
-    const left = list.filter((a) => !a.added);
-    const id = await Modal.menu('Add an account', '<div class="s">Each is added like any IPTV provider and keeps working on its own.</div>',
-      [...(left.length > 1 ? [{ value: '*', label: `＋ Add all (${left.map((a) => a.name).join(', ')})`, cls: 'primary' }] : []),
-        ...list.map((a) => ({ value: a.id, label: a.added ? `✓ ${a.name} (already added)` : `＋ ${a.name}` })), { value: null, label: 'Cancel' }]);
-    if (!id) return;
-    const ids = id === '*' ? left.map((a) => a.id) : [id];
-    toast('Adding... this takes a minute while the channels load.', 8000);
-    const done = [];
-    for (const one of ids) {
-      try {
-        const r = await api.post('/api/family/add', { code: code.trim(), id: one });
-        done.push(r.already ? `${r.name} (already here)` : r.name);
-      } catch (e) { toast(e.message); break; }
-    }
-    if (done.length) toast(`Added ${done.join(', ')}. The channels are in the guide now.`, 7000);
-    await App.loadAll();
-    App.render();
   },
 
   // ---------- sources ----------
