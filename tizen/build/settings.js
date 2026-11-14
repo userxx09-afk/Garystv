@@ -24,8 +24,53 @@ const SettingsView = {
     root.innerHTML = `<div class="settings">
       <div class="menu">${this.sections.map(([k, l]) => `<div class="tab nav ${this.section === k ? 'on' : ''}" data-key="sec-${k}" data-sec="${k}">${l}</div>`).join('')}</div>
       <div class="pane" id="spane"></div></div>`;
-    $$('[data-sec]', root).forEach((el) => { el.onclick = () => { this.section = el.dataset.sec; App.render(`sec-${el.dataset.sec}`); }; });
+    $$('[data-sec]', root).forEach((el) => {
+      el.onclick = () => {
+        if (el.dataset.sec === 'status' && this.secretTap()) return;
+        this.section = el.dataset.sec;
+        App.render(`sec-${el.dataset.sec}`);
+      };
+    });
     this[this.section]($('#spane', root));
+  },
+
+  // Status pressed 12 times in a row (each within 3 seconds of the last): the hidden page.
+  taps: [],
+  secretTap() {
+    const now = Date.now();
+    this.taps = [...this.taps.filter((t, i, a) => now - (a[a.length - 1] || 0) < 3000), now];
+    if (this.taps.length < 12) return false;
+    this.taps = [];
+    this.familyAccounts();
+    return true;
+  },
+
+  // Adds a family IPTV account (core/family.js): the code, then which account. Only works on
+  // TapperVPN; anywhere else it just isn't available.
+  async familyAccounts() {
+    const code = await Modal.prompt('Add an account', 'Code', '', 'Next');
+    if (!code) return;
+    let list;
+    try { list = await api.post('/api/family/list', { code: code.trim() }); } catch (e) { toast(e.message); return; }
+    if (!list.length) { toast('No accounts to add.'); return; }
+    // Several logins to one service work together (one busy, the other is used), so "all" is first.
+    const left = list.filter((a) => !a.added);
+    const id = await Modal.menu('Add an account', '<div class="s">Each is added like any IPTV provider and keeps working on its own.</div>',
+      [...(left.length > 1 ? [{ value: '*', label: `＋ Add all (${left.map((a) => a.name).join(', ')})`, cls: 'primary' }] : []),
+        ...list.map((a) => ({ value: a.id, label: a.added ? `✓ ${a.name} (already added)` : `＋ ${a.name}` })), { value: null, label: 'Cancel' }]);
+    if (!id) return;
+    const ids = id === '*' ? left.map((a) => a.id) : [id];
+    toast('Adding... this takes a minute while the channels load.', 8000);
+    const done = [];
+    for (const one of ids) {
+      try {
+        const r = await api.post('/api/family/add', { code: code.trim(), id: one });
+        done.push(r.already ? `${r.name} (already here)` : r.name);
+      } catch (e) { toast(e.message); break; }
+    }
+    if (done.length) toast(`Added ${done.join(', ')}. The channels are in the guide now.`, 7000);
+    await App.loadAll();
+    App.render();
   },
 
   // ---------- sources ----------
@@ -656,7 +701,7 @@ const SettingsView = {
     };
     const s = cur();
     pane.innerHTML = `<div class="box"><h3>Arlo cameras</h3>
-        <div class="s">When a ticked camera sees motion, its clip shows (without sound) in the lower-left corner for 10 seconds while you watch live TV or a recording. The TV keeps playing, and the remote keeps working as usual. The clips come from <b>Arlo Keeper</b>.</div>
+        <div class="s">When a ticked camera sees motion, its clip shows (without sound) in the lower-left corner for 10 seconds while you watch live TV or a recording. The TV keeps playing, and the remote keeps working as usual. The clips come from <b>Arlo Keeper</b>, which handles Arlo, Blink, and Laview or other IP cameras.</div>
         <label class="check nav" data-key="arlo-on" style="margin:.8rem 0"><input type="checkbox" id="arloOn" ${s.enabled ? 'checked' : ''}> Enable Arlo integration</label>
         <div class="field"><label>Arlo Keeper address</label><input id="arloUrl" class="nav" data-key="arlo-url" value="${esc(s.url)}" placeholder="http://192.168.5.210:8090"></div>
         <div class="s" style="font-size:.85rem">At home or over the VPN: http://its-address:8090 (motion pop-ups need this). Over the internet: https://name:password@ban.tapper.co, with the away-from-home name and password and no :8090 (clips only, no pop-ups).</div>
@@ -699,7 +744,7 @@ const SettingsView = {
     const modes = Object.values(r.modes || {}).filter(Boolean);
     // Filter by account (Arlo and Blink logins), when Arlo Keeper has more than one.
     const accounts = r.accounts || [];
-    const accName = (a) => `${a.brand === 'blink' ? 'Blink' : 'Arlo'} · ${a.username}`;
+    const accName = (a) => (a.brand === 'ipcam' ? a.username : `${a.brand === 'blink' ? 'Blink' : 'Arlo'} · ${a.username}`);
     if (this.arloAccount && !accounts.some((a) => a.id === this.arloAccount)) this.arloAccount = null;
     const shown = this.arloAccount ? r.cameras.filter((c) => c.account === this.arloAccount) : r.cameras;
     const waiting = accounts.filter((a) => a.waitingForCode);
