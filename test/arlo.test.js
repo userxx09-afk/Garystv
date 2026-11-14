@@ -117,3 +117,22 @@ test('Arlo: a name and password in the address are sent with every request, acco
     keeper.close();
   }
 });
+
+test('Arlo: deleting a clip asks Arlo Keeper to delete it', async () => {
+  const seen = [];
+  const keeper = http.createServer((req, res) => {
+    seen.push(`${req.method} ${req.url}`);
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ ok: !req.url.includes('gone') }));
+  });
+  await new Promise((r) => keeper.listen(0, '127.0.0.1', r));
+  try {
+    const arlo = new Arlo(fakeCore({ enabled: true, url: `http://127.0.0.1:${keeper.address().port}`, cameras: [] }), () => {});
+    assert.deepStrictEqual(await arlo.deleteClip('Front Door/2026-11-04/20-31-16'), { ok: true });
+    assert.strictEqual(seen[0], 'DELETE /api/clip/Front%20Door/2026-11-04/20-31-16');
+    await assert.rejects(arlo.deleteClip('gone/x'), /doesn't have that clip/);
+    await assert.rejects(arlo.deleteClip('../clips.db'), /Which clip/);
+  } finally {
+    keeper.close();
+  }
+});

@@ -329,6 +329,7 @@ function createServer(core) {
     // Arlo cameras (core/arlo.js): Settings > Arlo, and Arlo Keeper saying a motion clip has started.
     ['GET', '/api/arlo/cameras', () => arlo.cameras()],
     ['GET', '/api/arlo/clips', (q) => arlo.clips(q.camera, q.limit, q.account)], // Home > Arlo
+    ['DELETE', '/api/arlo/clip', (q) => arlo.deleteClip(q.key)], // Home > Arlo > Delete
     ['POST', '/api/arlo/motion', (q, b) => arlo.motion(b)],
     ['POST', '/api/arlo/test', () => arlo.test()],
     // Updates: the Windows app's own (src/app-updates.js), or a home server's (core/server-updates.js).
