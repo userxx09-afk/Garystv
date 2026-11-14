@@ -33,6 +33,7 @@ jobs:
           tar -czf GarysTV-linux.tar.gz src headless.js package.json package-lock.json install
       - uses: actions/upload-artifact@v4
         with:
+          retention-days: 1   # only passes files to the release; Actions storage is small
           name: GarysTV-linux
           path: GarysTV-linux.tar.gz
 
@@ -74,6 +75,7 @@ jobs:
         run: ./gradlew :app:assembleRelease :app:lintRelease
       - uses: actions/upload-artifact@v4
         with:
+          retention-days: 1   # only passes files to the release; Actions storage is small
           name: GarysTV-FireTV-apk
           path: firetv/app/build/outputs/apk/release/*.apk
 
@@ -97,6 +99,7 @@ jobs:
           if (!(Test-Path dist/latest.yml)) { throw "electron-builder made no latest.yml" }
       - uses: actions/upload-artifact@v4
         with:
+          retention-days: 1   # only passes files to the release; Actions storage is small
           name: GarysTV-Windows-installer
           path: |
             dist/GarysTV-Setup-*.exe
