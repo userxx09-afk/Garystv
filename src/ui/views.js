@@ -338,7 +338,7 @@ const TimersView = {
 };
 
 // ---------------- Arlo ----------------
-// Home > Arlo: the clips Arlo Keeper has saved, newest first, from every camera or one
+// Home > Arlo: the clips Camera Keeper has saved, newest first, from every camera or one
 // (core/arlo.js). OK plays a clip big, as pictures like the motion pop-up; Back closes it.
 const ArloView = {
   title: 'Arlo cameras',
@@ -383,7 +383,7 @@ const ArloView = {
   render(root) {
     const s = App.state.settings.arlo || {};
     if (!s.enabled) {
-      root.innerHTML = `<div class="empty">Arlo isn't turned on in GarysTV yet.<br>Turn it on and give it Arlo Keeper's address in Settings › Arlo.</div>
+      root.innerHTML = `<div class="empty">Arlo isn't turned on in GarysTV yet.<br>Turn it on and give it Camera Keeper's address in Settings › Arlo.</div>
         <div class="actions"><div class="btn nav primary" data-key="arlo-settings" id="arloSet">Open Settings › Arlo</div></div>`;
       $('#arloSet', root).onclick = () => { SettingsView.section = 'arlo'; App.go('settings'); };
       return;
@@ -402,14 +402,14 @@ const ArloView = {
     root.innerHTML = `
       ${accounts.length > 1 ? `<div class="tabs" style="flex-wrap:wrap"><div class="tab nav ${this.account ? '' : 'on'}" data-key="acct-all" data-acct="">All accounts</div>
         ${accounts.map((a) => `<div class="tab nav ${this.account === a.id ? 'on' : ''}" data-key="acct-${esc(a.id)}" data-acct="${esc(a.id)}">${esc(accName(a))}${a.connected ? '' : ' <span class="tag">OFF</span>'}</div>`).join('')}</div>` : ''}
-      ${waiting.length ? `<div class="s" style="margin-bottom:.8rem;color:var(--yellow)">Waiting for a verification code: ${waiting.map((a) => esc(accName(a))).join(', ')}. Enter it on Arlo Keeper's Arlo page.</div>` : ''}
+      ${waiting.length ? `<div class="s" style="margin-bottom:.8rem;color:var(--yellow)">Waiting for a verification code: ${waiting.map((a) => esc(accName(a))).join(', ')}. Enter it on Camera Keeper's Arlo page.</div>` : ''}
       <div class="tabs" style="flex-wrap:wrap"><div class="tab nav ${this.camera ? '' : 'on'}" data-key="cam-all" data-cam="">${curAcc ? 'All its cameras' : 'All cameras'}</div>
         ${cams.map((c) => `<div class="tab nav ${this.camera === c.id ? 'on' : ''}" data-key="cam-${esc(c.id)}" data-cam="${esc(c.id)}">${esc(c.name)}${c.unavailable ? ' <span class="tag">OFFLINE</span>' : ''}</div>`).join('')}</div>
-      ${this.cams && !this.cams.connected ? '<div class="s" style="margin-bottom:.8rem;color:var(--yellow)">Arlo Keeper isn\'t signed in to Arlo right now, so new clips won\'t come in. Sign in on its own page.</div>' : ''}
+      ${this.cams && !this.cams.connected ? '<div class="s" style="margin-bottom:.8rem;color:var(--yellow)">Camera Keeper isn\'t signed in to Arlo right now, so new clips won\'t come in. Sign in on its own page.</div>' : ''}
       <div class="split">
         <div class="col"><h2>${esc(this.camera ? camName(this.camera) || 'Camera' : curAcc ? accName(curAcc) : 'All cameras')}<span class="r">${this.clips ? `${clips.length} clips` : ''}</span></h2>
           <div class="list" id="arloList">${this.error && !this.clips ? `<div class="empty">⚠️ ${esc(this.error)}</div>`
-            : !this.clips ? '<div class="empty">Asking Arlo Keeper...</div>'
+            : !this.clips ? '<div class="empty">Asking Camera Keeper...</div>'
             : clips.length ? clips.map((c) => `
             <div class="item nav" data-key="clip-${esc(c.key)}" data-clip="${esc(c.key)}">
               ${c.thumb ? `<img class="athumb" src="${esc(server(c.thumb))}" alt="" onerror="this.style.visibility='hidden'">` : '<div class="athumb"></div>'}
@@ -457,7 +457,7 @@ const ArloView = {
   // Delete a saved clip (asks first), then back to the list on the clip that took its place.
   async remove(c) {
     if (!c) return;
-    if (!(await Modal.confirm('Delete clip?', `${c.camera}, ${fmt.when(c.time)} will be deleted from Arlo Keeper, for every TV and phone.`, 'Delete'))) return;
+    if (!(await Modal.confirm('Delete clip?', `${c.camera}, ${fmt.when(c.time)} will be deleted from Camera Keeper, for every TV and phone.`, 'Delete'))) return;
     try { await api.del(`/api/arlo/clip?key=${encodeURIComponent(c.key)}`); } catch (e) { return toast(e.message, 6000); }
     const list = this.clips || [];
     const i = list.findIndex((x) => x.key === c.key);
