@@ -111,7 +111,7 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0
 .g-empty { padding: 3rem; text-align: center; color: var(--muted); font-size: 1.2rem; }
 
 /* ---------- home ---------- */
-.home { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: center; justify-content: safe center; gap: clamp(1rem, 4vh, 2.4rem); padding-bottom: 4vh; }
+.home { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; scrollbar-color: var(--line) transparent; padding-right: .3rem; display: flex; flex-direction: column; justify-content: center; justify-content: safe center; gap: clamp(1rem, 4vh, 2.4rem); padding-bottom: 4vh; }
 .home h1 { margin: 0; font-size: 2.4rem; font-weight: 300; }
 .home h1 b { font-weight: 700; }
 .tiles { display: grid; grid-template-columns: repeat(8, 1fr); gap: 1rem; }
@@ -119,7 +119,9 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0
 .tile svg { width: 3.6rem; height: 3.6rem; stroke: currentColor; fill: none; stroke-width: 1.6; }
 .tile small { font-size: .85rem; font-weight: 400; color: var(--muted); }
 .strip h2 { margin: 0 0 .7rem; font-size: 1.15rem; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .1em; }
-.cards { display: flex; gap: 1rem; overflow: hidden; }
+.cards { display: flex; gap: 1rem; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; padding: .3rem .25rem; margin: -.3rem -.25rem; } /* sideways with a mouse or a swipe; the remote scrolls to what it lands on */
+.cards::-webkit-scrollbar { display: none; }
+.home > * { flex: none; } /* a long Home scrolls instead of squashing its rows */
 .card { width: 17rem; flex: none; padding: 1rem 1.1rem; border-radius: .7rem; background: var(--panel); border: 2px solid var(--line); cursor: pointer; }
 .card .t { font-weight: 700; font-size: 1.1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; gap: .5rem; align-items: center; }
 .card .s { color: var(--muted); font-size: .9rem; margin-top: .3rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
