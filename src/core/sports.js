@@ -8,6 +8,9 @@
 //  - the network: ESPN says "FOX" or "ESPN2", and channels with that network in their name carry it
 //    (for CBS/FOX/NBC/ABC that can be another city's station showing a different game)
 // Streaming-only broadcasts (Peacock, Prime Video, ESPN+...) are listed but have no channel here.
+//
+// Top 25 (Settings > My Teams): every game with a ranked team in college football or men's
+// basketball, from ESPN's polls (the playoff committee's, once it's out, else AP) and day scoreboards.
 const API = 'https://site.api.espn.com/apis/site/v2/sports';
 
 const LEAGUES = {
@@ -55,6 +58,17 @@ const NETWORKS = [
 ];
 const STREAMING = /peacock|prime video|amazon|espn\+|espn app|apple tv|netflix|paramount\+|youtube|\bmax\b|nfl\+|league pass|mlb\.tv|nhl\.tv|fubo|dazn|victory\+|\+$|stream/i;
 
+// Leagues with a Top 25, and the poll used: the first of these ESPN has.
+const TOP25 = { ncaaf: { label: 'Top 25 college football', polls: ['cfp', 'ap'], days: 7, max: 20 }, ncaam: { label: "Top 25 men's basketball", polls: ['ap', 'usa'], days: 3, max: 20 } };
+
+// ESPN's scoreboard answers one day at a time (a range of dates gets a 400): YYYYMMDD for each UTC
+// day from `from` to `to`.
+function days(from, to) {
+  const out = [];
+  for (let t = from; t < to + 86400e3; t += 86400e3) { const d = new Date(Math.min(t, to)).toISOString().slice(0, 10).replace(/-/g, ''); if (!out.includes(d)) out.push(d); }
+  return out;
+}
+
 const networkOf = (name) => (NETWORKS.find(([n, re]) => n.toLowerCase() === String(name).toLowerCase() || re.test(name)) || [])[0] || null;
 const reOf = (net) => (NETWORKS.find(([n]) => n === net) || [])[1];
 
@@ -62,7 +76,8 @@ const reOf = (net) => (NETWORKS.find(([n]) => n === net) || [])[1];
 function team(c) {
   const t = c.team || {};
   const score = c.score && typeof c.score === 'object' ? c.score.displayValue : c.score;
-  return { id: String(t.id || ''), name: t.displayName || t.name || '', short: t.shortDisplayName || t.name || '', nick: t.name || '', location: t.location || '',
+  const r = c.curatedRank && +c.curatedRank.current; // ESPN's rank for the game, 99 when unranked
+  return { id: String(t.id || ''), rank: r >= 1 && r <= 25 ? r : null, name: t.displayName || t.name || '', short: t.shortDisplayName || t.name || '', nick: t.name || '', location: t.location || '',
     abbr: t.abbreviation || '', logo: t.logo || (t.logos && t.logos[0] && t.logos[0].href) || '', score: score != null && score !== '' ? String(score) : null };
 }
 
@@ -190,7 +205,10 @@ class Sports {
       const res = await this.fetchImpl(url, { headers: { Accept: 'application/json', 'User-Agent': 'GarysTV' }, signal: AbortSignal.timeout(12000) });
       if (!res.ok) throw new Error(`ESPN answered ${res.status}`);
       const data = await res.json();
-      if (stored) this.core.store.writeSoon('sportscache', { ...this.cache, [url]: { at: Date.now(), data } }).catch(() => {});
+      if (stored) { // what's older than two weeks isn't asked for again (a day's scoreboard)
+        const keep = Object.entries(this.cache).filter(([, v]) => Date.now() - v.at < 15 * 86400e3);
+        this.core.store.writeSoon('sportscache', { ...Object.fromEntries(keep), [url]: { at: Date.now(), data } }).catch(() => {});
+      }
       else this.memo.set(url, { at: Date.now(), data });
       return data;
     } catch (e) {
@@ -211,10 +229,54 @@ class Sports {
 
   myTeams() { return (this.core.settings.sportsTeams || []).filter((t) => LEAGUES[t.league] && t.id); }
 
-  // The next games for my teams (and any on now), each with the channels it's likely on.
+  // ESPN events for every day from `from` to `to`. Today's (live scores) for a minute and a half,
+  // other days' for a few hours.
+  async scoreboard(league, from, to) {
+    const L = LEAGUES[league];
+    const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const lists = await Promise.all(days(from, to).map((d) => this.get(`${this.api}/${L.path}/scoreboard?dates=${d}&limit=500${L.groups ? `&groups=${L.groups}` : ''}`, d <= today ? 90e3 : 3 * 3600e3, d > today)));
+    return lists.flatMap((data) => data.events || []);
+  }
+
+  // league -> Map(team id -> rank) from the first of TOP25[league].polls ESPN has.
+  async ranks(league) {
+    const data = await this.get(`${this.api}/${LEAGUES[league].path}/rankings`, 6 * 3600e3, true);
+    const polls = data.rankings || [];
+    const poll = TOP25[league].polls.map((p) => polls.find((r) => r.type === p)).find((r) => r && (r.ranks || []).length) || polls[0];
+    return { poll: poll ? poll.shortName || poll.name || '' : '', ranks: new Map(((poll && poll.ranks) || []).filter((r) => r.current >= 1 && r.current <= 25).map((r) => [String(r.team && r.team.id), r.current])) };
+  }
+
+  top25Leagues() { return (this.core.settings.sportsTop25 || []).filter((l) => TOP25[l]); }
+
+  // Games with a ranked team, in the next few days (and any on now), ranked by the poll.
+  async top25(league, now, match) {
+    const T = TOP25[league];
+    const errors = [];
+    let ranks = new Map(), poll = '';
+    try { ({ ranks, poll } = await this.ranks(league)); } catch (e) { errors.push(`Rankings: ${e.message}`); }
+    let events = [];
+    try { events = await this.scoreboard(league, now - 12 * 3600e3, now + T.days * 86400e3); } catch (e) { errors.push(e.message); }
+    const seen = new Set();
+    const games = [];
+    for (const ev of events) {
+      const g = parseEvent(ev, league);
+      if (!g || seen.has(g.id) || g.start < now - 6 * 3600e3 || g.start > now + T.days * 86400e3) continue;
+      if (g.state === 'post' && g.start < now - 4 * 3600e3) continue;
+      if (ranks.size) for (const t of [g.home, g.away]) t.rank = ranks.get(t.id) || null; // the poll, not ESPN's per-game rank
+      if (!g.home.rank && !g.away.rank) continue;
+      seen.add(g.id);
+      games.push(g);
+    }
+    games.sort((a, b) => a.start - b.start || Math.min(a.home.rank || 99, a.away.rank || 99) - Math.min(b.home.rank || 99, b.away.rank || 99));
+    return { league, label: T.label, poll, errors, games: games.slice(0, T.max).map(match) };
+  }
+
+  // The next games for my teams (and any on now), each with the channels it's likely on, and the
+  // Top 25 games for the leagues ticked.
   async games() {
     const mine = this.myTeams();
-    if (!mine.length) return { teams: [], games: [], errors: [] };
+    const tops = this.top25Leagues();
+    if (!mine.length && !tops.length) return { teams: [], games: [], errors: [], top25: [] };
     const now = Date.now();
     const errors = [];
     const games = new Map();
@@ -231,10 +293,8 @@ class Sports {
     const today = [...new Set([...games.values()].filter((g) => g.start < now + 12 * 3600e3).map((g) => g.league))];
     await Promise.all(today.map(async (league) => {
       const L = LEAGUES[league];
-      const day = (t) => new Date(t).toISOString().slice(0, 10).replace(/-/g, '');
       try {
-        const data = await this.get(`${this.api}/${L.path}/scoreboard?dates=${day(now - 12 * 3600e3)}-${day(now + 12 * 3600e3)}&limit=500${L.groups ? `&groups=${L.groups}` : ''}`, 90e3);
-        for (const ev of data.events || []) {
+        for (const ev of await this.scoreboard(league, now - 12 * 3600e3, now + 12 * 3600e3)) {
           const g = parseEvent(ev, league);
           const had = g && games.get(g.id);
           if (had) games.set(g.id, { ...had, ...g, broadcasts: g.broadcasts.length ? g.broadcasts : had.broadcasts });
@@ -246,15 +306,17 @@ class Sports {
     const channels = this.core.visibleChannels().map((c) => ({ ...c, guideNames: (c.guideId && guideNames.get(c.guideId)) || [] }));
     const programsFor = (c) => this.core.programsFor(c);
     const ids = new Set(mine.map((t) => `${t.league}:${t.id}`));
+    const match = (g) => ({ ...g, mine: [g.home, g.away].filter((x) => ids.has(`${g.league}:${x.id}`)).map((x) => x.id), channels: matchChannels(g, channels, programsFor), endGuess: g.start + LEAGUES[g.league].hours * 3600e3 });
     const list = [...games.values()]
       .filter((g) => g.state !== 'post' || g.start > now - 4 * 3600e3) // a final score stays up for a while
       .sort((a, b) => a.start - b.start)
-      .map((g) => ({ ...g, mine: [g.home, g.away].filter((x) => ids.has(`${g.league}:${x.id}`)).map((x) => x.id), channels: matchChannels(g, channels, programsFor), endGuess: g.start + LEAGUES[g.league].hours * 3600e3 }));
+      .map(match);
     // Up to four games per team.
     const per = new Map();
     const shown = list.filter((g) => g.mine.some((id) => { const n = per.get(id) || 0; per.set(id, n + 1); return n < 4; }));
-    return { teams: mine, games: shown, errors };
+    const top25 = await Promise.all(tops.map((l) => this.top25(l, now, match)));
+    return { teams: mine, games: shown, errors, top25 };
   }
 }
 
-module.exports = { Sports, LEAGUES, parseEvent, broadcasts, matchChannels, networkOf };
+module.exports = { Sports, LEAGUES, TOP25, days, parseEvent, broadcasts, matchChannels, networkOf };

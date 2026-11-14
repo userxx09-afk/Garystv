@@ -113,3 +113,35 @@ test('league package channels: the game in the channel name, and a team named at
   assert.equal(m[0].why, 'the channel is named for this game');
   assert.match(m[1].why, /Bulls game/);
 });
+
+test('Top 25: games with a ranked team, ranked by the poll, one scoreboard a day', async () => {
+  const now = Date.now();
+  const at = (h) => new Date(now + h * 3600e3).toISOString();
+  const osu = { id: '194', displayName: 'Ohio State Buckeyes', shortDisplayName: 'Ohio State', name: 'Buckeyes', abbreviation: 'OSU' };
+  const mich = { id: '130', displayName: 'Michigan Wolverines', shortDisplayName: 'Michigan', name: 'Wolverines', abbreviation: 'MICH' };
+  const iowa = { id: '2294', displayName: 'Iowa Hawkeyes', shortDisplayName: 'Iowa', name: 'Hawkeyes', abbreviation: 'IOWA' };
+  const ev = (id, h, home, away) => ({ id, date: at(h), competitions: [{ date: at(h), status: { type: { state: 'pre' } }, competitors: [{ homeAway: 'home', team: home }, { homeAway: 'away', team: away, curatedRank: { current: 3 } }], broadcasts: [{ market: 'national', names: ['FOX'] }] }] });
+  const urls = [];
+  const fetchImpl = async (url) => {
+    urls.push(url);
+    if (/dates=\d{8}-/.test(url)) return { ok: false, status: 400 }; // what ESPN does with a range
+    if (url.includes('/rankings')) return { ok: true, json: async () => ({ rankings: [{ type: 'ap', shortName: 'AP Poll', ranks: [{ current: 7, team: { id: '194' } }] }, { type: 'cfp', name: 'Playoff Committee Rankings', ranks: [{ current: 2, team: { id: '194' } }, { current: 30, team: { id: '130' } }] }] }) };
+    const events = url.includes(new Date(now).toISOString().slice(0, 10).replace(/-/g, '')) ? [ev('1', 2, osu, mich), ev('2', 3, iowa, mich)] : [];
+    return { ok: true, json: async () => ({ events }) };
+  };
+  const data = {};
+  const core = {
+    settings: { sportsTop25: ['ncaaf', 'nope'] },
+    store: { read: (k, f) => data[k] || f, writeSoon: async (k, v) => { data[k] = v; } },
+    guideData: { channels: [] },
+    visibleChannels: () => [{ id: 'fox', number: '1032', name: 'WFLD FOX 32' }],
+    programsFor: () => [],
+  };
+  const r = await new Sports(core, { api: 'http://espn', fetchImpl }).games();
+  assert.equal(r.top25.length, 1);
+  const t = r.top25[0];
+  assert.deepEqual([t.league, t.poll, t.errors], ['ncaaf', 'Playoff Committee Rankings', []]);
+  assert.deepEqual(t.games.map((g) => [g.id, g.home.rank, g.away.rank]), [['ncaaf:1', 2, null]]); // the poll's ranks, not ESPN's per-game ones
+  assert.equal(t.games[0].channels[0].channelId, 'fox');
+  assert.ok(urls.filter((u) => u.includes('/scoreboard')).every((u) => /dates=\d{8}&/.test(u)));
+});
