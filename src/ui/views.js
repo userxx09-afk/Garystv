@@ -342,6 +342,7 @@ const TimersView = {
 const ArloView = {
   title: 'Arlo cameras',
   camera: null, // a camera id, or null for all of them
+  account: null, // "arlo:email" / "blink:email", or null for every account
   cams: null, clips: null, error: null, loadedAt: 0, loading: false, playing: null,
   hints: [['↑↓', 'Move'], ['OK', 'Play'], ['←→', 'Camera'], ['M', 'Menu'], ['Esc', 'Back']],
 
@@ -349,7 +350,7 @@ const ArloView = {
     if (this.loading) return;
     this.loading = true;
     try {
-      const [cams, clips] = await Promise.all([api.get('/api/arlo/cameras'), api.get(`/api/arlo/clips?limit=80${this.camera ? `&camera=${encodeURIComponent(this.camera)}` : ''}`)]);
+      const [cams, clips] = await Promise.all([api.get('/api/arlo/cameras'), api.get(`/api/arlo/clips?limit=80${this.camera ? `&camera=${encodeURIComponent(this.camera)}` : this.account ? `&account=${encodeURIComponent(this.account)}` : ''}`)]);
       this.cams = cams; this.clips = clips; this.error = null;
     } catch (e) { this.error = e.message; }
     this.loading = false;
@@ -364,6 +365,20 @@ const ArloView = {
     this.load();
   },
 
+  pickAccount(id) {
+    this.account = id || null;
+    this.camera = null;
+    this.clips = null;
+    App.render(`acct-${this.account || 'all'}`);
+    this.load();
+  },
+
+  // The cameras the tabs show: every one, or the chosen account's.
+  shownCams() {
+    const cams = (this.cams && this.cams.cameras) || [];
+    return this.account ? cams.filter((c) => c.account === this.account) : cams;
+  },
+
   render(root) {
     const s = App.state.settings.arlo || {};
     if (!s.enabled) {
@@ -374,15 +389,24 @@ const ArloView = {
     }
     if (this.playing) return this.renderPlaying(root);
     if (!this.loading && (!this.clips || Date.now() - this.loadedAt > 20000)) setTimeout(() => this.load(), 0);
-    const cams = (this.cams && this.cams.cameras) || [];
+    const all = (this.cams && this.cams.cameras) || [];
+    const accounts = (this.cams && this.cams.accounts) || [];
+    if (this.account && this.cams && !accounts.some((a) => a.id === this.account)) this.account = null;
+    const cams = this.shownCams();
     const clips = this.clips || [];
-    const camName = (id) => (cams.find((c) => c.id === id) || {}).name;
+    const camName = (id) => (all.find((c) => c.id === id) || {}).name;
+    const accName = (a) => `${a.brand === 'blink' ? 'Blink' : 'Arlo'} · ${a.username}`;
+    const curAcc = accounts.find((a) => a.id === this.account);
+    const waiting = accounts.filter((a) => a.waitingForCode);
     root.innerHTML = `
-      <div class="tabs"><div class="tab nav ${this.camera ? '' : 'on'}" data-key="cam-all" data-cam="">All cameras</div>
+      ${accounts.length > 1 ? `<div class="tabs" style="flex-wrap:wrap"><div class="tab nav ${this.account ? '' : 'on'}" data-key="acct-all" data-acct="">All accounts</div>
+        ${accounts.map((a) => `<div class="tab nav ${this.account === a.id ? 'on' : ''}" data-key="acct-${esc(a.id)}" data-acct="${esc(a.id)}">${esc(accName(a))}${a.connected ? '' : ' <span class="tag">OFF</span>'}</div>`).join('')}</div>` : ''}
+      ${waiting.length ? `<div class="s" style="margin-bottom:.8rem;color:var(--yellow)">Waiting for a verification code: ${waiting.map((a) => esc(accName(a))).join(', ')}. Enter it on Arlo Keeper's Arlo page.</div>` : ''}
+      <div class="tabs" style="flex-wrap:wrap"><div class="tab nav ${this.camera ? '' : 'on'}" data-key="cam-all" data-cam="">${curAcc ? 'All its cameras' : 'All cameras'}</div>
         ${cams.map((c) => `<div class="tab nav ${this.camera === c.id ? 'on' : ''}" data-key="cam-${esc(c.id)}" data-cam="${esc(c.id)}">${esc(c.name)}${c.unavailable ? ' <span class="tag">OFFLINE</span>' : ''}</div>`).join('')}</div>
       ${this.cams && !this.cams.connected ? '<div class="s" style="margin-bottom:.8rem;color:var(--yellow)">Arlo Keeper isn\'t signed in to Arlo right now, so new clips won\'t come in. Sign in on its own page.</div>' : ''}
       <div class="split">
-        <div class="col"><h2>${esc(this.camera ? camName(this.camera) || 'Camera' : 'All cameras')}<span class="r">${this.clips ? `${clips.length} clips` : ''}</span></h2>
+        <div class="col"><h2>${esc(this.camera ? camName(this.camera) || 'Camera' : curAcc ? accName(curAcc) : 'All cameras')}<span class="r">${this.clips ? `${clips.length} clips` : ''}</span></h2>
           <div class="list" id="arloList">${this.error && !this.clips ? `<div class="empty">⚠️ ${esc(this.error)}</div>`
             : !this.clips ? '<div class="empty">Asking Arlo Keeper...</div>'
             : clips.length ? clips.map((c) => `
@@ -395,6 +419,7 @@ const ArloView = {
         <div class="col"><h2>Clip</h2><div class="detail" id="arloDetail"><div class="empty">Highlight a clip to see it. Press OK to play it.</div></div></div>
       </div>`;
     $$('[data-cam]', root).forEach((el) => { el.onclick = () => this.pick(el.dataset.cam); });
+    $$('[data-acct]', root).forEach((el) => { el.onclick = () => this.pickAccount(el.dataset.acct); });
     $$('[data-clip]', root).forEach((el) => {
       const c = () => clips.find((x) => x.key === el.dataset.clip);
       el.onclick = () => this.play(c());
@@ -456,7 +481,7 @@ const ArloView = {
   onKey(e) {
     if (this.playing || !(e.key === 'ArrowLeft' || e.key === 'ArrowRight')) return false;
     if (!Nav.current || Nav.current.classList.contains('tab') || Nav.current.closest('#topnav')) return false;
-    const ids = [null, ...((this.cams && this.cams.cameras) || []).map((c) => c.id)];
+    const ids = [null, ...this.shownCams().map((c) => c.id)];
     const i = ids.indexOf(this.camera);
     this.pick(ids[(i + (e.key === 'ArrowRight' ? 1 : ids.length - 1)) % ids.length]);
     return true;

@@ -29,6 +29,30 @@ function safeThumb(p) {
   return !p.includes('..') && THUMB_PATH.test(p) ? p : null;
 }
 
+// The Arlo Keeper address from Settings, split into the address itself and its sign-in.
+// A name and password in the address (https://name:password@ban.tapper.co) are sent with every
+// request, the clips (ffmpeg) included, so Arlo Keeper never has to ask for them.
+function keeperAddress(raw) {
+  const base = String(raw || DEFAULTS.url).trim().replace(/\/+$/, '');
+  let url;
+  try { url = new URL(base); } catch (_) { return { error: `"${base}" isn't a web address. It should look like http://192.168.5.210:8090` }; }
+  if (!/^https?:$/.test(url.protocol)) return { error: `"${base}" isn't a web address. It should start with http:// or https://` };
+  let auth = null;
+  if (url.username || url.password) {
+    const dec = (s) => { try { return decodeURIComponent(s); } catch (_) { return s; } };
+    auth = 'Basic ' + Buffer.from(`${dec(url.username)}:${dec(url.password)}`).toString('base64');
+    url.username = ''; url.password = '';
+  }
+  return { base: url.toString().replace(/\/+$/, ''), auth, host: url.hostname, port: url.port };
+}
+
+// A hint for the usual mistake: a Cloudflare name (ban.tapper.co) with the home port on it.
+// Cloudflare only passes the web ports, so :8090 there never answers.
+function addressHint(a) {
+  const lan = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(a.host) || !a.host.includes('.');
+  return !lan && a.port ? ` "${a.host}" is a name on the internet, which doesn't pass port ${a.port}: try https://name:password@${a.host} (no :${a.port}).` : '';
+}
+
 class Arlo {
   constructor(core, broadcast) {
     this.core = core;
@@ -45,24 +69,35 @@ class Arlo {
     return { ...DEFAULTS, ...s, cameras: Array.isArray(s.cameras) ? s.cameras.map(String) : [] };
   }
 
+  get address() { return keeperAddress(this.settings.url); }
+
   // JSON request to Arlo Keeper.
   request(method, path, body) {
-    const base = (this.settings.url || DEFAULTS.url).replace(/\/+$/, '');
-    let url;
-    try { url = new URL(base + path); } catch (_) { return Promise.reject(new Error(`"${base}" isn't a web address. It should look like http://192.168.5.210:8090`)); }
+    const a = this.address;
+    if (a.error) return Promise.reject(new Error(a.error));
+    const url = new URL(a.base + path);
     const lib = url.protocol === 'https:' ? https : http;
     const data = body ? JSON.stringify(body) : null;
+    const headers = { Accept: 'application/json', ...(a.auth ? { Authorization: a.auth } : {}), ...(data ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } : {}) };
     return new Promise((resolve, reject) => {
-      const req = lib.request(url, { method, timeout: 6000, headers: data ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } : {} }, (res) => {
+      const req = lib.request(url, { method, timeout: 8000, headers }, (res) => {
         let text = '';
         res.on('data', (c) => { text += c; });
         res.on('end', () => {
-          if (res.statusCode >= 300) return reject(new Error(`Arlo Keeper answered ${res.statusCode}${res.statusCode === 401 ? ' (it asks for a password; put it in the address: http://user:password@host:8090)' : ''}`));
+          if (res.statusCode >= 300) {
+            let why = '';
+            try { why = JSON.parse(text).error || ''; } catch (_) { why = /^[^<]{1,200}$/.test(text.trim()) ? text.trim() : ''; }
+            if (res.statusCode === 401) {
+              why = a.auth ? `${why || 'It turned down the name and password in the address.'} Use the away-from-home name and password from Arlo Keeper's Alerts page.`
+                : 'It asks for a password: put the away-from-home name and password in the address, like https://name:password@ban.tapper.co';
+            } else if (res.statusCode >= 300 && res.statusCode < 400) why = `it sent GarysTV to ${res.headers.location || 'another page'}; check the address (https:// instead of http://?)`;
+            return reject(new Error(`Arlo Keeper answered ${res.statusCode}${why ? `: ${why}` : ''}`));
+          }
           try { resolve(JSON.parse(text)); } catch (_) { reject(new Error("That address answered, but it isn't Arlo Keeper.")); }
         });
       });
       req.on('timeout', () => req.destroy(new Error('timed out')));
-      req.on('error', (e) => reject(new Error(`Couldn't reach Arlo Keeper at ${base} (${e.message}).`)));
+      req.on('error', (e) => reject(new Error(`Couldn't reach Arlo Keeper at ${a.base} (${e.message}).${addressHint(a)}`)));
       if (data) req.write(data);
       req.end();
     });
@@ -72,8 +107,13 @@ class Arlo {
   async cameras() {
     const r = await this.request('GET', '/api/cameras');
     const on = new Set(this.settings.cameras);
-    return { connected: !!r.connected, modes: r.modes || {}, subscribed: this.subscribed, error: this.lastError,
-      cameras: (r.cameras || []).map((c) => ({ id: String(c.id), name: c.name, model: c.model, battery: c.battery, unavailable: !!c.unavailable, lastMotion: c.last_motion, on: on.has(String(c.id)) })) };
+    const brandOf = (c) => c.brand || (String(c.id).startsWith('blink-') ? 'blink' : 'arlo');
+    const cameras = (r.cameras || []).map((c) => ({ id: String(c.id), name: c.name, model: c.model, battery: c.battery, unavailable: !!c.unavailable, lastMotion: c.last_motion,
+      brand: brandOf(c), account: c.account ? `${brandOf(c)}:${c.account}` : null, on: on.has(String(c.id)) }));
+    // Accounts (newer Arlo Keepers list them; older ones only name each camera's account).
+    let accounts = Array.isArray(r.accounts) ? r.accounts.map((x) => ({ id: `${x.brand}:${x.username}`, brand: x.brand, username: x.username, connected: !!x.connected, waitingForCode: !!x.waiting_for_code })) : [];
+    for (const c of cameras) if (c.account && !accounts.some((x) => x.id === c.account)) accounts.push({ id: c.account, brand: c.brand, username: c.account.split(':').slice(1).join(':'), connected: true, waitingForCode: false });
+    return { connected: !!r.connected, modes: r.modes || {}, subscribed: this.subscribed, error: this.lastError, cameras, accounts };
   }
 
   // Ask Arlo Keeper to tell this GarysTV about motion (while Arlo is turned on here), or to stop.
@@ -121,12 +161,18 @@ class Arlo {
     return { camera: pick.camera_name };
   }
 
-  // The Arlo screen (Home > Arlo): saved clips, newest first, from every camera or one.
-  async clips(camera, limit) {
+  // The Arlo screen (Home > Arlo): saved clips, newest first, from every camera, one camera, or
+  // one account's cameras (account = "arlo:email" or "blink:email").
+  async clips(camera, limit, account) {
     const n = Math.min(Math.max(parseInt(limit, 10) || 60, 1), 200);
-    const qs = `limit=${n}${camera ? `&camera=${encodeURIComponent(camera)}` : ''}`;
-    const rows = await this.request('GET', `/api/clips?${qs}`);
-    return (Array.isArray(rows) ? rows : []).map((c) => {
+    const qs = `limit=${n}${camera ? `&camera=${encodeURIComponent(camera)}` : ''}${account && !camera ? `&account=${encodeURIComponent(account)}` : ''}`;
+    let rows = await this.request('GET', `/api/clips?${qs}`);
+    rows = Array.isArray(rows) ? rows : [];
+    if (account && !camera) { // an older Arlo Keeper ignores account=: keep that account's cameras here
+      const mine = new Set((await this.cameras().catch(() => ({ cameras: [] }))).cameras.filter((c) => c.account === account).map((c) => c.id));
+      rows = rows.filter((c) => mine.has(String(c.camera_id)));
+    }
+    return rows.map((c) => {
       const src = c.video_path && safePath(`/media/${c.video_path}`);
       const thumb = c.thumb_path && safeThumb(`/media/${c.thumb_path}`);
       return { key: c.key, camera: c.camera_name, cameraId: String(c.camera_id), time: +c.created_ms || 0, duration: c.duration_s || null,
@@ -140,10 +186,11 @@ class Arlo {
   thumb(req, res, src) {
     const p = safeThumb(src);
     if (!p) { res.writeHead(400); return res.end(); }
-    let url;
-    try { url = new URL((this.settings.url || DEFAULTS.url).replace(/\/+$/, '') + p); } catch (_) { res.writeHead(400); return res.end(); }
+    const a = this.address;
+    if (a.error) { res.writeHead(400); return res.end(); }
+    const url = new URL(a.base + p);
     const lib = url.protocol === 'https:' ? https : http;
-    const up = lib.get(url, { timeout: 8000 }, (r) => {
+    const up = lib.get(url, { timeout: 8000, headers: a.auth ? { Authorization: a.auth } : {} }, (r) => {
       if (r.statusCode !== 200) { r.resume(); res.writeHead(404); return res.end(); }
       res.writeHead(200, { 'Content-Type': r.headers['content-type'] || 'image/jpeg', 'Cache-Control': 'max-age=86400' });
       r.pipe(res);
@@ -160,10 +207,14 @@ class Arlo {
     if (!path) { res.writeHead(400); return res.end(); }
     const ffmpeg = findFfmpeg(this.core.settings);
     if (!ffmpeg) { res.writeHead(501); return res.end(); }
-    const input = (this.settings.url || DEFAULTS.url).replace(/\/+$/, '') + path;
+    const a = this.address;
+    if (a.error) { res.writeHead(400); return res.end(); }
+    const input = a.base + path;
+    // The sign-in goes in a header: ffmpeg only sends one from the address after being asked.
+    const auth = a.auth ? ['-headers', `Authorization: ${a.auth}\r\n`] : [];
     const look = big ? ['-t', '120', '-an', '-vf', 'fps=15,scale=1280:-2', '-q:v', '5'] : ['-t', '30', '-an', '-vf', 'fps=10,scale=640:-2', '-q:v', '7'];
     // -re: show it at normal speed (a finished clip would otherwise be sent all at once).
-    const proc = spawn(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-re', '-i', input, ...look,
+    const proc = spawn(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-re', ...auth, '-i', input, ...look,
       '-f', 'mpjpeg', 'pipe:1'], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     let err = '';
     proc.stderr.on('data', (d) => { err = (err + d).slice(-500); });
@@ -174,4 +225,4 @@ class Arlo {
   }
 }
 
-module.exports = { Arlo, safePath };
+module.exports = { Arlo, safePath, keeperAddress };
