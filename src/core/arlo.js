@@ -139,8 +139,8 @@ class Arlo {
   // Arlo is on here and that camera is ticked; they show it only while playing TV.
   motion(ev) {
     const s = this.settings, id = String(ev.camera_id || '');
-    if (!s.enabled) return { shown: false, why: 'Arlo is turned off in Settings > Arlo' };
-    if (!s.cameras.includes(id)) return { shown: false, why: `${ev.camera || id} isn't ticked in Settings > Arlo` };
+    if (!s.enabled) return { shown: false, why: 'Cameras are turned off in Settings > Cameras' };
+    if (!s.cameras.includes(id)) return { shown: false, why: `${ev.camera || id} isn't ticked in Settings > Cameras` };
     const src = safePath(ev.live) || safePath(ev.clip);
     if (!src) throw new Error('No clip to show');
     this.broadcast({ what: 'arlo', motion: { camera: String(ev.camera || 'Camera'), cameraId: id, time: +ev.time || Date.now(), file: ev.file || null,
