@@ -78,7 +78,10 @@ const App = {
     if (Modal.closeTop()) return;
     if (Player.mode === 'full') { Player.stop(); this.render(); return; }
     if (this.view && this.view.onBack && this.view.onBack()) return; // a screen's own step back (a folder, a show)
-    if (Player.mode === 'pip') { Player.setMode('full'); Player.showOsd(); return; }
+    // Watching -> Back -> the guide, with the picture in the corner -> Back -> Home (the picture
+    // stops). It used to go full screen again, so Back alone bounced between the two. The corner
+    // picture (OK on it, or Full screen) still goes back to watching.
+    if (Player.mode === 'pip') { this.history = []; this.go('home', { push: false }); return; }
     const prev = this.history.pop();
     if (!prev && this.viewName === 'home' && window.GTV_EXIT) { window.GTV_EXIT(); return; } // TV: Back on Home leaves the app
     this.go(prev || 'home', { push: false });

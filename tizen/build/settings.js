@@ -1,12 +1,12 @@
 // Settings: tuners & IPTV providers, guide sources, matching channels to the
 // guide, recording options and status.
-/* global App, Updates, GTVAndroid, categoryOf, CATEGORY_RULES, GuideView, Player */
+/* global App, Teams, Updates, GTVAndroid, categoryOf, CATEGORY_RULES, GuideView, Player, Xfinity, XFINITY_DEFAULTS, XFINITY_LINEUPS */
 const SettingsView = {
   title: 'Settings',
   section: 'sources',
   chFilter: '',
   hints: [['↑↓←→', 'Move'], ['OK', 'Select'], ['Tab', 'Next field'], ['Esc', 'Back']],
-  sections: [['sources', 'Antenna & Providers'], ['guide', 'Guide data'], ['channels', 'Channels & matching'], ['startup', 'When it starts'], ['recording', 'Recording'], ['media', 'Movies & Shows'], ['arlo', 'Arlo'], ['cta', 'CTA'], ['remote', 'Other locations'], ['updates', 'Updates'], ['backup', 'Backup & restore'], ['status', 'Status']],
+  sections: [['sources', 'Antenna & Providers'], ['guide', 'Guide data'], ['channels', 'Channels & matching'], ['startup', 'When it starts'], ['recording', 'Recording'], ['media', 'Movies & Shows'], ['teams', 'My Teams'], ['xfinity', 'Xfinity'], ['arlo', 'Arlo'], ['cta', 'CTA'], ['remote', 'Other locations'], ['updates', 'Updates'], ['backup', 'Backup & restore'], ['status', 'Status']],
 
   // With the activity log highlighted (Status), ↑↓ scroll it; at its top, ↑ moves on as usual.
   onKey(e) {
@@ -428,8 +428,7 @@ const SettingsView = {
     const s = App.state.settings;
     const num = (k, label, hint) => `<div class="field"><label>${label}</label><input data-s="${k}" type="number" min="0" value="${esc(s[k])}">${hint ? `<span class="s" style="font-size:.85rem">${hint}</span>` : ''}</div>`;
     pane.innerHTML = `
-      <div class="box"><h3>Where recordings are saved</h3>
-        <div class="field"><label>Folder (an external USB drive works fine)</label><input data-s="recordingsDir" value="${esc(s.recordingsDir)}"></div></div>
+      ${this.storageBox()}
       <div class="box"><h3>Timing</h3>
         <div class="row">${num('prePadMin', 'Start recordings early (minutes)')}${num('postPadMin', 'End recordings late (minutes)', 'Helps when live sports run over')}${num('guideHours', 'Guide hours to download')}</div></div>
       <div class="box"><h3>Watching</h3>
@@ -449,6 +448,7 @@ const SettingsView = {
       const el = $('#pcAddr', pane);
       if (el && p.addresses && p.addresses.length) el.innerHTML = `The TV app finds this PC by itself. If it can't, type this PC's address on the TV: <b>${p.addresses.map(esc).join('</b> or <b>')}</b>`;
     }).catch(() => {});
+    this.storageWire(pane);
     $('#saveS', pane).onclick = async () => {
       const patch = {};
       for (const el of $$('[data-s]', pane)) patch[el.dataset.s] = el.type === 'checkbox' ? el.checked : el.type === 'number' ? +el.value : el.value.trim();
@@ -457,7 +457,80 @@ const SettingsView = {
     };
   },
 
+  // Where recordings are saved: a folder on this computer, or network storage (core/storage.js).
+  storageBox() {
+    const s = App.state.settings, st = App.state.status.storage || { mode: 'local', canNetwork: false };
+    const net = st.mode === 'network';
+    const where = window.GTV_SERVER ? (App.state.status.platform === 'linux' ? 'the home server' : 'the PC running GarysTV') : 'this computer';
+    const ok = st.reachable === false ? `⚠️ <b>${esc(st.where)}</b> isn't answering. New recordings go to ${esc(where)} (${esc(st.local)}) until it's back.`
+      : `✅ Recordings are saved on <b>${esc(st.where)}</b>${App.state.status.diskFree ? ` (${(App.state.status.diskFree / 1e9).toFixed(0)} GB free)` : ''}.`;
+    const opt = (v, l, on) => `<option value="${v}" ${on ? 'selected' : ''}>${l}</option>`;
+    return `<div class="box"><h3>Where recordings are saved</h3>
+      ${net ? `<div>${ok}</div>` : ''}
+      <div class="field"><label>Save recordings on</label><select id="stMode" class="nav" data-key="st-mode">${opt('local', `${where[0].toUpperCase()}${where.slice(1)} (a folder or USB drive)`, !net)}${opt('network', 'Network storage (a NAS or shared folder)', net)}</select></div>
+      <div id="stLocal" ${net ? 'style="display:none"' : ''}>
+        <div class="field"><label>Folder (an external USB drive works fine)</label><input ${net ? 'id="stLocalDir"' : 'data-s="recordingsDir"'} class="nav" data-key="st-dir" value="${esc(net ? st.local : s.recordingsDir)}"></div>
+        ${net ? '<div class="actions"><div class="btn nav primary" id="stUseLocal" data-key="st-use-local">Save recordings here instead</div></div>' : ''}</div>
+      <div id="stNet" ${net ? '' : 'style="display:none"'}>
+        ${st.canNetwork ? `
+        <div class="s">A NAS or another computer's shared folder. Recordings already made stay where they are, and live TV's rewind buffer stays on ${esc(where)}.</div>
+        <div class="row">
+          <div class="field"><label>Kind</label><select id="stType" class="nav" data-key="st-type">${opt('smb', 'Shared folder (SMB): most NAS boxes, Windows', st.type !== 'nfs')}${st.nfs ? opt('nfs', 'NFS', st.type === 'nfs') : ''}</select></div>
+          <div class="field"><label>NAS name or address</label><input id="stServer" class="nav" data-key="st-server" value="${esc(st.server || '')}" placeholder="192.168.1.50 or mynas"></div></div>
+        <div class="row">
+          <div class="field"><label id="stShareLabel">${st.type === 'nfs' ? 'Export path' : 'Share name'}</label><input id="stShare" class="nav" data-key="st-share" value="${esc(st.share || '')}" placeholder="${st.type === 'nfs' ? '/volume1/recordings' : 'Recordings'}"></div>
+          <div class="field"><label>Folder inside it (optional)</label><input id="stFolder" class="nav" data-key="st-folder" value="${esc(st.folder || '')}" placeholder="GarysTV"></div></div>
+        <div class="row" id="stLogin" ${st.type === 'nfs' ? 'style="display:none"' : ''}>
+          <div class="field"><label>Username (blank for guest)</label><input id="stUser" class="nav" data-key="st-user" autocomplete="off" value="${esc(st.username || '')}"></div>
+          <div class="field"><label>Password</label><input id="stPass" class="nav" data-key="st-pass" type="password" autocomplete="off" placeholder="${net && st.username ? 'Type it again to reconnect' : ''}"></div></div>
+        <div class="s" style="font-size:.85rem">The password isn't kept in GarysTV's settings: ${App.state.status.platform === 'linux' ? 'the home server keeps it in a file only its administrator (root) can read' : 'Windows keeps it in its Credential Manager'}.</div>
+        <div class="actions"><div class="btn nav primary" id="stConnect" data-key="st-connect">${net ? 'Reconnect' : 'Connect and save recordings there'}</div></div>`
+    : `<div class="s">${App.state.status.platform === 'linux' ? 'This server needs its installer run once more for network storage: <b>sudo ./install/install-linux.sh</b>' : 'Network storage works with GarysTV on Windows or on the home server.'}</div>`}</div></div>`;
+  },
+
+  storageWire(pane) {
+    const mode = $('#stMode', pane);
+    if (!mode) return;
+    mode.onchange = () => {
+      $('#stLocal', pane).style.display = mode.value === 'local' ? '' : 'none';
+      $('#stNet', pane).style.display = mode.value === 'network' ? '' : 'none';
+    };
+    for (const el of $$('#stLocal input, #stNet input', pane)) el._onFocus = () => el.focus();
+    const type = $('#stType', pane);
+    if (type) type.onchange = () => {
+      const nfs = type.value === 'nfs';
+      $('#stLogin', pane).style.display = nfs ? 'none' : '';
+      $('#stShareLabel', pane).textContent = nfs ? 'Export path' : 'Share name';
+      $('#stShare', pane).placeholder = nfs ? '/volume1/recordings' : 'Recordings';
+    };
+    const connect = $('#stConnect', pane);
+    if (connect) connect.onclick = async () => {
+      const body = { type: type.value, server: $('#stServer', pane).value, share: $('#stShare', pane).value, folder: $('#stFolder', pane).value, username: $('#stUser', pane).value, password: $('#stPass', pane).value };
+      connect.textContent = 'Connecting...';
+      try {
+        const st = await api.post('/api/storage/network', body);
+        toast(`Connected. New recordings are saved on ${st.where}.`, 6000);
+        await App.loadAll();
+        App.render('sec-recording');
+      } catch (e) {
+        connect.textContent = 'Try again';
+        toast(e.message, 9000);
+      }
+    };
+    const back = $('#stUseLocal', pane);
+    if (back) back.onclick = async () => {
+      try {
+        const st = await api.post('/api/storage/local', { dir: $('#stLocalDir', pane).value });
+        toast(`New recordings are saved on this computer: ${st.where}`, 6000);
+        await App.loadAll();
+        App.render('sec-recording');
+      } catch (e) { toast(e.message, 8000); }
+    };
+  },
+
   // ---------- movies & shows ----------
+  teams(pane) { Teams.settings(pane); },
+
   media(pane) {
     const from = App.state.settings.tmdbKeyFrom;
     pane.innerHTML = `
@@ -482,6 +555,97 @@ const SettingsView = {
     $('#tmdbClear', pane).onclick = async () => { await api.post('/api/tmdb/clear'); toast('Saved movie & show info cleared. It is looked up again as you browse.'); };
   },
 
+  // ---------- Xfinity first ----------
+  // A live channel ticked here opens in the Xfinity app (Fire TV, Samsung) or Xfinity's website
+  // (Windows) instead of GarysTV's player; if Xfinity can't open, it plays here (src/ui/xfinity.js).
+  // Saved on the engine, so every TV shares it.
+  xfinity(pane) {
+    const cur = () => Xfinity.settings();
+    const save = async (patch, msg) => {
+      const next = { ...cur(), ...patch };
+      try { await api.put('/api/settings', { xfinity: next }); App.state.settings.xfinity = next; Xfinity.failed = false; if (msg) toast(msg); } catch (e) { toast(e.message); }
+    };
+    const s = cur(), st = App.state, dev = Xfinity.device();
+    const srcType = new Map(st.sources.map((x) => [x.id, x.type]));
+    const isOn = (id) => Object.prototype.hasOwnProperty.call(s.channels, id);
+    const sugg = Xfinity.suggest(st.channels);
+    const lineup = (XFINITY_LINEUPS[s.lineup] || {}).name || 'no lineup';
+    // Ticked and suggested channels first, in Xfinity's order; the filter finds any other.
+    const f = (this.xfFilter || '').toLowerCase();
+    const xnum = (c) => parseFloat(isOn(c.id) ? s.channels[c.id] : (sugg.get(c.id) || {}).num) || 1e9;
+    const shown = st.channels.filter((c) => !c.hidden);
+    const top = shown.filter((c) => isOn(c.id) || sugg.has(c.id)).sort((a, b) => xnum(a) - xnum(b) || byNumber(a, b));
+    const more = f ? shown.filter((c) => !isOn(c.id) && !sugg.has(c.id) && `${c.number} ${c.name} ${c.group || ''}`.toLowerCase().includes(f)).sort(byNumber).slice(0, 200) : [];
+    const list = [...top, ...more];
+    const ticked = shown.filter((c) => isOn(c.id)).length;
+    const sure = [...sugg.values()].filter((g) => g.sure).length;
+    const has = Xfinity.installed();
+    const here = dev === 'firetv' ? (has ? '✅ The Xfinity Stream app is on this Fire TV.' : '⚠️ The Xfinity Stream app is not on this Fire TV yet. Get it from the Amazon app store and sign in there once.')
+      : dev === 'tizen' ? (s.tizenAppId ? 'This Samsung TV opens the app with the ID below.' : '⚠️ Samsung TV: fill in the Xfinity app ID below first.')
+        : 'On this PC, Xfinity opens in your web browser, where you sign in to Xfinity.';
+    pane.innerHTML = `
+      <div class="box"><h3>Xfinity</h3>
+        <div class="s">Channels ticked below show an <span class="xf-badge">Xfinity</span> badge in the guide and can be watched in the <b>Xfinity Stream</b> app. Xfinity can't be opened on a given channel (it opens on its own Home screen), so by default GarysTV plays them itself and offers Xfinity only when one won't play here. Hold OK on a channel (in the guide or while watching) for <b>Watch in Xfinity instead</b>.</div>
+        <div class="s">Your Xfinity login stays in Xfinity's own app (sign in there once on each TV). GarysTV never stores it.</div>
+        <label class="check nav" data-key="xf-on" style="margin:.8rem 0"><input type="checkbox" id="xfOn" ${s.enabled ? 'checked' : ''}> Use Xfinity for the channels ticked below</label>
+        <div class="field"><label>When I pick one of them</label><select id="xfOrder" class="nav" data-key="xf-order">
+          <option value="garystv" ${s.order !== 'xfinity' ? 'selected' : ''}>Play in GarysTV; offer Xfinity if it won't play</option>
+          <option value="xfinity" ${s.order === 'xfinity' ? 'selected' : ''}>Open Xfinity first</option></select></div>
+        <div>${here}</div></div>
+      <div class="box"><h3>How each device opens Xfinity</h3>
+        <div class="s">Xfinity doesn't publish a way to open its app straight to a channel, so for now it opens on Xfinity's own screen. If a link that goes to a channel turns up, put it here; <b>{channel}</b> becomes the Xfinity channel number.</div>
+        <div class="field"><label>Fire TV: Xfinity app package</label><input id="xfPkg" class="nav" data-key="xf-pkg" value="${esc(s.firetvPackage)}"></div>
+        <div class="field"><label>Fire TV: link to open (blank = just open the app)</label><input id="xfLink" class="nav" data-key="xf-link" value="${esc(s.firetvLink)}" placeholder="blank"></div>
+        <div class="field"><label>Samsung TV: Xfinity app ID</label><input id="xfTizen" class="nav" data-key="xf-tizen" value="${esc(s.tizenAppId)}" placeholder="Found on the TV with Tizen Studio (see tizen/README.md)"></div>
+        <div class="field"><label>Windows / web browser: Xfinity address</label><input id="xfWeb" class="nav" data-key="xf-web" value="${esc(s.webLink)}"></div>
+        <div class="actions"><div class="btn nav primary" id="xfSaveHow" data-key="xf-save-how">Save</div></div></div>
+      <div class="box"><h3>Channels to open in Xfinity</h3>
+        <div class="s">${ticked} channels open in Xfinity. <b>Gary's suggestions</b> are your channels that match <b>${esc(lineup)}</b> by name: ${sugg.size} found, ${sure} of them sure. <b>Apply Gary's suggestions</b> ticks them all with their Xfinity numbers; untick any you don't want and save. Look over any marked <span class="conf md">Check</span>.</div>
+        <div class="actions"><div class="btn nav primary" id="xfApply" data-key="xf-apply">Apply Gary's suggestions (${sugg.size})</div>${st.sources.some((x) => x.type === 'hdhomerun') ? '<div class="btn nav" id="xfAnt" data-key="xf-ant">Tick all antenna channels</div>' : ''}<div class="btn nav" id="xfNone" data-key="xf-none">Untick all</div><div class="btn nav primary" id="xfSaveCh" data-key="xf-save-ch">Save channels</div></div>
+        <div class="field"><input id="xff" class="nav" data-key="xff" placeholder="Find another channel to tick..." value="${esc(this.xfFilter || '')}"></div>
+        <table class="chs"><thead><tr><th>Xfinity</th><th>Ch</th><th>Name</th><th>Gary's suggestion</th><th>Xfinity #</th></tr></thead><tbody>
+        ${list.map((c) => {
+          const on = isOn(c.id), g = sugg.get(c.id);
+          return `<tr data-ch="${esc(c.id)}"><td><input type="checkbox" class="nav" data-key="xf-${esc(c.id)}" data-k="on" ${on ? 'checked' : ''}></td><td><b>${esc(c.number)}</b></td><td>${esc(c.name)}</td>
+            <td>${g ? `Xfinity <b>${esc(g.num)}</b> ${esc(g.label)}${g.sure ? '' : ' <span class="conf md">Check</span>'}` : '<span class="s">—</span>'}</td>
+            <td><input class="nav" data-key="xfn-${esc(c.id)}" data-k="num" style="width:6rem" value="${esc(on ? s.channels[c.id] : '')}"></td></tr>`;
+        }).join('')}</tbody></table>
+        ${f && more.length === 200 ? '<div class="s">Showing the first 200 matches. Type more of the name to narrow it.</div>' : ''}</div>`;
+    $('#xfOn', pane).onchange = (e) => save({ enabled: e.target.checked }, e.target.checked ? 'Xfinity is on for the ticked channels' : 'Xfinity is off');
+    $('#xfOrder', pane).onchange = (e) => save({ order: e.target.value }, e.target.value === 'xfinity' ? 'Ticked channels open in Xfinity first' : 'Ticked channels play in GarysTV first');
+    for (const id of ['xfPkg', 'xfLink', 'xfTizen', 'xfWeb']) { const el = $(`#${id}`, pane); el._onFocus = () => el.focus(); }
+    $('#xfSaveHow', pane).onclick = () => save({
+      firetvPackage: $('#xfPkg', pane).value.trim() || XFINITY_DEFAULTS.firetvPackage,
+      firetvLink: $('#xfLink', pane).value.trim(),
+      tizenAppId: $('#xfTizen', pane).value.trim(),
+      webLink: $('#xfWeb', pane).value.trim() || XFINITY_DEFAULTS.webLink,
+    }, 'Saved');
+    const rows = $$('tr[data-ch]', pane);
+    $$('input[data-k="num"]', pane).forEach((el) => { el._onFocus = () => el.focus(); });
+    const tick = (pick) => rows.forEach((tr) => { $('[data-k="on"]', tr).checked = pick(list.find((c) => c.id === tr.dataset.ch)); });
+    const ant = $('#xfAnt', pane);
+    if (ant) ant.onclick = () => tick((c) => c && srcType.get(c.sourceId) === 'hdhomerun');
+    $('#xfNone', pane).onclick = () => tick(() => false);
+    $('#xfApply', pane).onclick = async () => {
+      if (!sugg.size) return toast('No suggestions: none of your channels match the Xfinity lineup by name.', 6000);
+      const channels = { ...s.channels };
+      for (const [id, g] of sugg) channels[id] = g.num;
+      await save({ channels }, `Applied Gary's suggestions: ${sugg.size} channels open in Xfinity`);
+      this.xfinity(pane);
+    };
+    const fin = $('#xff', pane);
+    fin.onclick = () => fin.focus();
+    let ft;
+    fin.oninput = () => { clearTimeout(ft); ft = setTimeout(() => { this.xfFilter = fin.value; this.xfinity(pane); const i = $('#xff'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 300); };
+    $('#xfSaveCh', pane).onclick = async () => {
+      const channels = {};
+      for (const tr of rows) if ($('[data-k="on"]', tr).checked) channels[tr.dataset.ch] = $('[data-k="num"]', tr).value.trim();
+      for (const [id, n] of Object.entries(s.channels)) if (!list.some((c) => c.id === id)) channels[id] = n; // channels not on screen keep theirs
+      await save({ channels }, `${Object.keys(channels).length} channels open in Xfinity`);
+      this.xfinity(pane);
+    };
+  },
+
   // ---------- Arlo cameras ----------
   // Motion on a ticked camera pops its clip up in the corner while TV plays (core/arlo.js,
   // player.js MotionPopup). Saved on the GarysTV engine, so every TV shares it.
@@ -495,6 +659,7 @@ const SettingsView = {
         <div class="s">When a ticked camera sees motion, its clip shows (without sound) in the lower-left corner for 10 seconds while you watch live TV or a recording. The TV keeps playing, and the remote keeps working as usual. The clips come from <b>Arlo Keeper</b>.</div>
         <label class="check nav" data-key="arlo-on" style="margin:.8rem 0"><input type="checkbox" id="arloOn" ${s.enabled ? 'checked' : ''}> Enable Arlo integration</label>
         <div class="field"><label>Arlo Keeper address</label><input id="arloUrl" class="nav" data-key="arlo-url" value="${esc(s.url)}" placeholder="http://192.168.5.210:8090"></div>
+        <div class="s" style="font-size:.85rem">At home or over the VPN: http://its-address:8090 (motion pop-ups need this). Over the internet: https://name:password@ban.tapper.co, with the away-from-home name and password and no :8090 (clips only, no pop-ups).</div>
         <div class="actions"><div class="btn nav" id="arloUrlSave" data-key="arlo-url-save">Save address</div><div class="btn nav" id="arloTest" data-key="arlo-test">Show a test pop-up</div></div>
         <div class="s" style="font-size:.85rem">The test starts Live TV here (last channel), then shows Arlo Keeper's newest clip on every screen that's playing TV. Press Back to come back.</div></div>
       <div class="box"><h3>Cameras that pop up</h3><div id="arloCams" class="s">Asking Arlo Keeper...</div></div>`;
@@ -507,7 +672,7 @@ const SettingsView = {
     $('#arloTest', pane).onclick = async () => {
       const ch = App.lastChannel || (App.guideRows && App.guideRows[0] && App.guideRows[0].id) || (App.state.channels.find((c) => !c.hidden) || {}).id;
       if (!ch) return toast('No channels yet to test over - add your tuner first.', 6000);
-      if (!(Player.mode === 'full' && Player.kind === 'live')) Player.play('live', ch);
+      if (!(Player.mode === 'full' && Player.kind === 'live')) Player.play('live', ch, { here: true });
       toast('Starting Live TV for the test...', 4000);
       const video = $('#video'), until = Date.now() + 20000;
       while (Date.now() < until && !(Player.mode === 'full' && video && video.readyState >= 2 && video.currentTime > 0)) await new Promise((r) => setTimeout(r, 300));
@@ -532,14 +697,31 @@ const SettingsView = {
     const on = new Set(cur().cameras.map(String)); // what's saved now (the answer may be older)
     r = { ...r, cameras: r.cameras.map((c) => ({ ...c, on: on.has(c.id) })) };
     const modes = Object.values(r.modes || {}).filter(Boolean);
+    // Filter by account (Arlo and Blink logins), when Arlo Keeper has more than one.
+    const accounts = r.accounts || [];
+    const accName = (a) => `${a.brand === 'blink' ? 'Blink' : 'Arlo'} · ${a.username}`;
+    if (this.arloAccount && !accounts.some((a) => a.id === this.arloAccount)) this.arloAccount = null;
+    const shown = this.arloAccount ? r.cameras.filter((c) => c.account === this.arloAccount) : r.cameras;
+    const waiting = accounts.filter((a) => a.waitingForCode);
     box.classList.remove('s');
     box.innerHTML = `${r.connected ? '' : '<div class="s">⚠️ Arlo Keeper isn\'t signed in to Arlo right now, so no motion will come through. Sign in on its own page.</div>'}
-      ${r.cameras.map((c) => `<label class="check nav" data-key="arlo-cam-${esc(c.id)}" style="margin:.4rem 0"><input type="checkbox" data-cam="${esc(c.id)}" data-name="${esc(c.name)}" ${c.on ? 'checked' : ''}> ${esc(c.name)}
-        <span class="s">${[c.model, c.battery != null && c.battery > 0 ? `battery ${c.battery}%` : '', c.unavailable ? 'offline' : '', c.lastMotion ? `last motion ${fmt.when(c.lastMotion * 1000)}` : ''].filter(Boolean).map(esc).join(' · ')}</span></label>`).join('') || '<div class="s">Arlo Keeper has no cameras.</div>'}
+      ${waiting.length ? `<div class="s" style="color:var(--yellow)">⚠️ Waiting for a verification code: ${waiting.map((a) => esc(accName(a))).join(', ')}. Enter it on Arlo Keeper's Arlo page.</div>` : ''}
+      ${accounts.length > 1 ? `<div class="tabs" style="flex-wrap:wrap;margin-top:.6rem"><div class="tab nav ${this.arloAccount ? '' : 'on'}" data-key="arlo-acct-all" data-acct="">All accounts</div>
+        ${accounts.map((a) => `<div class="tab nav ${this.arloAccount === a.id ? 'on' : ''}" data-key="arlo-acct-${esc(a.id)}" data-acct="${esc(a.id)}">${esc(accName(a))}${a.connected ? '' : ' <span class="tag">OFF</span>'}</div>`).join('')}</div>` : ''}
+      ${shown.map((c) => `<label class="check nav" data-key="arlo-cam-${esc(c.id)}" style="margin:.4rem 0"><input type="checkbox" data-cam="${esc(c.id)}" data-name="${esc(c.name)}" ${c.on ? 'checked' : ''}> ${esc(c.name)}
+        <span class="s">${[c.model, c.battery != null && c.battery > 0 ? `battery ${c.battery}%` : '', c.unavailable ? 'offline' : '', c.lastMotion ? `last motion ${fmt.when(c.lastMotion * 1000)}` : ''].filter(Boolean).map(esc).join(' · ')}</span></label>`).join('') || `<div class="s">${this.arloAccount ? 'No cameras on this account.' : 'Arlo Keeper has no cameras.'}</div>`}
       ${modes.length ? `<div class="s" style="margin-top:.6rem">Arlo mode: ${modes.map(esc).join(', ')}. Cameras only report motion when Arlo is armed (set in the Arlo app).</div>` : ''}
       ${r.error ? `<div class="s">⚠️ ${esc(r.error)}</div>` : ''}`;
+    $$('[data-acct]', box).forEach((el) => {
+      el.onclick = () => { this.arloAccount = el.dataset.acct || null; this.paintArloCameras(pane, save, cur, this.arloLast || r); const t = $(`[data-acct="${CSS.escape(el.dataset.acct)}"]`, box); if (t && window.Nav && Nav.focus) Nav.focus(t); };
+    });
+    // Only this account's boxes are on screen: keep the other accounts' ticks as they are.
     $$('[data-cam]', box).forEach((el) => {
-      el.onchange = () => save({ cameras: $$('[data-cam]', box).filter((x) => x.checked).map((x) => x.dataset.cam) }, `${el.dataset.name}: ${el.checked ? 'pops up' : 'no pop-ups'}`);
+      el.onchange = () => {
+        const here = new Set($$('[data-cam]', box).map((x) => x.dataset.cam));
+        const keep = cur().cameras.map(String).filter((id) => !here.has(id));
+        save({ cameras: [...keep, ...$$('[data-cam]', box).filter((x) => x.checked).map((x) => x.dataset.cam)] }, `${el.dataset.name}: ${el.checked ? 'pops up' : 'no pop-ups'}`);
+      };
     });
   },
 
@@ -888,6 +1070,31 @@ const SettingsView = {
   },
 
   // ---------- status ----------
+  // Settings > Status > Playback health (core/diagnostics.js): right now, then each recent viewing.
+  async health() {
+    let d;
+    try { d = await api.get('/api/diag'); } catch (e) { const el = $('#health'); if (el) el.textContent = `Not available: ${e.message}`; return; }
+    const el = $('#health');
+    if (!el) return;
+    const icon = { ok: '✅', minor: '⚠️', problem: '❌' };
+    const when = (t) => new Date(t).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    const mins = (a, b) => { const s = Math.round((b - a) / 1000); return s < 60 ? `${s}s` : `${Math.round(s / 60)} min`; };
+    const lines = [`${d.host}: processor ${d.cpu}% busy (${d.cores} cores)`];
+    for (const l of d.live) {
+      const pace = l.keepingUp == null ? 'starting' : l.keepingUp >= 0.9 ? 'keeping up' : `FALLING BEHIND (${Math.round(l.keepingUp * 100)}% of real time)`;
+      lines.push(`  Live buffer ${l.name}: ${pace}, ${l.transcoding ? `converting with ${l.encoder}` : 'passed straight through'}, ${l.dropsLastHour} source drop${l.dropsLastHour === 1 ? '' : 's'} in the last hour`);
+    }
+    for (const w of d.watching) lines.push(`  Watching now on ${w.device}: ${w.name} · ${icon[w.level]} ${w.headline}`);
+    lines.push('');
+    if (!d.recent.length) lines.push('No viewings checked yet. Watch something for a minute and look again.');
+    for (const r of d.recent) {
+      lines.push(`${icon[r.level]} ${when(r.started)}  ${r.device}${r.ip ? ` (${r.ip})` : ''}  ·  ${r.name}  ·  ${mins(r.started, r.ended)}`);
+      lines.push(`   ${r.headline}${r.detail ? `. ${r.detail}` : ''}`);
+      for (const e of r.evidence) lines.push(`     - ${e}`);
+    }
+    el.textContent = lines.join('\n');
+  },
+
   status(pane) {
     const st = App.state.status;
     const here = window.GTV_SERVER ? `<div class="box"><h3>Connected to</h3><div id="whichPc">${esc(window.GTV_SERVER.replace(/^https?:\/\//, ''))}</div>
@@ -912,7 +1119,9 @@ const SettingsView = {
         <div>⏺ ${st.recordingNow} recording right now</div></div>
       ${(st.plans || []).length ? `<div class="box"><h3>Plans in use right now</h3>${st.plans.map((p) => `<div><b>${esc(p.name)}</b> <span class="s">${p.using.length} of ${p.capacity}</span>${p.using.length ? `: ${esc(p.using.join(', '))}` : ''}</div>`).join('')}
         <div class="s">Watching and recording each use one stream of a plan. When a plan is full, GarysTV uses the same channel on another plan.</div></div>` : ''}
-      ${here}<div class="box"><h3>Activity log</h3><div class="s">Move down onto the log, then ↑↓ scroll it.</div><pre class="log nav" data-key="status-log">${esc(st.log.join('\n')) || 'Nothing yet.'}</pre></div>`;
+      ${here}<div class="box"><h3>Playback health</h3><div class="s">Why live TV stuttered: the channel's own stream, the GarysTV computer, the network to the TV, or GarysTV itself. Move down onto it, then ↑↓ scroll.</div><pre class="log nav" data-key="status-health" id="health">Loading...</pre></div>
+      <div class="box"><h3>Activity log</h3><div class="s">Move down onto the log, then ↑↓ scroll it.</div><pre class="log nav" data-key="status-log">${esc(st.log.join('\n')) || 'Nothing yet.'}</pre></div>`;
+    this.health();
     if (here) {
       $('#switchPc', pane).onclick = () => window.GTV_SWITCH();
       api.get('/api/ping').then((p) => { const el = $('#whichPc'); if (el) el.innerHTML = `<b>${esc(p.name)}</b> at ${esc(window.GTV_SERVER.replace(/^https?:\/\//, ''))} · ${st.platform === 'linux' ? 'home server' : 'Windows PC'}`; }).catch(() => {});

@@ -79,3 +79,41 @@ test('Arlo: a wrong address gives a plain answer', async () => {
   const arlo = new Arlo(fakeCore({ enabled: true, url: 'http://127.0.0.1:1', cameras: [] }), () => {});
   await assert.rejects(arlo.cameras(), /Couldn't reach Arlo Keeper/);
 });
+
+test('Arlo: a name and password in the address are sent with every request, accounts come through', async () => {
+  const { keeperAddress } = require('../src/core/arlo');
+  const a = keeperAddress('https://gary:p%40ss:w@BAN.example.com/');
+  assert.strictEqual(a.base, 'https://ban.example.com');
+  assert.strictEqual(Buffer.from(a.auth.split(' ')[1], 'base64').toString(), 'gary:p@ss:w');
+  assert.strictEqual(keeperAddress('http://10.0.0.5:8090').auth, null);
+  assert.ok(keeperAddress('not a url').error);
+
+  const seen = [];
+  const keeper = http.createServer((req, res) => {
+    seen.push([req.url, req.headers.authorization || null]);
+    if (req.headers.authorization !== 'Basic ' + Buffer.from('gary:secret').toString('base64')) { res.statusCode = 401; return res.end('Sign in first'); }
+    res.setHeader('Content-Type', 'application/json');
+    if (req.url === '/api/cameras') return res.end(JSON.stringify({ connected: true, cameras: [{ id: 'A1', name: 'Door', account: 'a@x' }, { id: 'blink-9', name: 'Yard', account: 'b@x', brand: 'blink' }],
+      accounts: [{ username: 'a@x', brand: 'arlo', connected: true }, { username: 'b@x', brand: 'blink', connected: false, waiting_for_code: true }] }));
+    if (req.url.startsWith('/api/clips')) return res.end(JSON.stringify([{ camera_id: 'blink-9', camera_name: 'Yard', video_path: 'Yard/1.mp4' }, { camera_id: 'A1', camera_name: 'Door', video_path: 'Door/1.mp4' }]));
+    res.end('{}');
+  });
+  await new Promise((r) => keeper.listen(0, '127.0.0.1', r));
+  const port = keeper.address().port;
+  try {
+    const arlo = new Arlo(fakeCore({ enabled: true, url: `http://gary:secret@127.0.0.1:${port}`, cameras: [] }), () => {});
+    const cams = await arlo.cameras();
+    assert.deepStrictEqual(cams.cameras.map((c) => c.account), ['arlo:a@x', 'blink:b@x']);
+    assert.deepStrictEqual(cams.accounts.map((x) => [x.id, x.waitingForCode]), [['arlo:a@x', false], ['blink:b@x', true]]);
+    // An Arlo Keeper that ignores account= still gives only that account's clips.
+    const clips = await arlo.clips(null, 10, 'blink:b@x');
+    assert.deepStrictEqual(clips.map((c) => c.camera), ['Yard']);
+    assert.ok(seen.some(([u]) => u.includes('account=blink%3Ab%40x')));
+    assert.ok(seen.every(([, h]) => h)); // sent first time, never waited to be asked
+
+    const wrong = new Arlo(fakeCore({ enabled: true, url: `http://gary:nope@127.0.0.1:${port}`, cameras: [] }), () => {});
+    await assert.rejects(wrong.cameras(), /401.*away-from-home/);
+  } finally {
+    keeper.close();
+  }
+});
