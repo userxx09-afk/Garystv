@@ -46,11 +46,11 @@ GarysTV starts with about 140 free channels streamed over the internet, numbered
 | 701+ | PBS, documentaries, cooking and lifestyle |
 | 801+ | Music |
 
-These come from [iptv-org](https://github.com/iptv-org/iptv), limited to streams served by the channel's owner or a licensed free service (Tubi, Xumo, Stirr, Samsung TV Plus and similar). They're ad-supported and have no schedule listings. GarysTV re-checks them at startup and daily and hides any that are off the air. Remove or hide them in Settings like any other source.
+These come from [iptv-org](https://github.com/iptv-org/iptv), limited to streams served by the channel's owner or a licensed free service (Tubi, Xumo, Stirr, Samsung TV Plus and similar). They're ad-supported. Most have guide listings, taken from the public Plex, Roku, Pluto and Samsung TV Plus schedules (epgshare01 and i.mjh.nz); the local stations' feeds (mostly their own newscasts) and a few others have none. GarysTV re-checks them at startup and daily and hides any that are off the air. Remove or hide them in Settings like any other source.
 
 **Full ABC/CBS/NBC/FOX programming** (primetime, sports, local shows) isn't available as a free internet stream. Get it with an antenna and an HDHomeRun.
 
-To refresh the lineup from iptv-org (re-tests every stream; takes a few minutes): `npm run free-channels`.
+To refresh the lineup from iptv-org (re-tests every stream; takes a few minutes): `npm run free-channels`. It also re-matches the guide listings; to do only that (if a channel's listings stop), run `npm run free-guides`.
 
 ## Guide data
 
