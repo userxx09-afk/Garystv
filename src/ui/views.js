@@ -117,7 +117,8 @@ const DvrView = {
     // Timers live here now (Home has the Arlo tile in their place); T still jumps straight to them.
     root.innerHTML = `
       <div class="tabs"><div class="tab nav on" data-key="tab-rec">Recordings</div>
-        <div class="tab nav" data-key="tab-timers" id="timersTab">Timers · ${App.state.rules.length} set</div></div>
+        <div class="tab nav" data-key="tab-timers" id="timersTab">Timers · ${App.state.rules.length} set</div>
+        <div class="tab nav" data-key="tab-add" id="addTab">＋ Add a video or DVD</div></div>
       <div class="split">
         <div class="col">
           <h2>${this.folder ? `<span class="btn nav" data-key="up" id="upBtn">‹ All recordings</span> ${esc(entries[0] ? entries[0].rec.title : '')}` : 'All recordings'}
@@ -125,12 +126,13 @@ const DvrView = {
           <div class="list" id="dvrList">${entries.length ? entries.map((e) => (e.folder ? `
             <div class="item nav" data-key="f-${esc(e.folder.title)}" data-folder="${esc(e.folder.title.toLowerCase())}">
               <div class="main"><div class="t">📁 ${esc(e.folder.title)}</div><div class="s">Latest: ${fmt.when(e.folder.items[0].start)}</div></div>
-              <span class="count">${e.folder.items.length}</span></div>` : recItem(e.rec))).join('') : '<div class="empty">No recordings yet.<br>In the Guide, highlight a show and press <b>R</b> (or click it and choose Record).</div>'}
+              <span class="count">${e.folder.items.length}</span></div>` : recItem(e.rec))).join('') : '<div class="empty">No recordings yet.<br>In the Guide, highlight a show and press <b>R</b> (or click it and choose Record).<br>Or add your own with <b>＋ Add a video or DVD</b>, above.</div>'}
           </div>
         </div>
         <div class="col"><h2>Details</h2><div class="detail" id="dvrDetail"><div class="empty">Highlight a recording to see details.</div></div></div>
       </div>`;
     $('#timersTab', root).onclick = () => App.go('timers');
+    $('#addTab', root).onclick = () => this.addVideo();
     const up = $('#upBtn', root);
     if (up) up.onclick = () => this.onBack();
     $$('[data-folder]', root).forEach((el) => {
@@ -155,7 +157,7 @@ const DvrView = {
     $('#dvrDetail').innerHTML = `<div class="title">${esc(r.title)}</div>
       <div class="sub">${esc([fmt.se(r), r.subtitle].filter(Boolean).join('  ·  '))}</div>
       <div class="meta"><span>${esc(r.channelNumber)} ${esc(r.channelName)}</span><span>${fmt.when(r.start)}</span><span>${fmt.dur(r.end - r.start)}</span><span>${fmt.size(r.size)}</span>
-        <span class="status-pill st-${r.status}">${r.status === 'recording' ? '● Recording' : r.status}</span>${r.simulated ? '<span class="tag">PRACTICE</span>' : ''}${r.at ? `<span class="tag">AT ${esc(r.at.toUpperCase())}</span>` : ''}</div>
+        <span class="status-pill st-${r.status}">${r.status === 'recording' ? '● Recording' : r.status === 'importing' ? `Adding · ${r.progress || 0}%` : r.status}</span>${r.simulated ? '<span class="tag">PRACTICE</span>' : ''}${r.at ? `<span class="tag">AT ${esc(r.at.toUpperCase())}</span>` : ''}</div>
       ${r.error ? `<div class="s" style="color:var(--yellow)">${esc(r.error)}</div>` : ''}
       <div class="desc">${esc(r.desc || '')}</div>
       ${r.position > 30 ? `<div class="s">Stopped at ${fmt.clock(r.position)}</div>` : ''}
@@ -170,6 +172,12 @@ const DvrView = {
 
   async recordingMenu(r) {
     if (!r) return;
+    if (r.status === 'importing') {
+      const v = await Modal.menu(r.title, `<div class="s">Being added: ${r.progress ? `${r.progress}% done` : 'starting...'}. It can be watched when it's done.</div>`,
+        [{ label: '✕  Stop adding it', value: 'delete', cls: 'danger' }, { label: 'Close', value: null }]);
+      if (v === 'delete') this.remove(r);
+      return;
+    }
     const choices = [];
     if (r.position > 30 && !r.watched) choices.push({ label: `▶  Resume from ${fmt.clock(r.position)}`, value: 'resume', cls: 'primary' });
     choices.push({ label: r.position > 30 ? '⟲  Start over' : '▶  Play', value: 'play', cls: r.position > 30 ? '' : 'primary' });
@@ -187,6 +195,11 @@ const DvrView = {
   },
 
   async remove(r) {
+    if (r.status === 'importing') {
+      if (!(await Modal.confirm('Stop adding it?', `${r.title} won't be added. The original video isn't touched.`, 'Stop adding'))) return;
+      await api.del(`/api/recordings/${r.id}`);
+      return toast('Stopped');
+    }
     if (!(await Modal.confirm('Delete recording?', `${r.title}${r.subtitle ? ` - ${r.subtitle}` : ''} will be permanently deleted.`, 'Delete'))) return;
     await api.del(`/api/recordings/${r.id}`);
     toast('Recording deleted');
@@ -195,6 +208,7 @@ const DvrView = {
   // What the menu offers for one recording.
   menuFor(r) {
     const items = [];
+    if (r.status === 'importing') return [{ label: '✕ Stop adding it...', run: () => this.remove(r), cls: 'danger' }];
     if (r.position > 30 && !r.watched) items.push({ label: `▶ Resume from ${fmt.clock(r.position)}`, run: () => Player.play('rec', r.id, { offset: r.position }), cls: 'primary' });
     items.push({ label: r.position > 30 ? '⟲ Start over' : '▶ Play', run: () => Player.play('rec', r.id), cls: r.position > 30 ? '' : 'primary' });
     if (r.status === 'recording') items.push({ label: '■ Stop recording', run: async () => { await api.post('/api/jobs/skip', { id: r.jobId }); toast('Recording stopped'); } });
@@ -210,8 +224,93 @@ const DvrView = {
     const items = r ? this.menuFor(r) : [];
     if (d.folder) items.push({ label: 'Open this folder', run: () => Nav.current.click(), cls: 'primary' });
     if (this.folder) items.push({ label: '‹ All recordings', run: () => this.onBack() });
-    items.push({ label: 'Timers', run: () => App.go('timers') });
+    items.push({ label: 'Timers', run: () => App.go('timers') }, { label: '＋ Add a video or DVD', run: () => this.addVideo() });
     return { title: r ? r.title : this.title, body: r ? `<div class="s">${esc([fmt.se(r), r.subtitle, fmt.when(r.start)].filter(Boolean).join('  ·  '))}</div>` : '', items };
+  },
+
+  // ＋ Add a video or DVD (core/importer.js): a DVD in the GarysTV computer's drive, a file or folder
+  // on it, or (in a browser, not the TV) a file from this device. Each is converted to a standard MP4
+  // in the recordings folder and listed here; it shows "adding" until it can be watched.
+  async addVideo() {
+    let o;
+    try { o = await api.get('/api/import'); } catch (e) { return toast(e.message); }
+    if (!o.ffmpeg) return Modal.menu('Add a video or DVD', '<div class="s">This needs ffmpeg on the GarysTV computer. Install it in Settings &gt; Status.</div>', [{ label: 'Close', value: null }]);
+    const where = o.platform === 'linux' ? 'the home server' : window.GTV_SERVER ? 'the GarysTV computer' : 'this computer';
+    const choices = o.dvds.map((d) => ({ label: `💿  Copy the DVD: ${d.label}`, value: { dvd: d } }));
+    choices.push({ label: `📂  A video file or folder on ${where}...`, value: 'path' });
+    if (!window.GTV_SERVER) choices.push({ label: '⬆  Send a video from this device...', value: 'upload' });
+    choices.push({ label: 'Cancel', value: null });
+    const busy = o.working ? `<div class="s">One is being added now${o.waiting ? `, ${o.waiting} more waiting` : ''}; new ones wait their turn.</div>` : '';
+    const v = await Modal.menu('Add a video or DVD', `<div class="s">It's converted to a standard video file (MP4) in the recordings folder and listed in My Recordings, ready to watch on any TV.${o.dvds.length ? '' : ' No DVD found in the drive.'}</div>
+      <div class="s" style="color:var(--muted)">Home-made and other unprotected DVDs work; copy-protected movie discs don't.</div>${busy}`, choices);
+    if (!v) return;
+    try {
+      if (v.dvd) {
+        const title = await Modal.prompt('Name this DVD', 'Name in My Recordings', v.dvd.label.slice(0, 40), 'Copy DVD');
+        if (!title) return;
+        await api.post('/api/import', { path: v.dvd.path, title });
+        toast(`Copying ${title}. It's listed in My Recordings while it's added.`);
+      } else if (v === 'path') {
+        const p = await this.askPath(o.platform, where);
+        if (!p) return;
+        const added = await api.post('/api/import', { path: p });
+        toast(added.length === 1 ? `Adding ${added[0].title}` : `Adding ${added.length} videos`);
+      } else if (v === 'upload') this.upload();
+    } catch (e) { toast(e.message); }
+  },
+
+  // A path on the GarysTV computer (longer than Modal.prompt allows).
+  askPath(platform, where) {
+    const eg = platform === 'win32' ? 'C:\\Users\\me\\Videos\\Wedding.avi, a folder of videos, or E:\\ for a DVD' : '/home/me/videos/wedding.avi, or a folder of videos';
+    return Modal.open((m, close) => {
+      m.innerHTML = `<div class="title">Where is the video?</div>
+        <div class="field"><label>A file or folder on ${esc(where)}, like ${esc(eg)}</label><input id="p-path" class="nav" style="width:100%"></div>
+        <div class="actions"><div class="btn nav primary" id="p-ok">Add</div><div class="btn nav" id="p-cancel">Cancel</div></div>`;
+      const input = $('#p-path', m);
+      const done = () => { const val = input.value.trim(); if (val) close(val); else input.focus(); };
+      $('#p-ok', m).onclick = done;
+      $('#p-cancel', m).onclick = () => close(null);
+      input._onFocus = () => input.focus();
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); done(); }
+        if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); input.blur(); Nav.focus($('#p-ok', m)); }
+      });
+    });
+  },
+
+  // A file from this device, sent to GarysTV with a progress bar.
+  upload() {
+    const pick = document.createElement('input');
+    pick.type = 'file';
+    pick.accept = 'video/*,.mkv,.avi,.vob,.ts,.m2ts,.mts,.dv,.wmv,.flv';
+    pick.onchange = () => {
+      const file = pick.files && pick.files[0];
+      if (!file) return;
+      Modal.open((m, close) => {
+        m.innerHTML = `<div class="title">Sending ${esc(file.name)}</div><div class="s" id="u-pct">0%</div>
+          <div class="pbar" style="position:static;height:8px;margin:.6rem 0"><i id="u-bar" style="width:0%"></i></div>
+          <div class="actions"><div class="btn nav" id="u-cancel">Cancel</div></div>`;
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', server(`/api/import/upload?name=${encodeURIComponent(file.name)}`));
+        xhr.upload.onprogress = (e) => {
+          if (!e.lengthComputable) return;
+          const pct = Math.floor((e.loaded / e.total) * 100);
+          $('#u-pct', m).textContent = `${pct}% of ${fmt.size(e.total)}`;
+          $('#u-bar', m).style.width = `${pct}%`;
+        };
+        xhr.onload = () => {
+          close();
+          if (xhr.status === 200) return toast(`Sent. ${file.name} is being added to My Recordings.`);
+          let msg = 'Sending failed';
+          try { msg = JSON.parse(xhr.responseText).error || msg; } catch (_) { /* not JSON */ }
+          toast(msg);
+        };
+        xhr.onerror = () => { close(); toast('Sending failed: GarysTV did not answer.'); };
+        $('#u-cancel', m).onclick = () => { xhr.abort(); close(); toast('Cancelled'); };
+        xhr.send(file);
+      });
+    };
+    pick.click();
   },
 
   // Back inside a folder: out to all recordings, on the folder you were in.
@@ -237,7 +336,7 @@ function recItem(r) {
   return `<div class="item nav ${r.watched || r.status === 'recording' ? '' : 'unwatched'}" data-key="r-${r.id}" data-rec="${r.id}">
     <div class="main"><div class="t">${r.status === 'recording' ? '<span class="dot pulse"></span>' : ''}${r.saved ? '<span class="fav">★</span>' : ''}${esc(r.subtitle || r.title)}</div>
     <div class="s">${esc([fmt.se(r), `${r.channelNumber} ${r.channelName}`].filter(Boolean).join('  ·  '))}</div></div>
-    <div class="m">${fmt.when(r.start)}<br>${r.status !== 'complete' ? `<span class="status-pill st-${r.status}">${r.status}</span>` : fmt.dur(r.end - r.start)}</div></div>`;
+    <div class="m">${fmt.when(r.start)}<br>${r.status === 'importing' ? `<span class="status-pill st-importing">adding ${r.progress || 0}%</span>` : r.status !== 'complete' ? `<span class="status-pill st-${r.status}">${r.status}</span>` : fmt.dur(r.end - r.start)}</div></div>`;
 }
 
 // ---------------- Timers ----------------

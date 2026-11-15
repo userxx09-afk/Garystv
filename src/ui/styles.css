@@ -172,7 +172,7 @@ html.tv .row-arrow { display: none !important; }
 .empty { color: var(--muted); padding: 2rem 1rem; font-size: 1.1rem; line-height: 1.6; }
 .status-pill { font-size: .8rem; font-weight: 700; padding: .1rem .55rem; border-radius: 1rem; text-transform: uppercase; letter-spacing: .04em; }
 .st-scheduled { background: #173a6b; } .st-recording { background: var(--red); } .st-conflict { background: #6b5200; } .st-skipped { background: #2a3447; color: var(--muted); }
-.st-complete { background: #0f4a2c; } .st-partial { background: #6b5200; } .st-failed { background: #5a0b1b; }
+.st-complete { background: #0f4a2c; } .st-importing { background: #173a6b; } .st-partial { background: #6b5200; } .st-failed { background: #5a0b1b; }
 
 /* ---------- search ---------- */
 .searchbox { display: flex; align-items: center; gap: 1rem; background: var(--panel); border: 2px solid var(--line); border-radius: .7rem; padding: .8rem 1.2rem; margin-bottom: 1rem; font-size: 1.5rem; }
@@ -302,6 +302,7 @@ html.tv .osd-btns { display: none; } /* the remote's buttons do these on the TV 
 .poster .ps { color: var(--muted); font-size: .85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .poster .pbar { height: .3rem; background: #ffffff22; border-radius: .2rem; margin-top: .35rem; overflow: hidden; }
 .poster .pbar i { display: block; height: 100%; background: var(--red2); }
+.modal .pbar { background: #ffffff22; border-radius: .2rem; overflow: hidden; } .modal .pbar i { display: block; height: 100%; background: var(--red2); }
 .poster.more { display: flex; align-items: center; justify-content: center; text-align: center; min-height: 8rem; }
 .vod-info { display: flex; gap: 1.2rem; align-items: flex-start; }
 .vod-info img { width: 9rem; border-radius: .4rem; flex: none; }

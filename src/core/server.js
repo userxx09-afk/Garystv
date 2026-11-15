@@ -197,7 +197,7 @@ function sendFile(req, res, file) {
     const start = m && m[1] ? +m[1] : 0;
     const end = m && m[2] ? Math.min(+m[2], st.size - 1) : st.size - 1;
     if (start > end) { res.writeHead(416, { 'Content-Range': `bytes */${st.size}` }); return res.end(); }
-    res.writeHead(m ? 206 : 200, { 'Content-Type': 'video/mp2t', 'Accept-Ranges': 'bytes', 'Content-Length': end - start + 1, ...(m ? { 'Content-Range': `bytes ${start}-${end}/${st.size}` } : {}) });
+    res.writeHead(m ? 206 : 200, { 'Content-Type': /.mp4$/i.test(file) ? 'video/mp4' : 'video/mp2t', 'Accept-Ranges': 'bytes', 'Content-Length': end - start + 1, ...(m ? { 'Content-Range': `bytes ${start}-${end}/${st.size}` } : {}) });
     fs.createReadStream(file, { start, end }).pipe(res);
   });
 }
@@ -296,6 +296,9 @@ function createServer(core) {
     }],
     ['GET', '/api/schedule', () => core.getSchedule()],
     ['GET', '/api/recordings', (q, b, p, req) => (req.who.peer ? core.getRecordings() : sharing.withShared(core.getRecordings()))],
+    // My Recordings > Add a video or DVD (core/importer.js). Sending a file from a browser is /api/import/upload, below.
+    ['GET', '/api/import', () => core.importer.overview()],
+    ['POST', '/api/import', (q, b) => core.importer.addPath(b)],
     ['GET', '/api/search', (q) => core.search(q.q)],
     ['PUT', '/api/settings', (q, b) => core.updateSettings(b)],
     // Where recordings are saved (storage.js): network storage, or back to this computer.
@@ -472,6 +475,8 @@ function createServer(core) {
         return streamVideo(core, req, res, input, { live: m[1] === 'live', seek: +q.t || 0, key });
       }
 
+      // A video sent from a browser, as the request body (it can be gigabytes, so it isn't read into memory).
+      if (url.pathname === '/api/import/upload' && req.method === 'POST') return send(res, 200, await core.importer.addUpload(req, q.name, q.title));
       if (url.pathname.startsWith('/api/')) {
         for (const r of compiled) {
           const hit = r.method === req.method && r.re.exec(url.pathname);

@@ -18,6 +18,8 @@ Several channels can record at once: up to 6 Free TV channels, as many as an HDH
 
 **Commercial skip:** after a recording finishes, GarysTV looks for commercial breaks (the short black, silent gaps broadcasters put around ads) and skips them during playback, or offers to (Settings). It works best on antenna recordings; internet channels often insert ads without those gaps.
 
+**Your own videos and DVDs:** My Recordings > **＋ Add a video or DVD** copies a DVD in the GarysTV computer's drive, a video file or a folder of them on that computer, or (from a browser) a file sent from your device. Each is converted to a standard MP4 (H.264 video, AAC stereo sound; H.264 video is kept as it is), saved in the recordings folder, and listed in My Recordings like a recording, so every TV can play it. They're converted one at a time at low priority; the list shows "adding 42%" until each is ready, and an app restart picks up where it left off. The original file is never changed. Home-made and other unprotected DVDs work; copy-protected movie discs don't.
+
 Closing the window asks whether to exit GarysTV or keep it running in the system tray so timers still record (Settings > Recording can remember the answer). The tray menu's **Exit GarysTV** also closes it; exiting stops recordings and lets them finish writing. While a recording runs, the PC won't go to sleep.
 
 ## Hardware & helpers
