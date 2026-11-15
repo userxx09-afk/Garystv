@@ -276,7 +276,7 @@ pre.log { margin: 0; font-size: .8rem; color: var(--muted); white-space: pre-wra
 .behind-badge { background: var(--yellow); color: #1a1300; }
 .osd .bar { position: relative; }
 .osd .bar b.ad { position: absolute; top: 0; bottom: 0; background: var(--yellow); opacity: .85; }
-.osd-btns { display: flex; gap: .6rem; margin-top: .3rem; }
+.osd-btns { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: .3rem; }
 .osd-btn { cursor: pointer; padding: .35rem .9rem; border-radius: .4rem; background: #ffffff1c; border: 1px solid #ffffff30; font-size: 1rem; user-select: none; }
 .osd-btn:hover { background: var(--red2); border-color: var(--red2); }
 html.tv .osd-btns { display: none; } /* the remote's buttons do these on the TV */
