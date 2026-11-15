@@ -41,8 +41,44 @@ const SettingsView = {
     this.taps = [...this.taps.filter((t, i, a) => now - (a[a.length - 1] || 0) < 3000), now];
     if (this.taps.length < 12) return false;
     this.taps = [];
-    this.familyAccounts();
+    this.secretMenu();
     return true;
+  },
+
+  // The secret menu: what's under the hood of this GarysTV, and adding family IPTV accounts.
+  // Shows no logins or codes (the engine never sends them).
+  async secretMenu() {
+    let d;
+    try { d = await api.get('/api/secret'); } catch (e) { toast(e.message); return; }
+    const up = (s) => (s > 86400 ? `${Math.floor(s / 86400)} d ${Math.floor((s % 86400) / 3600)} h` : `${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min`);
+    const f = d.family || {}, u = d.update;
+    const row = (k, v) => `<div class="s"><b>${esc(k)}:</b> ${v}</div>`;
+    const body = `
+      <h3 style="margin:.6rem 0 .3rem">This GarysTV</h3>
+      ${row('Name', esc(d.name))}${row('Version', `${esc(d.version)} on ${esc(d.platform)} (Node ${esc(d.node)})`)}${row('Running for', esc(up(d.uptimeS)))}
+      ${row('Addresses', esc((d.addresses || []).join(', ') || 'none'))}
+      ${window.GTV_SERVER ? row('This screen talks to', esc(window.GTV_SERVER)) : ''}
+      ${u ? row('Updates', esc(`${u.available && u.available !== u.current ? `${u.available} is out` : 'up to date'}${u.plan ? ` · installs ${u.plan.when === 'scheduled' ? `${u.plan.day || 'daily'} at ${u.plan.h}:${String(u.plan.m).padStart(2, '0')}` : u.plan.when}` : ''}${u.error ? ` · ${u.error}` : ''}`)) : ''}
+      <h3 style="margin:.8rem 0 .3rem">Providers</h3>
+      ${(d.sources || []).map((s) => row(s.name, esc(`${s.type}${s.enabled ? '' : ' (off)'}${s.family ? ' · family account' : ''} · ${s.channels} channels${s.firstNumber ? ` from ${s.firstNumber}` : ''}${s.streams ? ` · ${s.streams} at once` : ''}${s.info ? ` · ${s.info}` : ''}`))).join('') || '<div class="s">None yet.</div>'}
+      <h3 style="margin:.8rem 0 .3rem">Family accounts</h3>
+      ${row('Get them from', `${esc(f.server)} ${f.reachable ? `<span style="color:#7bd88f">answering${f.serverName ? ` (${esc(f.serverName)})` : ''}</span>` : '<span style="color:#ff8a8a">not answering (TapperVPN off, or that GarysTV is off or older)</span>'}`)}
+      ${f.offers && f.offers.accounts.length ? row('This GarysTV offers', esc(`${f.offers.accounts.join(', ')} · family code ${f.offers.codeSet ? 'set' : 'NOT set: nobody can add them until one is'}`)) : ''}`;
+    // Buttons first: on a TV the remote lands on them, and the details stay in view below.
+    const v = await Modal.open((m, close) => {
+      m.innerHTML = `<div class="title">Secret menu</div><div class="menu-list">
+        <div class="btn nav primary" data-v="add">＋ Add family accounts...</div>
+        <div class="btn nav" data-v="server">Where family accounts come from...</div>
+        <div class="btn nav" data-v="">Close</div></div>${body}`;
+      $$('[data-v]', m).forEach((b) => { b.onclick = () => close(b.dataset.v || null); });
+    });
+    if (v === 'add') this.familyAccounts();
+    if (v === 'server') {
+      const s = await Modal.prompt('Family accounts come from', 'GarysTV address (tapper is 100.64.0.2)', f.server, 'Save');
+      if (s === null) return;
+      try { await api.put('/api/secret/family-server', { server: s }); } catch (e) { toast(e.message); }
+      this.secretMenu();
+    }
   },
 
   // Adds a family IPTV account (core/family.js): the code, then which account. Only works on
