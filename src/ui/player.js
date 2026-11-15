@@ -424,9 +424,11 @@ const Player = {
       sub = `${this.channel.number} ${this.channel.name}${p && p.subtitle ? `  ·  ${p.subtitle}` : ''}`;
     }
     const keys = this.rec ? '← back 10s · → skip 30s · Space pause · Esc stop' : (window.GTV_SERVER ? '← back 10s · → ahead 30s · ↑↓ channel · OK channel # · hold OK for options · BACK stop' : '← back 10s · → ahead 30s · L live · ↑↓ channel · G guide · R record · Esc stop');
+    // With a mouse or touch the picture covers the top bar, so these are the way out too.
+    const out = [['guide', this.rec ? '‹ My Recordings' : '▦ Guide'], ['menu', '☰ Menu'], ['stop', '■ Stop']];
     const btns = this.rec
-      ? [['back', '⏪ 10s'], ['pause', '⏯'], ['fwd', '30s ⏩'], ...(this.breakNow() ? [['skip', 'Skip commercial ⏭']] : [])]
-      : [['back', '⏪ 10s'], ['pause', '⏯'], ['fwd', '30s ⏩'], ['live', 'Go Live ⏭'], ['pad', '🔢 Channel #']];
+      ? [['back', '⏪ 10s'], ['pause', '⏯'], ['fwd', '30s ⏩'], ...(this.breakNow() ? [['skip', 'Skip commercial ⏭']] : []), ...out]
+      : [['back', '⏪ 10s'], ['pause', '⏯'], ['fwd', '30s ⏩'], ['live', 'Go Live ⏭'], ['pad', '🔢 Channel #'], ...out];
     const rec = this.recording() ? '<span class="rec-badge">● REC</span>' : '';
     osd.innerHTML = `<div class="t">${rec}<span id="osdTag"></span>${esc(title)}</div><div class="s">${esc(sub)}</div>
       <div class="bar" id="osdBar"></div><div class="row"><span id="osdL"></span><span>${keys}</span><span id="osdR"></span></div>
@@ -471,6 +473,9 @@ const Player = {
     else if (a === 'live') this.goLive();
     else if (a === 'pad') this.pad();
     else if (a === 'skip') { const b = this.breakNow(); if (b) this.skipBreak(b); }
+    else if (a === 'guide') { if (this.channel && !this.rec) this.toGuide(); else { this.stop(); App.go('dvr'); } }
+    else if (a === 'menu') App.menu();
+    else if (a === 'stop') { this.stop(); App.render(); }
   },
 
   // This channel's recording in progress, if any.
@@ -679,4 +684,4 @@ document.addEventListener('DOMContentLoaded', () => $('#screen').addEventListene
   if (Player.mode === 'full' && $('#osd').classList.contains('hide')) Player.showOsd();
 }));
 // Clicking the picture in the guide's corner: full screen again.
-document.addEventListener('DOMContentLoaded', () => $('#screen').addEventListener('click', () => { if (Player.mode === 'pip') Player.full(); }));
+document.addEventListener('DOMContentLoaded', () => $('#screen').addEventListener('click', () => { if (Player.mode === 'pip') Player.full(); else if (Player.mode === 'full') Player.showOsd(); }));
