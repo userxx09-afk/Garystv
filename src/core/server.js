@@ -114,7 +114,7 @@ async function streamVideo(core, req, res, input, { live, seek = 0, key }) {
   if (!ffmpeg) return send(res, 501, { error: 'ffmpeg is not installed, so the built-in player is unavailable.' });
   const plan = await videoPlan(core, input, key);
   const args = ['-hide_banner', '-loglevel', 'error', ...decodeArgs(input, { live, seek, copy: plan.copy }), ...plan.video,
-    '-c:a', 'aac', '-ac', '2', '-b:a', '160k', '-f', 'mpegts', 'pipe:1'];
+    ...(live ? ['-af', 'aresample=async=1'] : []), '-c:a', 'aac', '-ac', '2', '-b:a', '160k', '-f', 'mpegts', 'pipe:1']; // seamless audio, as in timeshift.js
   const proc = spawn(ffmpeg, args, { stdio: ['ignore', 'pipe', 'pipe'] });
   let err = '';
   proc.stderr.on('data', (d) => { err = (err + d).slice(-2000); });
