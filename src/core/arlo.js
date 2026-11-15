@@ -192,6 +192,45 @@ class Arlo {
     return { ok: true };
   }
 
+  // Home > Cameras > Save: a saved (starred) clip is never deleted by Camera Keeper's cleanup.
+  async starClip(key, on) {
+    key = String(key || '');
+    if (!key || key.includes('..')) throw new Error('Which clip?');
+    const r = await this.request('POST', `/api/clip/${key.split('/').map(encodeURIComponent).join('/')}/star`, { on: on !== false });
+    return { ok: true, starred: !!(r && r.starred) };
+  }
+
+  // Home > Cameras > select several: delete, save or unsave them together.
+  async bulkClips(keys, action) {
+    keys = (Array.isArray(keys) ? keys : []).map(String).filter((k) => k && !k.includes('..'));
+    if (!keys.length) throw new Error('No clips selected.');
+    if (keys.length > 500) throw new Error('Select at most 500 clips at a time.');
+    if (!['delete', 'star', 'unstar'].includes(action)) throw new Error('Delete, save or unsave?');
+    const r = await this.request('POST', '/api/clips/bulk', { keys, action });
+    return { ok: true, count: (r && r.count) || 0 };
+  }
+
+  // Settings > Cameras > Storage: Camera Keeper's space for clips and what happens when it's used up.
+  async storage() {
+    try {
+      return await this.request('GET', '/api/storage');
+    } catch (e) {
+      if (/answered 404/.test(e.message)) throw new Error('Update Camera Keeper to change its storage from here.');
+      throw e;
+    }
+  }
+
+  async setStorage(b) {
+    const out = {};
+    if (b.maxGb !== undefined) out.max_gb = Math.max(0, parseInt(b.maxGb, 10) || 0);
+    if (b.keepDays !== undefined) out.keep_days = Math.max(0, parseInt(b.keepDays, 10) || 0);
+    if (b.whenFull !== undefined) {
+      if (!['overwrite', 'stop'].includes(b.whenFull)) throw new Error('When full: overwrite or stop.');
+      out.when_full = b.whenFull;
+    }
+    return this.request('POST', '/api/storage', out);
+  }
+
   // A clip's still picture, passed through from Camera Keeper (the TVs may not be able to reach it).
   thumb(req, res, src) {
     const p = safeThumb(src);

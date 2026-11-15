@@ -373,3 +373,10 @@ input[type=checkbox].nav.focus { outline: 3px solid var(--focus-bg); outline-off
 .team-letters { display: flex; flex-wrap: wrap; gap: .3rem; margin: .4rem 0 .6rem; }
 .team-letters .btn { min-width: 2.2rem; padding: .3rem .5rem; text-align: center; }
 .team-letters .btn.picked { border-color: var(--focus-bg); }
+
+/* Home > Cameras: selecting several clips */
+.item .pick { font-size: 1.6rem; width: 2rem; text-align: center; flex: none; color: var(--muted, #9aa); }
+.item.picked .pick { color: var(--red2, #e33); }
+.item.picked:not(.focus) { border-color: var(--red2, #e33); }
+.actions.selbar { align-items: center; margin: 0 0 .8rem; gap: .6rem; }
+.actions.selbar b { margin-right: .4rem; }

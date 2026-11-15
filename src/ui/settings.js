@@ -510,6 +510,10 @@ const SettingsView = {
     const num = (k, label, hint) => `<div class="field"><label>${label}</label><input data-s="${k}" type="number" min="0" value="${esc(s[k])}">${hint ? `<span class="s" style="font-size:.85rem">${hint}</span>` : ''}</div>`;
     pane.innerHTML = `
       ${this.storageBox()}
+      <div class="box"><h3>When the disk is full</h3>
+        <div class="row"><div class="field"><label>When less than this is free</label><select data-s="recordingFull">${[['off', 'Keep recording (do nothing)'], ['overwrite', 'Delete the oldest recordings to make room'], ['stop', 'Stop recording new shows']].map(([v, l]) => `<option value="${v}" ${(s.recordingFull || 'off') === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+          <span class="s" style="font-size:.85rem">Making room deletes watched recordings first, then the oldest. ★ Saved recordings are never deleted. Camera clips have their own setting in Settings › Cameras.</span></div>
+        ${num('recordingMinFreeGb', 'Keep at least this much free (GB)')}</div></div>
       <div class="box"><h3>Timing</h3>
         <div class="row">${num('prePadMin', 'Start recordings early (minutes)')}${num('postPadMin', 'End recordings late (minutes)', 'Helps when live sports run over')}${num('guideHours', 'Guide hours to download')}</div></div>
       <div class="box"><h3>Watching</h3>
@@ -743,7 +747,8 @@ const SettingsView = {
         <div class="s" style="font-size:.85rem">At home or over the VPN: http://its-address:8090 (motion pop-ups need this). Over the internet: https://name:password@bcn.tapper.co, with the away-from-home name and password and no :8090 (clips only, no pop-ups).</div>
         <div class="actions"><div class="btn nav" id="arloUrlSave" data-key="arlo-url-save">Save address</div><div class="btn nav" id="arloTest" data-key="arlo-test">Show a test pop-up</div></div>
         <div class="s" style="font-size:.85rem">The test starts Live TV here (last channel), then shows Camera Keeper's newest clip on every screen that's playing TV. Press Back to come back.</div></div>
-      <div class="box"><h3>Cameras that pop up</h3><div id="arloCams" class="s">Asking Camera Keeper...</div></div>`;
+      <div class="box"><h3>Cameras that pop up</h3><div id="arloCams" class="s">Asking Camera Keeper...</div></div>
+      <div class="box"><h3>Clip storage</h3><div id="arloStore" class="s">Asking Camera Keeper...</div></div>`;
     $('#arloOn', pane).onchange = (e) => save({ enabled: e.target.checked }, e.target.checked ? 'Cameras turned on' : 'Cameras turned off');
     const url = $('#arloUrl', pane);
     url._onFocus = () => url.focus();
@@ -762,6 +767,35 @@ const SettingsView = {
       try { const r = await api.post('/api/arlo/test'); toast(`Test pop-up sent (${r.camera}). The camera takes a few seconds to show.`, 6000); } catch (e) { toast(e.message, 6000); }
     };
     this.arloCameras(pane, save, cur);
+    this.arloStorage(pane);
+  },
+
+  // Camera Keeper's space for clips and what happens when it's used up (it does the work).
+  async arloStorage(pane) {
+    const box = $('#arloStore', pane);
+    if (!box) return;
+    let st;
+    try { st = await api.get('/api/arlo/storage'); } catch (e) { box.innerHTML = `⚠️ ${esc(e.message)}`; return; }
+    if (!document.body.contains(box)) return;
+    const gb = (b) => (b == null ? '?' : (b / 1073741824).toFixed(1));
+    box.classList.remove('s');
+    box.innerHTML = `<div class="s">Using ${gb(st.used_bytes)} GB${st.max_gb ? ` of ${st.max_gb} GB` : ''}${st.disk_free_bytes != null ? ` · ${gb(st.disk_free_bytes)} GB free on its disk` : ''}.
+        ${st.full && !st.saving ? '<b style="color:var(--yellow)">Full: new clips aren\'t being saved.</b>' : st.full ? 'Full: the oldest clips are being replaced.' : ''}</div>
+      <div class="row">
+        <div class="field"><label>When the space is used up</label><select id="stFull" class="nav" data-key="st-full">
+          <option value="overwrite" ${st.when_full !== 'stop' ? 'selected' : ''}>Replace the oldest clips (keep recording)</option>
+          <option value="stop" ${st.when_full === 'stop' ? 'selected' : ''}>Stop saving new clips</option></select></div>
+        <div class="field"><label>Space for clips (GB, 0 = until the disk is nearly full)</label><input id="stGb" class="nav" data-key="st-gb" type="number" min="0" value="${esc(st.max_gb)}"></div>
+        <div class="field"><label>Delete clips older than (days, 0 = never)</label><input id="stDays" class="nav" data-key="st-days" type="number" min="0" value="${esc(st.keep_days)}"></div></div>
+      <div class="s" style="font-size:.85rem">★ Saved clips are never deleted. Motion pop-ups and alerts still come when clips aren't being saved.</div>
+      <div class="actions"><div class="btn nav" id="stSave" data-key="st-save">Save clip storage</div></div>`;
+    $('#stSave', box).onclick = async () => {
+      try {
+        await api.post('/api/arlo/storage', { whenFull: $('#stFull', box).value, maxGb: +$('#stGb', box).value || 0, keepDays: +$('#stDays', box).value || 0 });
+        toast('Clip storage saved in Camera Keeper');
+        this.arloStorage(pane);
+      } catch (e) { toast(e.message, 6000); }
+    };
   },
 
   // Drawn at once from the last answer (each save redraws Settings, and a box that vanished

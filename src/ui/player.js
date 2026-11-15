@@ -51,6 +51,8 @@ const Health = {
       this.endStall();
     });
     v.addEventListener('seeking', () => { if (this.s) { this.s.seekAt = Date.now(); this.s.stallAt = 0; } });
+    // A recording played to the end: ask whether to delete it, save it or keep it.
+    v.addEventListener('ended', () => { if (this.kind === 'rec' && this.rec) this.finished(); });
     v.addEventListener('waiting', () => {
       const s = this.s;
       // Not a stutter: still starting, paused, or jumping (rewind, back to live).
@@ -224,10 +226,23 @@ const Player = {
     // Absolute URL: mpegts.js fetches from a worker, which can't resolve relative paths.
     this.mp = mpegts.createPlayer({ type: 'mpegts', isLive: true, url: `${serverBase()}/stream/${kind}/${encodeURIComponent(id)}?t=${Math.floor(offset)}` },
       { enableWorker: true, liveBufferLatencyChasing: false, lazyLoad: false });
+    // The whole recording has arrived: once the picture reaches the end of it, it has finished.
+    if (kind === 'rec') this.mp.on(mpegts.Events.LOADING_COMPLETE, () => { if (session === this.session) this.watchEnd(session); });
     this.mp.on(mpegts.Events.ERROR, () => { if (session === this.session) this.showOsd(kind === 'vod' ? 'Could not play this. The provider may be busy; try again in a moment.' : 'Could not play this recording.'); });
     this.mp.attachMediaElement(video);
     this.mp.load();
     video.play().catch(() => {});
+  },
+
+  watchEnd(session) {
+    const video = $('#video');
+    let still = 0;
+    const t = setInterval(() => {
+      if (session !== this.session || this.kind !== 'rec') return clearInterval(t);
+      const b = video.buffered, end = b.length ? b.end(b.length - 1) : 0;
+      still = !video.paused && end && video.currentTime >= end - 0.6 ? still + 1 : 0;
+      if (video.ended || still >= 3) { clearInterval(t); this.finished(); }
+    }, 500);
   },
 
   stopStream() {
@@ -251,6 +266,29 @@ const Player = {
     this.stopStream();
     this.setMode('off');
     this.kind = this.id = this.rec = this.channel = null;
+  },
+
+  async finished() {
+    const r = App.recordings.find((x) => x.id === this.rec.id) || this.rec;
+    if (r.status === 'recording' || this.endAsked === r.id) return; // still coming in: nothing to ask yet
+    this.endAsked = r.id;
+    this.stop();
+    App.render();
+    const label = `${r.title}${r.subtitle ? ` - ${r.subtitle}` : ''}`;
+    const choices = [{ label: '🗑  Delete it', value: 'delete', cls: 'danger' }];
+    if (!r.at && !r.saved) choices.push({ label: '★  Save it (never deleted automatically)', value: 'save' });
+    choices.push({ label: r.saved ? 'Keep it (saved ★)' : 'Keep it', value: 'keep', cls: 'primary' }, { label: '⟲  Watch again', value: 'again' });
+    const v = await Modal.menu('Finished', `<div class="s">${esc(label)}</div>`, choices);
+    this.endAsked = null;
+    try {
+      if (v === 'delete' && await Modal.confirm('Delete recording?', `${label} will be permanently deleted.`, 'Delete')) {
+        await api.del(`/api/recordings/${r.id}`);
+        toast('Recording deleted');
+      } else if (v === 'save') {
+        await api.put(`/api/recordings/${r.id}`, { saved: true });
+        toast('Saved: this recording won\'t be deleted automatically');
+      } else if (v === 'again') this.play('rec', r.id);
+    } catch (e) { toast(e.message); }
   },
 
   togglePause() {

@@ -49,7 +49,14 @@ const DEFAULT_SETTINGS = {
   closeAction: 'ask', // closing the window: ask | tray | exit
   timeshiftMinutes: 30, // live TV pause/rewind buffer
   commercialSkip: 'auto', // auto | button | off
+  // When the recordings disk runs low (under recordingMinFreeGb): off = do nothing (record anyway),
+  // overwrite = delete the oldest unsaved recordings (watched ones first) to make room,
+  // stop = don't start new recordings until there's room. Saved recordings are never deleted.
+  recordingFull: 'off',
+  recordingMinFreeGb: 10,
 };
+
+const fmtDay = (ms) => new Date(ms).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 
 class DvrCore extends EventEmitter {
   constructor({ dataDir, demo = false }) {
@@ -567,6 +574,11 @@ class DvrCore extends EventEmitter {
   // ---------- recording ----------
   tick() {
     const now = Date.now();
+    // While recording, keep making room every few minutes (overwrite only).
+    if (this.active.size && this.settings.recordingFull === 'overwrite' && now - (this.roomCheckedAt || 0) > 5 * 60000) {
+      this.roomCheckedAt = now;
+      try { this.recordingRoom(); } catch (_) { /* checked again next time */ }
+    }
     const jobs = this.getSchedule();
     for (const job of jobs) {
       if (job.status === 'scheduled' && !this.active.has(job.id) && job.recStart <= now && now < job.recEnd) this.startJob(job);
@@ -616,9 +628,39 @@ class DvrCore extends EventEmitter {
     return !src || src.type === 'demo';
   }
 
+  // Free space where recordings go, in bytes (null if unknown, like a share that isn't answering).
+  recordingsFree() {
+    if (this.storage.network && this.storage.reachable !== true) return null;
+    try { const dir = this.storage.recordDir(); const st = fs.statfsSync(fs.existsSync(dir) ? dir : os.homedir()); return st.bavail * st.bsize; } catch (_) { return null; }
+  }
+
+  // Settings > Recording > When the disk is full. False: don't start a recording now.
+  recordingRoom(title) {
+    const mode = this.settings.recordingFull || 'off';
+    const min = Math.max(1, +this.settings.recordingMinFreeGb || 10) * 1e9;
+    let free = mode === 'off' ? null : this.recordingsFree();
+    if (free == null || free >= min) { this.fullNoted = false; return true; }
+    if (mode === 'stop') {
+      if (!this.fullNoted) this.note(`disk full: ${title ? `${title} isn't` : 'new recordings aren\'t'} being recorded (less than ${Math.round(min / 1e9)} GB free; Settings > Recording)`);
+      this.fullNoted = true;
+      return false;
+    }
+    const active = new Set([...this.active.values()].map((a) => a.recId));
+    const old = this.recordings.filter((r) => !r.saved && !active.has(r.id) && r.status !== 'recording')
+      .sort((a, b) => (+!!b.watched - +!!a.watched) || a.start - b.start); // watched first, then the oldest
+    for (const r of old) {
+      if (free >= min) break;
+      free += r.size || 0;
+      this.note(`disk full: deleted ${r.title}${r.subtitle ? ` - ${r.subtitle}` : ''} (${fmtDay(r.start)}) to make room`);
+      this.deleteRecording(r.id);
+    }
+    return true; // record anyway: better a recording than none, even if room is still short
+  }
+
   startJob(job) {
     const src = this.sources.find((s) => s.id === job.sourceId);
     if (!this.channels.some((c) => c.id === job.channelId) || !src) return;
+    if (!this.recordingRoom(job.title)) return; // tried again at the next tick, in case room is made
     // A plan for the stream: the one the stream check found working, else the one the schedule
     // picked if it can, else any with this channel free.
     const check = this.prechecks && this.prechecks.get(job.id);
@@ -701,10 +743,11 @@ class DvrCore extends EventEmitter {
     const rule = this.rules.find((r) => r.id === ruleId);
     if (!rule || !rule.keep) return;
     const mine = this.recordings.filter((r) => r.ruleId === ruleId && r.status !== 'recording').sort((a, b) => b.start - a.start);
-    for (const old of mine.slice(rule.keep)) this.deleteRecording(old.id);
+    for (const old of mine.slice(rule.keep)) if (!old.saved) this.deleteRecording(old.id); // saved ones stay
   }
 
   patchRecording(id, patch) {
+    patch = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
     this.store.write('recordings', this.recordings.map((r) => (r.id === id ? { ...r, ...patch } : r)));
     this.changed('recordings');
   }
