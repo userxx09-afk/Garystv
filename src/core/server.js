@@ -321,7 +321,7 @@ function createServer(core) {
     ['DELETE', '/api/rules/:id', (q, b, p) => core.removeRule(p.id)],
     ['POST', '/api/rules/:id/move', (q, b, p) => core.moveRule(p.id, b.delta)],
     ['POST', '/api/jobs/skip', (q, b) => core.skipJob(b.id, b.skip !== false)],
-    ['PUT', '/api/recordings/:id', (q, b, p) => atPeer(p.id, 'PUT', b) || core.patchRecording(p.id, { position: b.position, watched: b.watched })],
+    ['PUT', '/api/recordings/:id', (q, b, p) => atPeer(p.id, 'PUT', b) || core.patchRecording(p.id, { position: b.position, watched: b.watched, saved: b.saved === undefined ? undefined : !!b.saved })],
     ['GET', '/api/sports/leagues', () => sports.leagues()],
     ['GET', '/api/sports/teams', (q) => sports.teams(q.league)],
     ['GET', '/api/sports/games', () => sports.games()],
@@ -349,6 +349,10 @@ function createServer(core) {
     ['GET', '/api/arlo/cameras', () => arlo.cameras()],
     ['GET', '/api/arlo/clips', (q) => arlo.clips(q.camera, q.limit, q.account)], // Home > Cameras
     ['DELETE', '/api/arlo/clip', (q) => arlo.deleteClip(q.key)], // Home > Cameras > Delete
+    ['POST', '/api/arlo/clip/star', (q, b) => arlo.starClip(b.key, b.on)], // Home > Cameras > Save
+    ['POST', '/api/arlo/clips/bulk', (q, b) => arlo.bulkClips(b.keys, b.action)], // Home > Cameras > select several
+    ['GET', '/api/arlo/storage', () => arlo.storage()], // Settings > Cameras > Storage
+    ['POST', '/api/arlo/storage', (q, b) => arlo.setStorage(b)],
     ['POST', '/api/arlo/motion', (q, b) => arlo.motion(b)],
     ['POST', '/api/arlo/test', () => arlo.test()],
     // Updates: the Windows app's own (src/app-updates.js), or a home server's (core/server-updates.js).
