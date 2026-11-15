@@ -79,7 +79,10 @@ class Timeshift {
     if (this.health) this.health.bufferStarted(s.channelId, args);
     const flags = `delete_segments+independent_segments+omit_endlist${resume ? '+append_list+discont_start' : ''}`;
     // -progress: how much video has been written, so playback health can tell when the stream falls behind.
-    const proc = spawn(this.ffmpeg(), ['-hide_banner', '-loglevel', 'error', '-nostats', '-progress', 'pipe:1', ...args, '-c:a', 'aac', '-ac', '2', '-b:a', '160k',
+    // aresample=async=1: the channel's ad breaks leave tiny gaps and overlaps in the audio. Filled
+    // and trimmed here, the audio reaches the player seamless; left in, the Windows app's player
+    // once went robotic until the channel was changed (2026-11-15, 407 Made In Hollywood).
+    const proc = spawn(this.ffmpeg(), ['-hide_banner', '-loglevel', 'error', '-nostats', '-progress', 'pipe:1', ...args, '-af', 'aresample=async=1', '-c:a', 'aac', '-ac', '2', '-b:a', '160k',
       '-f', 'hls', '-hls_time', String(SEG_S), '-hls_list_size', String(Math.round((s.minutes * 60) / SEG_S)), '-hls_flags', flags,
       '-hls_segment_filename', path.join(s.dir, 'seg%06d.ts'), path.join(s.dir, 'live.m3u8')], { stdio: ['ignore', 'pipe', 'pipe'] });
     s.proc = proc;
