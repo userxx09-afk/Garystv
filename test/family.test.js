@@ -68,3 +68,15 @@ test('family accounts: tapper\'s secrets file is read on each ask', () => {
   assert.equal(f.offer(req('100.64.0.7'), { code: '482915' }).accounts.length, 2); // no restart needed
   fs.unlinkSync(file);
 });
+
+test('family accounts: the secret menu\'s status says what\'s offered and if a code is set, never the code or a login', async () => {
+  const ping = async () => ({ ok: true, json: async () => ({ app: 'GarysTV', name: 'frank' }) });
+  const s = await new Family(core(), { env, fetchImpl: ping }).status();
+  assert.deepEqual(s, { server: 'http://100.64.0.2:5480', reachable: true, serverName: 'frank', offers: { accounts: ['Prime', 'Home plan'], codeSet: true } });
+  assert.ok(!/482915|p1|p3|u1|u3/.test(JSON.stringify(s)));
+  const { FAMILY_CODE, ...noCode } = env;
+  const off = await new Family(core(), { env: noCode, fetchImpl: async () => { throw new Error('timeout'); } }).status();
+  assert.deepEqual([off.reachable, off.offers.codeSet], [false, false]);
+  const signIn = async () => ({ ok: false, status: 401, json: async () => ({ error: 'Sign in first.', login: true }) }); // tapper, seen from another location
+  assert.equal((await new Family(core(), { env, fetchImpl: signIn }).status()).reachable, true);
+});

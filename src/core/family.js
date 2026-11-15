@@ -120,6 +120,21 @@ class Family {
     const src = await this.core.addSource({ type: 'xtream', name, config: { ...config, firstNumber, family: id } });
     return { name: src.name };
   }
+
+  // For the secret menu: where accounts come from and whether it answers, and what this GarysTV
+  // offers itself (how many, and whether a code is set; never the code or a login).
+  async status() {
+    const env = this.env;
+    let reachable = false, name = '';
+    try {
+      const res = await this.fetchImpl(`${this.server}/api/ping`, { signal: AbortSignal.timeout(5000) });
+      const p = await res.json().catch(() => null);
+      // From another location a GarysTV answers "sign in first" to most things: it's there.
+      reachable = !!(p && (p.app === 'GarysTV' || (res.status === 401 && p.login)));
+      name = (p && p.name) || '';
+    } catch (_) { /* not on TapperVPN, or it's off */ }
+    return { server: this.server, reachable, serverName: name, offers: { accounts: this.accounts(env).map((a) => a.name), codeSet: String(env.FAMILY_CODE || '').trim().length >= 6 } };
+  }
 }
 
 module.exports = { Family, vpnOrHome, readSecrets, DEFAULT_SERVER };

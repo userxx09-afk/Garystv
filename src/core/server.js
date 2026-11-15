@@ -328,6 +328,18 @@ function createServer(core) {
     // The hidden page: family IPTV accounts offered by tapper, and adding one here.
     ['POST', '/api/family/list', (q, b) => family.list(b.code)],
     ['POST', '/api/family/add', (q, b) => family.add(b.code, String(b.id || ''))],
+    // The secret menu (Settings > Status, 12 taps): what's under the hood. Never a login or code.
+    ['GET', '/api/secret', async () => {
+      const chans = core.channels;
+      return {
+        name: require('os').hostname(), version: VERSION, platform: process.platform, node: process.version, uptimeS: Math.round(process.uptime()), addresses: lanAddresses(),
+        sources: core.sources.map((s) => ({ name: s.name, type: s.type, enabled: s.enabled !== false, family: !!(s.config && s.config.family), firstNumber: (s.config && s.config.firstNumber) || '', streams: s.tunerCount || null,
+          channels: chans.filter((c) => c.sourceId === s.id).length, info: s.info || '' })),
+        update: core.appUpdater ? core.appUpdater.status() : null,
+        family: await family.status(),
+      };
+    }],
+    ['PUT', '/api/secret/family-server', (q, b) => { const v = String(b.server || '').trim(); core.updateSettings({ familyServer: v ? (/^https?:\/\//.test(v) ? v : `http://${v}${/:\d+$/.test(v) ? '' : ':5480'}`) : '' }); return { server: family.server }; }],
     ['GET', '/api/diag', () => diag.overview()], // Settings > Status > Playback health
     ['POST', '/api/diag/playback', (q, b, p, req) => diag.report(b, req.socket.remoteAddress)], // each TV, every 15s while playing
     ['POST', '/api/timeshift/release', (q, b) => timeshift.release(b.channelId, b.viewer)],
