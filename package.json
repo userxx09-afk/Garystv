@@ -11,7 +11,8 @@
     "dist": "electron-builder --win",
     "tizen": "node tizen/build.js",
     "firetv": "node firetv/build.js",
-    "free-channels": "node scripts/free-channels.js"
+    "free-channels": "node scripts/free-channels.js && node scripts/free-guides.js",
+    "free-guides": "node scripts/free-guides.js"
   },
   "build": {
     "appId": "local.garystv",
