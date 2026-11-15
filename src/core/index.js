@@ -26,6 +26,7 @@ const { findFfmpeg, findVlc } = require('./tools');
 const commercials = require('./commercials');
 const { Tuners, capacity } = require('./tuners');
 const { Storage } = require('./storage');
+const { Importer } = require('./importer');
 
 const GUIDES = [require('./guide/xmltv'), require('./guide/hdhomerun-guide'), require('./guide/demo-guide')];
 const guideType = (t) => GUIDES.find((g) => g.type === t) || (() => { throw new Error(`Unknown guide type ${t}`); })();
@@ -77,6 +78,7 @@ class DvrCore extends EventEmitter {
     this.loadLog();
     this.tuners = new Tuners(this); // which plan each stream is using (tuners.js)
     this.storage = new Storage(this); // this computer or network storage (storage.js)
+    this.importer = new Importer(this); // DVDs and video files added to My Recordings (importer.js)
   }
 
   // ---------- persistence helpers ----------
@@ -151,6 +153,7 @@ class DvrCore extends EventEmitter {
     const recs = this.recordings.map((r) => (r.status === 'recording' ? { ...r, status: 'partial', error: 'App was closed during recording' } : r));
     this.store.write('recordings', recs);
     // Recordings not yet checked for commercials (older ones, or the app closed mid-check).
+    this.importer.resume(); // DVDs and videos the app was closed while adding
     for (const r of recs) if (r.commercials == null && !r.simulated && ['complete', 'partial'].includes(r.status)) this.queueCommercials(r.id);
     this.refreshGuides().catch((e) => this.note(`guide refresh failed: ${e.message}`));
     this.tickTimer = setInterval(() => this.tick(), 5000);
@@ -176,6 +179,7 @@ class DvrCore extends EventEmitter {
     if (this.diag) this.diag.stop(); // the viewings still open go into the log
     this.comQueue = [];
     if (this.comProc) this.comProc.kill();
+    this.importer.stop(); // picked up again at the next start
     await Promise.race([Promise.all(writing), new Promise((r) => setTimeout(r, 5000))]);
   }
 
@@ -679,7 +683,7 @@ class DvrCore extends EventEmitter {
       return false;
     }
     const active = new Set([...this.active.values()].map((a) => a.recId));
-    const old = this.recordings.filter((r) => !r.saved && !active.has(r.id) && r.status !== 'recording')
+    const old = this.recordings.filter((r) => !r.saved && !active.has(r.id) && !['recording', 'importing'].includes(r.status))
       .sort((a, b) => (+!!b.watched - +!!a.watched) || a.start - b.start); // watched first, then the oldest
     for (const r of old) {
       if (free >= min) break;
@@ -792,6 +796,7 @@ class DvrCore extends EventEmitter {
     for (const [jobId, a] of this.active) {
       if (a.recId === id) { this.skipJob(jobId); await a.handle.done; }
     }
+    if (rec.status === 'importing') await this.importer.cancel(id);
     try { fs.unlinkSync(rec.file); } catch (_) {}
     try { fs.rmdirSync(path.dirname(rec.file)); } catch (_) { /* folder not empty */ }
     this.store.write('recordings', this.recordings.filter((r) => r.id !== id));
