@@ -139,6 +139,10 @@ const Nav = {
   },
   focus(el, { scroll = true } = {}) {
     if (this.current) this.current.classList.remove('focus');
+    // The highlight moving off a text box (arrows, the mouse) takes the typing with it, or the
+    // box kept every key press after it.
+    const typing = document.activeElement;
+    if (typing && typing !== el && ['INPUT', 'SELECT', 'TEXTAREA'].includes(typing.tagName) && !(el && el.contains(typing))) typing.blur();
     this.current = el || null;
     if (!el) return;
     el.classList.add('focus');

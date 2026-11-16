@@ -456,6 +456,8 @@ const GuideView = {
   // Synchronous so the key handler knows right away whether the key was used.
   onKey(e) {
     const k = e.key;
+    // On the bar is where the highlight is, however it got there (a click, a redraw), not only by ↑.
+    if (Nav.current && Nav.current.closest('#gbar, #gwatch, #topnav') && document.body.contains(Nav.current)) this.inBar = true;
     if (this.inBar && Nav.current && Nav.current.closest('#topnav')) { // the buttons along the top
       if (k === 'ArrowDown') { const w = $('#gwatch .chip'); if (w) Nav.focus(w); else this.refocusBar(); return true; }
       return ['ArrowLeft', 'ArrowRight', 'Enter'].includes(k) && Nav.handle(e);
