@@ -349,12 +349,25 @@ function heldLeft(e) {
 }
 document.addEventListener('keyup', (e) => { if (e.key === 'ArrowLeft') held.start = 0; });
 
+// In a text box, the arrows used to stay in it, so the highlight couldn't get off it (only Back,
+// which left the screen). Now ↑↓ move off it, and ←→ do too once the cursor is at that end of
+// the text (so you can still move along what you typed). Dropdowns, dates, times and numbers keep
+// ←→ for changing their value.
+function leavesBox(a, key) {
+  if (key === 'ArrowUp' || key === 'ArrowDown') return a.tagName !== 'TEXTAREA' || (key === 'ArrowUp' ? a.selectionStart === 0 : a.selectionEnd === a.value.length);
+  if (key !== 'ArrowLeft' && key !== 'ArrowRight') return false;
+  if (a.tagName === 'SELECT' || a.selectionStart == null) return a.type === 'checkbox'; // no cursor: date, time, number
+  if (a.selectionStart !== a.selectionEnd) return false;
+  return key === 'ArrowLeft' ? a.selectionStart === 0 : a.selectionEnd === a.value.length;
+}
+
 document.addEventListener('keydown', (e) => {
   const a = document.activeElement;
   const typing = a && ['INPUT', 'SELECT', 'TEXTAREA'].includes(a.tagName);
   if (typing) {
     if (App.view && App.view.onKey && !Modal.top() && App.view.onKey(e)) e.preventDefault();
     else if (e.key === 'Escape') { a.blur(); App.back(); e.preventDefault(); }
+    else if (leavesBox(a, e.key) && Nav.handle(e)) { a.blur(); e.preventDefault(); }
     return;
   }
   if (Player.onKey(e)) { e.preventDefault(); return; } // while watching, holding ← keeps rewinding

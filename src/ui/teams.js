@@ -51,9 +51,7 @@ const Teams = {
   strip() {
     const teams = App.state.settings.sportsTeams || [];
     const tops = this.tops().map(([l, label]) => `<div class="strip"><h2>${esc(label)}</h2><div class="cards" data-top25="${l}"><div class="empty">Getting the schedules...</div></div></div>`).join('');
-    if (!teams.length) {
-      return `<div class="strip"><h2>My Teams</h2><div class="cards"><div class="card nav" data-key="t-pick" data-teampick="1"><div class="t">＋ Pick your teams</div><div class="s">See when they play and which channel has the game</div></div></div></div>${tops}`;
-    }
+    if (!teams.length) return tops; // no teams picked: no My Teams row (pick them in Settings > My Teams)
     return `<div class="strip"><h2>My Teams</h2><div class="cards" id="teamCards"><div class="empty">Getting the schedules...</div></div></div>${tops}`;
   },
 
