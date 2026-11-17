@@ -120,6 +120,14 @@ class Vod {
   // -> { url, title } for the player.
   async input(id) {
     const [kind, srcId, itemId, ext] = String(id).split('~');
+    // Start over: c~<source>~<channel key>~<show start ms>-<show end ms>, from the provider's archive.
+    if (kind === 'c') {
+      const ch = this.core.channels.find((c) => c.id === `${srcId}:${itemId}`);
+      const [start, end] = String(ext || '').split('-').map(Number);
+      if (!ch || !ch.catchupUrl || !(start > 0) || !(end > start)) throw new Error('Not found');
+      const minutes = (Math.min(end, Date.now()) - start) / 60000 + 5; // a little extra: archives drift
+      return { url: xtream.catchupUrl(ch.catchupUrl, ch.catchupOffset, start, minutes), title: ch.name };
+    }
     if (!['m', 'e'].includes(kind) || !/^\d+$/.test(itemId) || !/^[a-z0-9]{1,5}$/i.test(ext)) throw new Error('Not found');
     const src = this.provider(srcId);
     const base = await this.base(src);

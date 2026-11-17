@@ -166,6 +166,17 @@ class Timeshift {
     setTimeout(() => fs.rm(s.dir, { recursive: true, force: true }, () => {}), 1000); // after ffmpeg lets go of the files
   }
 
+  // A viewer has moved on to something else (Start over plays the provider's archive): their
+  // buffers let go now, so a plan that allows one stream at a time is free. -> how many stopped.
+  leave(viewer) {
+    let n = 0;
+    for (const [id, s] of [...this.sessions]) {
+      if (!s.viewers.delete(viewer || 'anon')) continue;
+      if (!s.viewers.size) { this.stop(id); n++; }
+    }
+    return n;
+  }
+
   // Stops every buffer with no one watching. -> how many were stopped.
   stopIdle() {
     let n = 0;

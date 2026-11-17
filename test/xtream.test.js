@@ -49,3 +49,12 @@ test('Xtream login: first working server, US groups by default, numbered from 10
 test('Xtream server list', () => {
   assert.deepEqual(xtream.servers({ servers: 'line.a.com, http://b.com/  https://c.com' }), ['http://line.a.com', 'http://b.com', 'https://c.com']);
 });
+
+test('Start over: catch-up address in the panel\'s own clock', () => {
+  const x = require('../src/core/sources/xtream');
+  // Panel 6 hours behind UTC (US Central in winter), a second of latency.
+  assert.strictEqual(x.serverOffsetMinutes({ time_now: '2026-11-17 06:12:44', timestamp_now: Date.UTC(2026, 10, 17, 12, 12, 45) / 1000 }), -360);
+  assert.strictEqual(x.serverOffsetMinutes({}), 0);
+  const t = 'http://p.example/timeshift/u/p/{duration}/{start}/42.ts';
+  assert.strictEqual(x.catchupUrl(t, -360, Date.UTC(2026, 10, 17, 1, 0), 64.2), 'http://p.example/timeshift/u/p/65/2026-11-16:19-00/42.ts');
+});

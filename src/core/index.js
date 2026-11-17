@@ -235,6 +235,7 @@ class DvrCore extends EventEmitter {
       return {
         id: cid, sourceId: id, number: prev.alias || c.number || '', sourceNumber: c.number || '', alias: prev.alias || '', name: c.name, callsign: c.callsign || '', tvgId: c.tvgId || '',
         logo: c.logo || prev.logo || '', group: c.group || '', city: c.city || '', hd: !!c.hd, streamUrl: c.streamUrl,
+        ...(c.catchupUrl ? { archiveDays: c.archiveDays || 1, catchupUrl: c.catchupUrl, catchupOffset: c.catchupOffset || 0 } : {}),
         hidden: prev.hidden || false, favorite: prev.favorite || false,
         mapMode: prev.mapMode || 'auto', guideId: prev.guideId || null, matchScore: prev.matchScore || 0, matchReason: prev.matchReason || '',
       };
