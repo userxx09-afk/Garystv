@@ -67,6 +67,9 @@ async function copyOnce(url, out, signal, ffmpeg) {
 // Returns { stop(), done: Promise<{ status, error }> }. onProgress(bytes) is called as data arrives.
 function startRecording({ url, file, until, ffmpeg, simulated, onProgress, log = () => {} }) {
   const ac = new AbortController();
+  let timer = null;
+  // The end can move while recording (End later); the timer is set again for the new end.
+  const arm = () => { clearTimeout(timer); timer = setTimeout(() => ac.abort(), Math.max(0, until - Date.now())); };
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const out = fs.createWriteStream(file, { flags: 'a' });
   let bytes = 0;
@@ -77,11 +80,11 @@ function startRecording({ url, file, until, ffmpeg, simulated, onProgress, log =
     let lastError = null;
     let lastLogged = null;
     let gaps = 0;
-    const timer = setTimeout(() => ac.abort(), Math.max(0, until - Date.now()));
+    arm();
     try {
       if (simulated) {
         out.write(Buffer.from('GarysTV practice recording - no real video.\n'));
-        await sleep(until - Date.now(), ac.signal);
+        await new Promise((r) => (ac.signal.aborted ? r() : ac.signal.addEventListener('abort', r, { once: true })));
       } else {
         while (!ac.signal.aborted && Date.now() < until) {
           try {
@@ -107,7 +110,8 @@ function startRecording({ url, file, until, ffmpeg, simulated, onProgress, log =
     return { status: gaps > 0 ? 'partial' : 'complete', error: gaps > 0 ? `${gaps} interruption(s)${lastError ? `: ${lastError}` : ''}` : null };
   })();
 
-  return { stop: () => ac.abort(), done, get bytes() { return bytes; } };
+  const setUntil = (t) => { if (ac.signal.aborted || !(t > 0)) return; until = t; arm(); };
+  return { stop: () => ac.abort(), setUntil, done, get bytes() { return bytes; }, get until() { return until; } };
 }
 
 // A quick look at a stream a few minutes before a timer starts: does it answer with video?

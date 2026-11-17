@@ -16,9 +16,14 @@ function episodeKey(p) {
   return ''; // can't tell episodes apart (news etc.) - never treated as a duplicate
 }
 
-function makeJob(rule, priority, channel, p, settings) {
+const isSports = (p) => (p.categories || []).some((c) => /sport|football|basketball|baseball|hockey|soccer/i.test(c));
+
+// Minutes to start early / end late: the timer's own choice, else (for games, which run over)
+// the sports default, else the general default. extraMin: "end later" added to just this airing.
+function makeJob(rule, priority, channel, p, settings, extraMin = 0) {
   const pre = (rule.prePad ?? settings.prePadMin ?? 1) * 60000;
-  const post = (rule.postPad ?? settings.postPadMin ?? 2) * 60000;
+  const sportsPost = isSports(p) && settings.sportsPostPadMin != null ? settings.sportsPostPadMin : null;
+  const post = ((rule.postPad ?? sportsPost ?? settings.postPadMin ?? 2) + (extraMin || 0)) * 60000;
   return {
     id: `${channel.id}@${p.start}`,
     ruleId: rule.id,
@@ -31,6 +36,7 @@ function makeJob(rule, priority, channel, p, settings) {
     end: p.end,
     recStart: p.start - pre,
     recEnd: p.end + post,
+    extraMin: extraMin || 0,
     title: p.title,
     subtitle: p.subtitle || '',
     desc: p.desc || '',
@@ -64,7 +70,7 @@ function manualAirings(rule, now, horizonEnd) {
 }
 
 // ctx: { rules, channels, programsFor(channel)->[], tunerCount(sourceId)->n,
-//        recordedKeys:Set, skipped:Set, active:Set(jobId), settings, now, horizonMs }
+//        recordedKeys:Set, skipped:Set, active:Set(jobId), extend(jobId)->minutes, settings, now, horizonMs }
 function buildSchedule(ctx) {
   const { rules, channels, programsFor, now, settings = {} } = ctx;
   const horizonEnd = now + (ctx.horizonMs || 8 * 86400000);
@@ -94,7 +100,8 @@ function buildSchedule(ctx) {
     }
 
     for (const [ch, p] of candidates) {
-      const job = makeJob(rule, priority, ch, p, settings);
+      const id = `${ch.id}@${p.start}`;
+      const job = makeJob(rule, priority, ch, p, settings, ctx.extend ? ctx.extend(id) : 0);
       if (job.recEnd <= now || job.start > horizonEnd || jobs.has(job.id)) continue;
       if (ctx.skipped && ctx.skipped.has(job.id)) {
         job.status = 'skipped'; job.reason = 'Cancelled by you';
@@ -149,4 +156,4 @@ function resolveConflicts(jobs, ctx) {
   }
 }
 
-module.exports = { buildSchedule, episodeKey, normTitle };
+module.exports = { buildSchedule, episodeKey, normTitle, isSports };
