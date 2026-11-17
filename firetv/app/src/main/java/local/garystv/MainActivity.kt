@@ -125,7 +125,8 @@ class MainActivity : Activity() {
     // Leaving the app (Home button) stops what's playing, so the server isn't streaming to nobody.
     override fun onStop() {
         super.onStop()
-        web.evaluateJavascript("window.Player && Player.mode && Player.stop(); window.App && App.render && App.render();", null)
+        // (The screens are top-level consts, not window properties, so typeof, not window.X.)
+        web.evaluateJavascript("if (typeof Multiview !== 'undefined' && Multiview.active) Multiview.stop(); if (typeof Player !== 'undefined' && Player.mode) Player.stop(); if (typeof App !== 'undefined' && App.render) App.render();", null)
     }
 
     override fun onDestroy() {

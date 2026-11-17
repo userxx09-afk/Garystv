@@ -431,6 +431,7 @@ document.addEventListener('keydown', (e) => {
     else if (leavesBox(a, e.key) && Nav.handle(e)) { a.blur(); e.preventDefault(); }
     return;
   }
+  if (Multiview.onKey(e)) { e.preventDefault(); return; } // the grid of channels gets every key while it's up
   if (Player.onKey(e)) { e.preventDefault(); return; } // while watching, holding ← keeps rewinding
   if (heldLeft(e)) { if (held.fired === 1) { held.fired = 2; App.toTop(); } e.preventDefault(); return; }
   if (Modal.top()) {

@@ -350,6 +350,13 @@ function createServer(core) {
     ['GET', '/api/diag', () => diag.overview()], // Settings > Status > Playback health
     ['POST', '/api/diag/playback', (q, b, p, req) => diag.report(b, req.socket.remoteAddress)], // each TV, every 15s while playing
     ['POST', '/api/timeshift/release', (q, b) => timeshift.release(b.channelId, b.viewer)],
+    ['POST', '/api/timeshift/leave', (q, b) => ({ stopped: timeshift.leave(String(b.viewer || '')) })], // a multiview tile closed: let go now
+    // Multiview: which of these channels can be added as a tile right now. A channel already being
+    // watched here (another tile) needs no new stream.
+    ['GET', '/api/multiview/room', (q) => Object.fromEntries(String(q.ids || '').split(',').filter(Boolean).slice(0, 300).map((id) => {
+      const r = core.tuners.room(id);
+      return [id, timeshift.sessions.has(id) ? { ...r, ok: true, shared: true } : r];
+    }).map(([id, r]) => [id, { ok: r.ok, paid: r.paid, shared: !!r.shared }]))],
     ['DELETE', '/api/recordings/:id', (q, b, p) => atPeer(p.id, 'DELETE') || core.deleteRecording(p.id)],
     ['POST', '/api/tools/:name/install', (q, b, p) => tools.install(p.name)],
     // Arlo cameras (core/arlo.js): Settings > Arlo, and Camera Keeper saying a motion clip has started.

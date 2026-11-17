@@ -585,6 +585,7 @@ const Player = {
     favs.forEach((f, i) => choices.push({ label: f.label, value: `fav${i}` }));
     const num = App.numberItem(ch, async (n) => { ch.number = n; await App.loadAll(); this.showOsd(`${n} ${ch.name}`); });
     if (num.length) choices.push({ label: num[0].label, value: 'num' });
+    choices.push({ label: '▦ Multiview: watch up to 4 channels', value: 'multi' });
     choices.push({ label: '🔢 Go to a channel number', value: 'pad' });
     if (App.recentChannelList().length > 1) choices.push({ label: '🕘 Recent channels...', value: 'recent' });
     choices.push({ label: '▦ Guide', value: 'guide' });
@@ -609,6 +610,7 @@ const Player = {
       else if (v === 'recordMenu') this.recordMenu();
       else if (v === 'live') this.goLive();
       else if (v === 'over') this.startOver();
+      else if (v === 'multi') Multiview.start(ch.id);
       else if (v === 'pause') this.togglePause();
       else if (v === 'guide') this.toGuide();
       else if (v === 'stopWatching') { this.stop(); App.render(); }
