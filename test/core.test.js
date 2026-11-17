@@ -182,6 +182,9 @@ test('Plans: one stream each, the same channel on another plan when one is busy'
   assert.equal(one.channel.id, 'a:1');
   assert.equal(t.acquire('a:1', 'live', 'ESPN').channel.id, 'b:1'); // plan a busy: ESPN on plan b
   assert.throws(() => t.acquire('a:2', 'live', 'Hallmark'), (e) => e.status === 409 && /Plan a is in use.*watching ESPN/.test(e.message));
+  // Multiview: ESPN uses both plans now, so neither plan's channels can be another tile; Free TV can.
+  assert.deepEqual(t.room('a:2'), { ok: false, paid: true, free: 0 });
+  assert.deepEqual(t.room('f:1'), { ok: true, paid: false, free: Infinity });
   for (let i = 0; i < 8; i++) t.acquire('f:1', 'live'); // free channels have no limit
   // A recording takes the plan from someone watching here; they're told why.
   let told = '';

@@ -85,6 +85,19 @@ class Tuners {
     return this.idx;
   }
 
+  // Multiview: could one more stream of this channel start now? Free TV never counts; a paid
+  // plan (IPTV) or antenna box only while one of the plans with this channel has a stream free.
+  // -> { ok, paid, free } (free: streams left on the best plan; Infinity for Free TV).
+  room(channelId) {
+    let list;
+    try { list = this.choices(channelId); } catch (_) { return { ok: false, paid: false, free: 0 }; }
+    const caps = list.map((c) => this.source(c.sourceId)).filter(Boolean).map((src) => ({ src, free: this.free(src) }));
+    const unlimited = caps.some((x) => x.free === Infinity);
+    const free = unlimited ? Infinity : Math.max(0, ...caps.map((x) => x.free));
+    const paid = !unlimited && caps.some((x) => x.src.type !== 'hdhomerun' && x.src.type !== 'demo');
+    return { ok: free > 0, paid, free };
+  }
+
   // Takes a plan for a stream of this channel. -> { id, channel } (channel may be the same channel
   // on another plan). kind 'rec' may take a plan from someone watching here (they get a message).
   acquire(channelId, kind, what = '', onBump = null) {
