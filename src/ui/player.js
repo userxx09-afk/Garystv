@@ -144,6 +144,7 @@ const Player = {
         if (this.mode !== 'off') this.stop();
         App.lastChannel = id;
         try { localStorage.setItem('gtv.lastChannel', id); } catch (_) { /* private mode */ }
+        App.noteRecent(id);
         return;
       }
     }
@@ -164,7 +165,7 @@ const Player = {
     this.channel = kind === 'live' ? App.state.channels.find((c) => c.id === id) : null;
     if (kind === 'rec' && this.rec) this.duration = ((this.rec.finishedAt || Date.now()) - this.rec.recordedAt) / 1000;
     if (kind === 'vod') this.duration = this.rec.duration || 0; // 0: the provider didn't say
-    if (this.channel) { App.lastChannel = id; try { localStorage.setItem('gtv.lastChannel', id); } catch (_) { /* private mode */ } }
+    if (this.channel) { App.lastChannel = id; try { localStorage.setItem('gtv.lastChannel', id); } catch (_) { /* private mode */ } App.noteRecent(id); }
     Health.begin(kind, id, this.channel ? [this.channel.number, this.channel.name].filter(Boolean).join(' ') : this.rec ? this.rec.title : id);
     if (kind === 'live') this.playLive(id);
     else this.playRec(kind, id, offset);
@@ -488,6 +489,8 @@ const Player = {
     const ch = this.channel, p = this.currentProgram(), now = Date.now();
     const active = this.recording();
     const choices = [];
+    const prev = App.previousChannel();
+    if (prev) choices.push({ label: `↩ Previous channel: ${prev.number} ${prev.name}`, value: 'prev', cls: 'primary' });
     if (active) choices.push({ label: `■ Stop recording "${active.title}"`, value: 'stop', cls: 'danger' });
     if (p && !p.filler && !(active && active.title === p.title)) choices.push({ label: `● This show: ${p.title} (until ${fmt.time(p.end)})`, value: 'show' });
     for (const [min, label] of [[30, '30 minutes'], [60, '1 hour'], [120, '2 hours'], [180, '3 hours']]) choices.push({ label: `● Record now for ${label}`, value: min });
@@ -523,6 +526,8 @@ const Player = {
   async optionsMenu() {
     const ch = this.channel, p = this.currentProgram(), active = this.recording();
     const choices = [];
+    const prev = App.previousChannel();
+    if (prev) choices.push({ label: `↩ Previous channel: ${prev.number} ${prev.name}`, value: 'prev', cls: 'primary' });
     if (active) choices.push({ label: `■ Stop recording "${active.title}"`, value: 'stop', cls: 'danger' });
     else choices.push({ label: p && !p.filler ? `● Record now: ${p.title} (until ${fmt.time(p.end)})` : '● Record now (until I stop it)', value: 'record' });
     choices.push({ label: '● More ways to record...', value: 'recordMenu' });
@@ -533,6 +538,7 @@ const Player = {
     const num = App.numberItem(ch, async (n) => { ch.number = n; await App.loadAll(); this.showOsd(`${n} ${ch.name}`); });
     if (num.length) choices.push({ label: num[0].label, value: 'num' });
     choices.push({ label: '🔢 Go to a channel number', value: 'pad' });
+    if (App.recentChannelList().length > 1) choices.push({ label: '🕘 Recent channels...', value: 'recent' });
     choices.push({ label: '▦ Guide', value: 'guide' });
     choices.push({ label: '■ Stop watching', value: 'stopWatching' });
     if (this.canVlc()) choices.push({ label: '▶ Play in VLC instead', value: 'vlc' });
@@ -549,7 +555,9 @@ const Player = {
           await App.loadAll();
           this.showOsd('Recording until you stop it. Hold OK to stop.');
         }
-      } else if (v === 'stop') await this.stopRecording(active);
+      } else if (v === 'prev') this.previousChannel();
+      else if (v === 'recent') await this.recentMenu();
+      else if (v === 'stop') await this.stopRecording(active);
       else if (v === 'recordMenu') this.recordMenu();
       else if (v === 'live') this.goLive();
       else if (v === 'pause') this.togglePause();
@@ -606,6 +614,20 @@ const Player = {
     if (v === 'vlc') this.openVlc(this.kind, this.id, this.rec);
   },
 
+  // The channel watched before this one (the remote's PREV CH / LAST button, or hold OK).
+  previousChannel() {
+    const prev = App.previousChannel();
+    if (!prev) { this.showOsd('No previous channel yet'); return; }
+    this.play('live', prev.id);
+  },
+
+  async recentMenu() {
+    const list = App.recentChannelList().filter((c) => !this.channel || c.id !== this.channel.id);
+    if (!list.length) { this.showOsd('No recent channels yet'); return; }
+    const v = await Modal.menu('Recent channels', '', [...list.map((c) => ({ label: `${c.number} ${c.name}`, value: c.id })), { label: 'Cancel', value: null }]);
+    if (v) this.play('live', v);
+  },
+
   surf(delta) {
     const rows = App.guideRows || [];
     if (!rows.length || !this.channel) return;
@@ -627,6 +649,9 @@ const Player = {
     if (this.rec && k === 'Enter' && this.breakNow()) { this.act('skip'); return true; }
     if (this.channel && k === 'ArrowUp') { this.surf(-1); return true; }
     if (this.channel && k === 'ArrowDown') { this.surf(1); return true; }
+    if (this.channel && k === 'ChannelUp') { this.surf(1); return true; }
+    if (this.channel && k === 'ChannelDown') { this.surf(-1); return true; }
+    if (k === 'PreviousChannel' || (this.channel && (k === 'p' || k === 'P'))) { this.previousChannel(); return true; }
     if (this.channel && (/^[0-9.]$/.test(k) || k === '#')) { this.pad(k === '#' ? '' : k); return true; }
     if (this.channel && (k === 'g' || k === 'G')) { this.toGuide(); return true; }
     if (this.channel && (k === 'r' || k === 'R')) { this.recordMenu(); return true; }

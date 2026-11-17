@@ -99,6 +99,24 @@ const App = {
     if (view !== GuideView) Nav.restore(keep);
   },
 
+  // ---------- recent channels ----------
+  // The last 10 live channels watched on this device, newest first (for PREV CH and Recent channels).
+  recentIds() { try { return JSON.parse(localStorage.getItem('gtv.recent') || '[]'); } catch (_) { return []; } },
+  noteRecent(id) {
+    const ids = [id, ...this.recentIds().filter((x) => x !== id)].slice(0, 10);
+    try { localStorage.setItem('gtv.recent', JSON.stringify(ids)); } catch (_) { /* private mode */ }
+  },
+  recentChannelList() {
+    const byId = new Map(((this.state && this.state.channels) || []).filter((c) => !c.hidden).map((c) => [c.id, c]));
+    return this.recentIds().map((id) => byId.get(id)).filter(Boolean);
+  },
+  // The channel before the one watched last (or before the one playing now).
+  previousChannel() {
+    const list = this.recentChannelList();
+    const now = typeof Player !== 'undefined' && Player.channel ? Player.channel.id : list[0] && list[0].id;
+    return list.find((c) => c.id !== now) || null;
+  },
+
   // ---------- recording actions ----------
   jobFor(row, p) { return this.schedule.find((j) => j.id === `${row.id}@${p.start}`); },
   seriesRuleFor(p) {
@@ -422,6 +440,7 @@ document.addEventListener('keydown', (e) => {
   }
   if (App.view && App.view.onKey && App.view.onKey(e)) { e.preventDefault(); return; }
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (k === 'PreviousChannel' && !Modal.top()) { Player.previousChannel(); e.preventDefault(); return; } // PREV CH from the guide too
   if ((k === 'ContextMenu' || k === 'm') && !(e.ctrlKey || e.altKey)) { App.menu(); e.preventDefault(); return; }
   const jumps = { g: 'guide', d: 'dvr', t: 'timers', s: 'search', h: 'home', Home: 'home', F1: 'guide' };
   if (jumps[k] && !(e.ctrlKey || e.altKey)) { App.go(jumps[k]); e.preventDefault(); return; }
