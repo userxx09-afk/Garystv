@@ -54,3 +54,16 @@ test('a recording that never connects fails with the real reason', async () => {
   assert.match(result.error, /ECONNREFUSED/);
   assert.ok(logs.length >= 1 && logs.every((m) => /ECONNREFUSED/.test(m)));
 });
+
+test('End later: a recording already going keeps going until the new end', async () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'gtv-')), 'x.ts');
+  const t0 = Date.now();
+  const h = startRecording({ url: '', file, until: t0 + 100, simulated: true });
+  h.setUntil(t0 + 400);
+  const res = await h.done;
+  assert.ok(Date.now() - t0 >= 380, 'ran until the new end');
+  assert.strictEqual(res.status, 'complete');
+});

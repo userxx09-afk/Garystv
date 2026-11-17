@@ -348,7 +348,8 @@ const TimersView = {
   describe(r) {
     const ch = r.channelId ? App.state.channels.find((c) => c.id === r.channelId) : null;
     const chName = ch ? `${ch.number} ${ch.name}` : 'Any channel';
-    if (r.type === 'once') return `This show only · ${fmt.when(r.start)} · ${chName}`;
+    const pad = [r.prePad ? `${r.prePad} min early` : '', r.postPad ? `${r.postPad} min late` : ''].filter(Boolean).join(', ');
+    if (r.type === 'once') return `This show only · ${fmt.when(r.start)} · ${chName}${pad ? ` · ${pad}` : ''}`;
     if (r.type === 'manual') return `${r.date ? r.date : (r.days || []).map((d) => 'Sun Mon Tue Wed Thu Fri Sat'.split(' ')[d]).join(', ')} at ${r.time} for ${r.minutes} min · ${chName}`;
     return `Series · ${r.newOnly ? 'New episodes' : 'All episodes'} · ${chName}${r.keep ? ` · Keep ${r.keep}` : ''}`;
   },
@@ -401,12 +402,17 @@ const TimersView = {
     if (!r) return;
     const choices = [];
     if (r.type === 'series') choices.push({ label: 'Change options', value: 'edit', cls: 'primary' });
+    if (r.type === 'once') choices.push({ label: 'Start early / end late...', value: 'pad', cls: 'primary' });
     choices.push({ label: '▲  Higher priority', value: 'up' }, { label: '▼  Lower priority', value: 'down' },
       { label: r.enabled === false ? 'Turn timer on' : 'Turn timer off', value: 'toggle' }, { label: '🗑  Delete timer', value: 'delete', cls: 'danger' }, { label: 'Cancel', value: null });
     const v = await Modal.menu(r.title, `<div class="s">${esc(this.describe(r))}</div>`, choices);
     if (v === 'edit') {
       const ch = r.channelId ? App.state.channels.find((c) => c.id === r.channelId) : null;
       await App.seriesDialog(ch ? { id: ch.id, number: ch.number, name: ch.name } : null, { title: r.title }, r);
+    }
+    if (v === 'pad') {
+      const pads = await App.padDialog(r.title, r, 'Save');
+      if (pads) { await api.put(`/api/rules/${r.id}`, pads); toast('Timer saved'); }
     }
     if (v === 'up' || v === 'down') await api.post(`/api/rules/${r.id}/move`, { delta: v === 'up' ? -1 : 1 });
     if (v === 'toggle') await api.put(`/api/rules/${r.id}`, { enabled: r.enabled === false });
@@ -418,10 +424,12 @@ const TimersView = {
     const choices = j.status === 'skipped' && j.reason === 'Cancelled by you'
       ? [{ label: 'Record this one after all', value: 'unskip', cls: 'primary' }]
       : [{ label: j.status === 'recording' ? '■  Stop recording' : 'Don\'t record this one', value: 'skip', cls: 'danger' }];
+    if (j.status === 'scheduled' || j.status === 'recording') choices.push({ label: '⏩  End later...', value: 'later' });
     choices.push({ label: 'Go to its timer', value: 'rule' }, { label: 'Cancel', value: null });
     const v = await Modal.menu(j.title, `<div class="s">${esc(fmt.when(j.start))} · ${esc(j.channelNumber)} ${esc(j.channelName)}${j.reason ? `<br>${esc(j.reason)}` : ''}</div>`, choices);
     if (v === 'skip' || v === 'unskip') await api.post('/api/jobs/skip', { id: j.id, skip: v === 'skip' });
     if (v === 'rule') { this.tab = 'rules'; App.render(`rule-${j.ruleId}`); }
+    if (v === 'later') await App.endLater(j);
   },
 
   menu() {

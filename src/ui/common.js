@@ -347,6 +347,10 @@ function sideScroll(row) {
 }
 
 // An option row that cycles values with Left/Right (like a TV menu).
+// Start early / End late choices for timers (null = the default in Settings › Recording).
+const PAD_EARLY = [{ label: 'Default', value: null }, { label: 'On time', value: 0 }, { label: '1 min', value: 1 }, { label: '2 min', value: 2 }, { label: '5 min', value: 5 }, { label: '10 min', value: 10 }];
+const PAD_LATE = [{ label: 'Default', value: null }, { label: 'On time', value: 0 }, { label: '2 min', value: 2 }, { label: '5 min', value: 5 }, { label: '15 min', value: 15 }, { label: '30 min', value: 30 }, { label: '1 hour', value: 60 }, { label: '2 hours', value: 120 }];
+
 function optionRow(label, values, index, onChange) {
   const el = document.createElement('div');
   el.className = 'opt nav';

@@ -515,7 +515,7 @@ const SettingsView = {
           <span class="s" style="font-size:.85rem">Making room deletes watched recordings first, then the oldest. ★ Saved recordings are never deleted. Camera clips have their own setting in Settings › Cameras.</span></div>
         ${num('recordingMinFreeGb', 'Keep at least this much free (GB)')}</div></div>
       <div class="box"><h3>Timing</h3>
-        <div class="row">${num('prePadMin', 'Start recordings early (minutes)')}${num('postPadMin', 'End recordings late (minutes)', 'Helps when live sports run over')}${num('guideHours', 'Guide hours to download')}</div></div>
+        <div class="row">${num('prePadMin', 'Start recordings early (minutes)')}${num('postPadMin', 'End recordings late (minutes)')}${num('sportsPostPadMin', 'End games late (minutes)', 'Sports run over, so games get this instead. A timer\'s own Start early / End late wins over both.')}${num('guideHours', 'Guide hours to download')}</div></div>
       <div class="box"><h3>Watching</h3>
         <div class="row">${num('timeshiftMinutes', 'Live TV rewind buffer (minutes)', 'How far back you can rewind live TV. Uses about 45 MB of disk per minute while watching; shortened automatically if the disk is nearly full.')}
         <div class="field"><label>Commercials in recordings</label><select data-s="commercialSkip">${[['auto', 'Skip automatically'], ['button', 'Ask: press OK to skip'], ['off', 'Do not look for commercials']].map(([v, l]) => `<option value="${v}" ${s.commercialSkip === v ? 'selected' : ''}>${l}</option>`).join('')}</select>

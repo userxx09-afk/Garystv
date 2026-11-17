@@ -106,10 +106,11 @@ const App = {
     return this.state.rules.find((r) => r.type === 'series' && r.title.toLowerCase().replace(/[^a-z0-9]/g, '') === t);
   },
 
-  async recordOnce(row, p) {
+  async recordOnce(row, p, pads = {}) {
     await api.post('/api/rules', {
       type: 'once', channelId: row.id, start: p.start, end: p.end, title: p.title, subtitle: p.subtitle || '', desc: p.desc || '',
       season: p.season ?? null, episode: p.episode ?? null, categories: p.categories || [], isNew: !!p.isNew, programId: p.programId || '',
+      ...(pads.prePad !== undefined ? { prePad: pads.prePad } : {}), ...(pads.postPad !== undefined ? { postPad: pads.postPad } : {}),
     });
     toast(`● Will record ${p.title}`);
     await this.loadAll();
@@ -162,6 +163,7 @@ const App = {
       const job = this.jobFor(row, p);
       if (job && job.status !== 'skipped') {
         if (job.status !== 'recording') items.push({ label: `✕ Don't record "${p.title}"`, run: () => this.cancelProgram(row, p) });
+        if (job.status === 'scheduled' || job.status === 'recording') items.push({ label: `⏩ End "${p.title}" later...`, run: () => this.endLater(job) });
       } else items.push({ label: `● Record "${p.title}"`, run: () => this.recordOnce(row, p) });
       const series = this.seriesRuleFor(p);
       items.push({ label: series ? '●● Change the series timer...' : `●● Record every episode of "${p.title}"...`, run: () => this.seriesDialog(row, p, series) });
@@ -262,6 +264,8 @@ const App = {
     if (airing) choices.push({ label: '▶  Watch now', value: 'watch', cls: 'primary' });
     if (job && job.status !== 'skipped') choices.push({ label: job.status === 'recording' ? '■  Stop recording this show' : '✕  Don\'t record this show', value: 'cancel', cls: 'danger' });
     else if (p.end > now) choices.push({ html: '<span class="dot"></span> Record this show', value: 'once', cls: airing ? '' : 'primary' });
+    if (p.end > now && (!job || job.status === 'skipped')) choices.push({ html: '<span class="dot"></span> Record, start early / end late...', value: 'oncePad' });
+    if (job && (job.status === 'scheduled' || job.status === 'recording')) choices.push({ label: '⏩  End later...', value: 'later' });
     choices.push(series ? { html: '<span class="dot series"></span> Change series timer', value: 'series' } : { html: '<span class="dot series"></span> Record series...', value: 'series' });
     choices.push({ label: 'Close', value: null });
     const body = `<div class="sub">${esc([fmt.se(p), p.subtitle].filter(Boolean).join('  ·  '))}</div>
@@ -272,9 +276,46 @@ const App = {
     try {
       if (v === 'watch') Player.play('live', row.id);
       if (v === 'once') await this.recordOnce(row, p);
+      if (v === 'oncePad') { const pads = await this.padDialog(p.title); if (pads) await this.recordOnce(row, p, pads); }
+      if (v === 'later') await this.endLater(job);
       if (v === 'cancel') await this.cancelProgram(row, p);
       if (v === 'series') await this.seriesDialog(row, p, series);
     } catch (e) { toast(e.message); }
+  },
+
+  // Start early / End late for one show. -> { prePad, postPad } or null if cancelled.
+  // current: the timer's values when changing one already set.
+  padDialog(title, current = {}, okLabel = 'Record this show') {
+    const o = { prePad: current.prePad ?? null, postPad: current.postPad ?? null };
+    return Modal.open((m, close) => {
+      m.innerHTML = `<div class="title">${esc(title)}</div><div class="s">Use ←/→ to change an option. Default uses Settings › Recording (games end later).</div><div class="menu-list" id="opts"></div>
+        <div class="actions"><div class="btn nav primary" id="ok">${esc(okLabel)}</div><div class="btn nav" id="cx">Cancel</div></div>`;
+      const opts = $('#opts', m);
+      const idx = (vals, v) => Math.max(0, vals.findIndex((x) => x.value === v));
+      opts.appendChild(optionRow('Start early', PAD_EARLY, idx(PAD_EARLY, o.prePad), (v) => { o.prePad = v; }));
+      opts.appendChild(optionRow('End late', PAD_LATE, idx(PAD_LATE, o.postPad), (v) => { o.postPad = v; }));
+      $('#cx', m).onclick = () => close(null);
+      $('#ok', m).onclick = () => close(o);
+    });
+  },
+
+  // A game running over: add time to the end of this one airing (a recording already going keeps going).
+  async endLater(job) {
+    if (!job) return;
+    const extra = job.extraMin || 0;
+    const choices = [[15, '15 minutes'], [30, '30 minutes'], [60, '1 hour'], [120, '2 hours']]
+      .map(([min, label]) => ({ label: `+ ${label}`, value: extra + min }));
+    if (extra) choices.push({ label: `Take off the extra ${extra} min`, value: 0 });
+    choices.push({ label: 'Cancel', value: null });
+    const ends = new Date(job.recEnd).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const v = await Modal.menu(`End "${job.title}" later`, `<div class="s">Now ends at ${esc(ends)}${extra ? ` (${extra} min added)` : ''}.</div>`, choices);
+    if (v == null) return;
+    try {
+      await api.post('/api/jobs/extend', { id: job.id, minutes: v });
+      const at = new Date(job.recEnd + (v - extra) * 60000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      toast(`"${job.title}" now records until ${at}`);
+    } catch (e) { toast(e.message); }
+    await this.loadAll();
   },
 
   seriesDialog(row, p, existing) {
@@ -288,8 +329,8 @@ const App = {
       add('Episodes', [{ label: 'New only', value: true }, { label: 'All (including reruns)', value: false }], 'newOnly');
       if (row) add('Channel', [{ label: `${row.number} ${row.name} only`, value: row.id }, { label: 'Any channel', value: null }], 'channelId');
       add('Keep', [{ label: 'All episodes', value: 0 }, { label: 'Latest 3', value: 3 }, { label: 'Latest 5', value: 5 }, { label: 'Latest 10', value: 10 }], 'keep');
-      add('Start early', [{ label: 'Default', value: null }, { label: 'On time', value: 0 }, { label: '2 min', value: 2 }, { label: '5 min', value: 5 }], 'prePad');
-      add('End late', [{ label: 'Default', value: null }, { label: 'On time', value: 0 }, { label: '5 min', value: 5 }, { label: '15 min', value: 15 }, { label: '30 min', value: 30 }, { label: '1 hour', value: 60 }], 'postPad');
+      add('Start early', PAD_EARLY, 'prePad');
+      add('End late', PAD_LATE, 'postPad');
       $('#cx', m).onclick = () => close();
       if (existing) $('#del', m).onclick = async () => { await api.del(`/api/rules/${existing.id}`); toast('Series timer deleted'); close(true); };
       $('#ok', m).onclick = async () => {

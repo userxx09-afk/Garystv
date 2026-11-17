@@ -49,6 +49,7 @@ const DEFAULT_SETTINGS = {
   recordingsDir: path.join(os.homedir(), 'Videos', 'GarysTV'),
   prePadMin: 1,
   postPadMin: 2,
+  sportsPostPadMin: 30, // games run over: sports shows end this much late unless their timer says otherwise
   guideHours: 72,
   guideRefreshHours: 12,
   port: 5480,
@@ -90,6 +91,8 @@ class DvrCore extends EventEmitter {
   get recordings() { return this.store.read('recordings', []); }
   get guideData() { return this.store.read('guidedata', { channels: [], programs: {} }); }
   get skipped() { return this.store.read('skipped', []); }
+  // "End later" for one airing: { jobId: extra minutes }.
+  get extensions() { return this.store.read('extensions', {}); }
   get favLists() { return this.store.read('favlists', []); } // [{ id, name, channelIds }], e.g. "Gary's Favorites"
 
   changed(what) {
@@ -567,6 +570,19 @@ class DvrCore extends EventEmitter {
     this.changed('rules');
   }
 
+  // Adds minutes to the end of one airing (a game running over). A recording already going
+  // keeps going until the new end. minutes 0 takes the extra time off again.
+  extendJob(jobId, minutes) {
+    const ext = { ...this.extensions };
+    const m = Math.max(0, Math.min(6 * 60, Math.round(+minutes || 0)));
+    if (m) ext[jobId] = m; else delete ext[jobId];
+    // Forget airings that ended long ago.
+    for (const id of Object.keys(ext)) { const t = +id.split('@').pop(); if (t && t < Date.now() - 2 * 86400000) delete ext[id]; }
+    this.store.write('extensions', ext);
+    this.changed('rules');
+    return { jobId, minutes: m };
+  }
+
   getSchedule() {
     if (this.schedule && Date.now() - this.scheduleAt < 30000) return this.schedule;
     const tuners = new Map(this.sources.map((s) => [s.id, capacity(s)]));
@@ -582,6 +598,7 @@ class DvrCore extends EventEmitter {
       recordedKeys: new Set(this.recordings.filter((r) => r.status !== 'failed' && r.episodeKey).map((r) => r.episodeKey)),
       skipped: new Set(this.skipped),
       active: new Set(this.active.keys()),
+      extend: ((ext) => (id) => ext[id] || 0)(this.extensions),
       settings: this.settings,
       now: Date.now(),
     });
@@ -618,6 +635,9 @@ class DvrCore extends EventEmitter {
     }
     const jobs = this.getSchedule();
     for (const job of jobs) {
+      const running = this.active.get(job.id);
+      // A changed end (End later, or the timer's padding changed) reaches a recording already going.
+      if (running && running.until !== job.recEnd && running.handle.setUntil) { running.handle.setUntil(job.recEnd); running.until = job.recEnd; }
       if (job.status === 'scheduled' && !this.active.has(job.id) && job.recStart <= now && now < job.recEnd) this.startJob(job);
       else if (job.status === 'scheduled' && job.recStart > now && job.recStart - now <= PRECHECK_MS) this.precheck(job);
     }
@@ -726,7 +746,7 @@ class DvrCore extends EventEmitter {
       url: channel.streamUrl, file, until: job.recEnd, simulated: rec.simulated, ffmpeg: findFfmpeg(this.settings),
       log: (m) => this.note(`${job.title}: ${m}`),
     });
-    this.active.set(job.id, { handle, recId: rec.id, ruleId: job.ruleId });
+    this.active.set(job.id, { handle, recId: rec.id, ruleId: job.ruleId, until: job.recEnd });
     const why = preferred && preferred === channel.id && check.switched ? "the usual feed didn't answer the stream check" : 'the usual plan was busy';
     this.note(`recording started: ${job.title} on ${channel.number} ${channel.name}${channel.id !== job.channelId ? ` (${(this.sources.find((x) => x.id === channel.sourceId) || {}).name}, ${why})` : ''}`);
     this.changed('recordings');

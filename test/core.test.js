@@ -411,3 +411,24 @@ test('changing channel frees a one-stream plan at once, not after the grace peri
     assert.deepStrictEqual([...ts.sessions.keys()], ['c']);
   } finally { ts.stopAll(); }
 });
+
+test('padding: games end later by default; a timer\'s own choice and End later win', () => {
+  const { buildSchedule } = require('../src/core/scheduler');
+  const now = Date.now();
+  const H = 3600000;
+  const chans = [{ id: 'c1', sourceId: 's', number: '1', name: 'One' }];
+  const game = { start: now + H, end: now + 2 * H, title: 'Big Game', categories: ['Sports event'] };
+  const show = { start: now + 3 * H, end: now + 4 * H, title: 'Drama', categories: ['Drama'] };
+  const settings = { prePadMin: 1, postPadMin: 2, sportsPostPadMin: 30 };
+  const run = (rules, extend) => Object.fromEntries(buildSchedule({ rules, channels: chans, programsFor: () => [game, show], tunerCount: () => 2, now, settings, extend }).map((j) => [j.title, j]));
+  let jobs = run([{ id: 'a', type: 'once', channelId: 'c1', ...game }, { id: 'b', type: 'once', channelId: 'c1', ...show }]);
+  assert.equal(jobs['Big Game'].recEnd, game.end + 30 * 60000);
+  assert.equal(jobs['Big Game'].recStart, game.start - 60000);
+  assert.equal(jobs.Drama.recEnd, show.end + 2 * 60000);
+  jobs = run([{ id: 'a', type: 'once', channelId: 'c1', ...game, prePad: 5, postPad: 0 }]);
+  assert.equal(jobs['Big Game'].recEnd, game.end);
+  assert.equal(jobs['Big Game'].recStart, game.start - 5 * 60000);
+  jobs = run([{ id: 'a', type: 'once', channelId: 'c1', ...game }], (id) => (id === `c1@${game.start}` ? 60 : 0));
+  assert.equal(jobs['Big Game'].recEnd, game.end + 90 * 60000);
+  assert.equal(jobs['Big Game'].extraMin, 60);
+});
