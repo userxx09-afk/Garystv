@@ -65,6 +65,8 @@ function decodeArgs(input, { live, seek = 0, copy = false }) {
     else args.push('-readrate', '1', '-readrate_initial_burst', '6');
     if (input.hls) args.push(...HLS_INPUT);
     if (/^https?:/i.test(input.url)) args.push(...RECONNECT);
+    // A file still being written: wait at its end for more, and stop 20s after it stops growing.
+    if (input.growing) args.push('-follow', '1', '-rw_timeout', '20000000');
     args.push('-i', input.url);
   }
   args.push('-map', '0:v:0', '-map', input.lavfi ? '1:a:0' : '0:a:0?');
@@ -169,7 +171,8 @@ function playerInput(core, kind, id) {
   const rec = core.recordings.find((r) => r.id === id);
   if (!rec) throw new Error('Recording not found');
   if (rec.simulated) return { lavfi: `testsrc2=size=1280x720:rate=30`, title: rec.title };
-  return { url: rec.file, title: rec.title };
+  // Still recording (Start over on a show being recorded): keep reading as the file grows.
+  return { url: rec.file, title: rec.title, growing: rec.status === 'recording' };
 }
 
 // The video as it comes, without ffmpeg, for VLC on a TV (the backup player). A recording is
@@ -255,7 +258,7 @@ function createServer(core) {
       // The TMDb key itself stays on the server; screens only learn whether there is one.
       settings: { ...core.settings, tmdbKey: undefined, tmdbKeyFrom: tmdb.keySource() }, types: core.describeTypes(), sources: core.sources, guides: core.guides,
       // Not the stream addresses: the screens play through /stream, and IPTV ones hold the login.
-      channels: core.channels.map(({ streamUrl, ...c }) => c), guideChannels: core.guideData.channels.map(({ id, names, number, providerName }) => ({ id, names, number, providerName })),
+      channels: core.channels.map(({ streamUrl, catchupUrl, ...c }) => c), // both hold the IPTV login guideChannels: core.guideData.channels.map(({ id, names, number, providerName }) => ({ id, names, number, providerName })),
       rules: core.rules, status: { ...core.status(), tools: tools.status(), platform: process.platform, version: VERSION }, favLists: core.favLists,
     })],
     // Linked GarysTVs at other locations (peers.js).
@@ -509,7 +512,16 @@ function createServer(core) {
 function leaseFor(core, req, kind, id) {
   let lease = null;
   if (kind === 'vod') {
-    lease = core.tuners.acquireSource(String(id).split('~')[1], 'a movie', () => req.destroy());
+    const srcId = String(id).split('~')[1];
+    const what = String(id).startsWith('c~') ? 'Start over' : 'a movie';
+    try {
+      lease = core.tuners.acquireSource(srcId, what, () => req.destroy());
+    } catch (e) {
+      // The plan is busy with the live buffer this TV just left (Start over from live): let it go.
+      const viewer = new URL(req.url, 'http://x').searchParams.get('v');
+      if (e.status !== 409 || !core.timeshift || !(core.timeshift.leave(viewer) || core.timeshift.stopIdle())) throw e;
+      lease = core.tuners.acquireSource(srcId, what, () => req.destroy());
+    }
   } else if (kind === 'live') {
     const ch = core.channels.find((c) => c.id === id);
     if (!ch || !ch.streamUrl) return null;

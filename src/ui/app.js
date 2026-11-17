@@ -280,6 +280,7 @@ const App = {
     const series = this.seriesRuleFor(p);
     const choices = [];
     if (airing) choices.push({ label: '▶  Watch now', value: 'watch', cls: 'primary' });
+    if (airing && Player.startOverChoice(row, p)) choices.push({ label: '⟲  Start over (from the beginning)', value: 'over' });
     if (job && job.status !== 'skipped') choices.push({ label: job.status === 'recording' ? '■  Stop recording this show' : '✕  Don\'t record this show', value: 'cancel', cls: 'danger' });
     else if (p.end > now) choices.push({ html: '<span class="dot"></span> Record this show', value: 'once', cls: airing ? '' : 'primary' });
     if (p.end > now && (!job || job.status === 'skipped')) choices.push({ html: '<span class="dot"></span> Record, start early / end late...', value: 'oncePad' });
@@ -293,6 +294,7 @@ const App = {
     const v = await Modal.menu(p.title, body, choices);
     try {
       if (v === 'watch') Player.play('live', row.id);
+      if (v === 'over') Player.startOver(row, p);
       if (v === 'once') await this.recordOnce(row, p);
       if (v === 'oncePad') { const pads = await this.padDialog(p.title); if (pads) await this.recordOnce(row, p, pads); }
       if (v === 'later') await this.endLater(job);

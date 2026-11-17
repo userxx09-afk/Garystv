@@ -40,6 +40,27 @@ async function login(config) {
   throw new Error(`No server accepted the login (${problems.join('; ')}).`);
 }
 
+// How far the panel's clock is ahead of UTC, in minutes: catch-up addresses use its local time.
+// server_info.time_now is its wall clock ("2026-11-17 06:12:44"), timestamp_now the same moment
+// in Unix seconds. Rounded to a quarter hour so request latency never shifts a show. 0 if unknown.
+function serverOffsetMinutes(info) {
+  const d = String((info && info.time_now) || '').replace(/\D/g, '');
+  const ts = +(info && info.timestamp_now);
+  if (d.length < 12 || !ts) return 0;
+  const local = Date.UTC(+d.slice(0, 4), +d.slice(4, 6) - 1, +d.slice(6, 8), +d.slice(8, 10), +d.slice(10, 12), +(d.slice(12, 14) || 0)) / 1000;
+  const q = Math.round((local - ts) / 60 / 15) * 15;
+  return Math.max(-14 * 60, Math.min(14 * 60, q));
+}
+
+// The provider's recording of a show that already started (its "catch-up" / TV archive), from
+// the show's start, for `minutes`. template has {duration} and {start} in it (see scan).
+function catchupUrl(template, offsetMin, startMs, minutes) {
+  const t = new Date(startMs + (offsetMin || 0) * 60000);
+  const p2 = (n) => String(n).padStart(2, '0');
+  const start = `${t.getUTCFullYear()}-${p2(t.getUTCMonth() + 1)}-${p2(t.getUTCDate())}:${p2(t.getUTCHours())}-${p2(t.getUTCMinutes())}`;
+  return template.replace('{duration}', String(Math.max(1, Math.ceil(minutes)))).replace('{start}', start);
+}
+
 module.exports = {
   type: 'xtream',
   label: 'IPTV provider (server, username & password)',
@@ -54,6 +75,8 @@ module.exports = {
   servers,
   login,
   api,
+  serverOffsetMinutes,
+  catchupUrl,
 
   async scan(config) {
     const { base, account } = await login(config);
@@ -73,6 +96,7 @@ module.exports = {
     const ext = !formats.length || formats.includes('ts') ? 'ts' : 'm3u8';
     const enc = encodeURIComponent;
     const first = parseInt(config.firstNumber, 10) || 1000;
+    const offset = serverOffsetMinutes(account.server_info);
     const channels = kept
       .sort((a, b) => (+a.num || 0) - (+b.num || 0))
       .map((s, i) => ({
@@ -83,6 +107,12 @@ module.exports = {
         logo: s.stream_icon || '',
         group: s.group,
         streamUrl: `${base}/live/${enc(config.username)}/${enc(config.password)}/${s.stream_id}.${ext}`,
+        // Provider keeps this channel's past shows (Start over / catch-up): for how many days.
+        ...(String(s.tv_archive) === '1' ? {
+          archiveDays: Math.max(1, parseInt(s.tv_archive_duration, 10) || 1),
+          catchupUrl: `${base}/timeshift/${enc(config.username)}/${enc(config.password)}/{duration}/{start}/${s.stream_id}.ts`,
+          catchupOffset: offset,
+        } : {}),
       }));
 
     const allowed = parseInt(account.user_info.max_connections, 10) || 1;
