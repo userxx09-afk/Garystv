@@ -59,6 +59,7 @@ class MainActivity : Activity() {
         KeyEvent.KEYCODE_GUIDE to 458,
         KeyEvent.KEYCODE_INFO to 457,
         KeyEvent.KEYCODE_LAST_CHANNEL to 10190, // previous channel, on remotes that have the button
+        KeyEvent.KEYCODE_CAPTIONS to 10221, // CC, on remotes that have the button
     )
 
     @SuppressLint("SetJavaScriptEnabled")
