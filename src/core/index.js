@@ -761,6 +761,7 @@ class DvrCore extends EventEmitter {
       this.applyKeepLimit(job.ruleId);
       this.changed('recordings');
       if (size && !rec.simulated) this.queueCommercials(rec.id);
+      if (size && !rec.simulated && this.captions) this.captions.add(rec.id); // read its captions out now, ready for watching
     });
   }
 
@@ -820,6 +821,7 @@ class DvrCore extends EventEmitter {
     if (rec.status === 'importing') await this.importer.cancel(id);
     try { fs.unlinkSync(rec.file); } catch (_) {}
     try { fs.rmdirSync(path.dirname(rec.file)); } catch (_) { /* folder not empty */ }
+    if (this.captions) this.captions.remove(id);
     this.store.write('recordings', this.recordings.filter((r) => r.id !== id));
     this.changed('recordings');
   }

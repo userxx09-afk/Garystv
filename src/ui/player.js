@@ -132,6 +132,8 @@ const Player = {
   mode: 'off', // off | full | pip
   kind: null, id: null, offset: 0, duration: 0, rec: null, channel: null, mp: null, hls: null,
   osdTimer: null, tickTimer: null, saveTimer: null, session: 0, retries: 0, passed: new Set(), prompted: null,
+  cc: (() => { try { return localStorage.getItem('gtv.cc') === '1'; } catch (_) { return false; } })(), // captions on, on this TV
+  ccTrack: null, // the track recordings' captions go in (one, reused: tracks can't be removed)
 
   // kind: live | rec (a recording) | vod (a movie or episode from the IPTV provider; item = { title,
   // subtitle, duration, poster, showId } from the Movies / Shows screens)
@@ -169,6 +171,8 @@ const Player = {
     Health.begin(kind, id, this.channel ? [this.channel.number, this.channel.name].filter(Boolean).join(' ') : this.rec ? this.rec.title : id);
     if (kind === 'live') this.playLive(id);
     else this.playRec(kind, id, offset);
+    if (this.ccTrack) for (const c of [...(this.ccTrack.cues || [])]) this.ccTrack.removeCue(c);
+    if (kind === 'rec' && this.cc) this.loadRecCaptions(id, offset, this.session);
     this.setMode('full');
     this.showOsd();
     clearInterval(this.tickTimer);
@@ -363,6 +367,48 @@ const Player = {
     }
   },
 
+  // ---------- closed captions ----------
+  // Live TV: the captions come inside the video and hls.js makes a text track of them.
+  // Recordings: the engine reads them out into WebVTT (core/captions.js), added as cues here.
+  captionTracks() { return [...$('#video').textTracks].filter((t) => t.kind === 'captions' || t.kind === 'subtitles'); },
+  applyCaptions() {
+    const tracks = this.captionTracks();
+    // Only one showing: the first that has captions (CC1), or the recording's own.
+    const pick = this.kind === 'live' ? tracks.find((t) => t !== this.ccTrack) : this.ccTrack;
+    for (const t of tracks) {
+      const want = this.cc && t === pick ? 'showing' : 'disabled';
+      if (t.mode !== want) t.mode = want;
+    }
+  },
+  toggleCaptions() {
+    this.cc = !this.cc;
+    try { localStorage.setItem('gtv.cc', this.cc ? '1' : '0'); } catch (_) { /* private mode */ }
+    if (this.cc && this.kind === 'rec' && this.rec) this.loadRecCaptions(this.rec.id, this.offset, this.session);
+    this.applyCaptions();
+    const none = this.cc && this.kind === 'live' && !this.captionTracks().some((t) => t !== this.ccTrack);
+    this.showOsd(!this.cc ? 'Captions off' : none ? 'Captions on. This channel hasn\'t sent any yet (not every channel has them).' : 'Captions on');
+  },
+  async loadRecCaptions(id, offset, session) {
+    const v = $('#video');
+    if (!this.ccTrack) this.ccTrack = v.addTextTrack('captions', 'English', 'en');
+    const track = this.ccTrack;
+    for (const c of [...(track.cues || [])]) track.removeCue(c);
+    if (String(id).startsWith('~')) return; // a recording at the other place: none here
+    try {
+      const res = await fetch(server(`/captions/rec/${encodeURIComponent(id)}`));
+      if (session !== this.session) return;
+      if (res.status === 202) { if (this.cc) this.showOsd('Captions for this recording are still being read from it. Try again in a few minutes.'); return; }
+      const cues = parseVtt(await res.text());
+      if (session !== this.session) return;
+      if (!cues.length && this.cc) this.showOsd('This recording has no captions.');
+      for (const c of cues) {
+        const start = c.start - offset, end = c.end - offset;
+        if (end > 0) try { track.addCue(new VTTCue(Math.max(0, start), end, c.text)); } catch (_) { /* odd cue */ }
+      }
+      this.applyCaptions();
+    } catch (_) { /* no captions this time */ }
+  },
+
   goLive() {
     const r = this.liveRange(), v = $('#video');
     if (!r) return;
@@ -406,6 +452,7 @@ const Player = {
   tick() {
     if (this.mode === 'off') return;
     const v = $('#video');
+    this.applyCaptions();
     if (this.kind === 'live') {
       const r = this.liveRange();
       if (r && v.currentTime < r.start + 0.5 && r.edge - r.start > 5) v.currentTime = r.start + 3; // paused so long the oldest part was dropped
@@ -585,6 +632,7 @@ const Player = {
     favs.forEach((f, i) => choices.push({ label: f.label, value: `fav${i}` }));
     const num = App.numberItem(ch, async (n) => { ch.number = n; await App.loadAll(); this.showOsd(`${n} ${ch.name}`); });
     if (num.length) choices.push({ label: num[0].label, value: 'num' });
+    choices.push({ label: this.cc ? '㏄ Captions: on (turn off)' : '㏄ Captions: off (turn on)', value: 'cc' });
     choices.push({ label: '▦ Multiview: watch up to 4 channels', value: 'multi' });
     choices.push({ label: '🔢 Go to a channel number', value: 'pad' });
     if (App.recentChannelList().length > 1) choices.push({ label: '🕘 Recent channels...', value: 'recent' });
@@ -611,6 +659,7 @@ const Player = {
       else if (v === 'live') this.goLive();
       else if (v === 'over') this.startOver();
       else if (v === 'multi') Multiview.start(ch.id);
+      else if (v === 'cc') this.toggleCaptions();
       else if (v === 'pause') this.togglePause();
       else if (v === 'guide') this.toGuide();
       else if (v === 'stopWatching') { this.stop(); App.render(); }
@@ -656,6 +705,7 @@ const Player = {
     if (liveCh) choices.push({ label: '⏩ Back to live TV', value: 'backLive' });
     if (this.position() > 30) choices.push({ label: '⟲ Start over', value: 'over' });
     choices.push({ label: '↺ Back 5 minutes', value: 'back5' });
+    if (this.kind === 'rec') choices.push({ label: this.cc ? '㏄ Captions: on (turn off)' : '㏄ Captions: off (turn on)', value: 'cc' });
     if (this.canVlc()) choices.push({ label: '▶ Play in VLC instead', value: 'vlc' });
     choices.push({ label: '■ Stop watching', value: 'stop' }, { label: '⌂ Home', value: 'home' }, { label: 'Cancel', value: null });
     const v = await Modal.menu(r.title || 'Playing', r.subtitle ? `<div class="s">${esc(r.subtitle)}</div>` : '', choices);
@@ -663,6 +713,7 @@ const Player = {
     if (v === 'over') this.seekTo(this.kind === 'rec' && r.start && r.recordedAt < r.start ? (r.start - r.recordedAt) / 1000 : 0);
     if (v === 'backLive') this.play('live', liveCh);
     if (v === 'back5') this.seek(-300);
+    if (v === 'cc') this.toggleCaptions();
     if (v === 'stop') { this.stop(); App.render(); }
     if (v === 'home') App.home();
     if (v === 'vlc') this.openVlc(this.kind, this.id, this.rec);
@@ -708,6 +759,7 @@ const Player = {
     if (this.channel && k === 'ChannelDown') { this.surf(-1); return true; }
     if (k === 'PreviousChannel' || (this.channel && (k === 'p' || k === 'P'))) { this.previousChannel(); return true; }
     if (this.channel && (/^[0-9.]$/.test(k) || k === '#')) { this.pad(k === '#' ? '' : k); return true; }
+    if (k === 'c' || k === 'C' || k === 'Caption') { this.toggleCaptions(); return true; }
     if (this.channel && (k === 'g' || k === 'G')) { this.toGuide(); return true; }
     if (this.channel && (k === 'r' || k === 'R')) { this.recordMenu(); return true; }
     if (k === 'ContextMenu' || k === 'm' || k === 'M') { if (this.channel) this.optionsMenu(); else this.playbackMenu(); return true; }
@@ -765,3 +817,18 @@ document.addEventListener('DOMContentLoaded', () => $('#screen').addEventListene
 }));
 // Clicking the picture in the guide's corner: full screen again.
 document.addEventListener('DOMContentLoaded', () => $('#screen').addEventListener('click', () => { if (Player.mode === 'pip') Player.full(); else if (Player.mode === 'full') Player.showOsd(); }));
+
+// WebVTT text -> [{ start, end, text }] in seconds (just what the captions files hold).
+function parseVtt(text) {
+  const t = (h) => { const p = h.split(':').map(Number); return p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2] : p[0] * 60 + p[1]; };
+  const out = [];
+  for (const block of String(text || '').replace(/\r/g, '').split(/\n\n+/)) {
+    const lines = block.split('\n');
+    const i = lines.findIndex((l) => l.includes('-->'));
+    if (i < 0) continue;
+    const m = /([\d:.]+)\s*-->\s*([\d:.]+)/.exec(lines[i]);
+    const body = lines.slice(i + 1).join('\n').trim();
+    if (m && body) out.push({ start: t(m[1]), end: t(m[2]), text: body });
+  }
+  return out;
+}

@@ -25,7 +25,7 @@
 
   // ---------- remote buttons ----------
   const REGISTER = ['ColorF0Red', 'ColorF1Green', 'ColorF2Yellow', 'ColorF3Blue', 'ChannelUp', 'ChannelDown',
-    'MediaPlayPause', 'MediaPlay', 'MediaPause', 'MediaStop', 'MediaFastForward', 'MediaRewind', 'Info', 'Guide', 'Tools', 'PreviousChannel',
+    'MediaPlayPause', 'MediaPlay', 'MediaPause', 'MediaStop', 'MediaFastForward', 'MediaRewind', 'Info', 'Guide', 'Tools', 'PreviousChannel', 'Caption',
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
   if (isTizen) {
     try { tizen.tvinputdevice.registerKeyBatch(REGISTER); } catch (_) {
@@ -51,6 +51,7 @@
     412: () => (watching() ? 'ArrowLeft' : '['), // rewind: back 10s, or previous day
     427: () => (watching() ? 'ChannelUp' : 'PageUp'), // CH ▲
     428: () => (watching() ? 'ChannelDown' : 'PageDown'), // CH ▼
+    10221: 'Caption', // CC (Samsung); Fire TV / Android CAPTIONS is sent as this too
     10190: 'PreviousChannel', // PRE-CH (Samsung); Fire TV / Android LAST CHANNEL is sent as this too
   };
   for (let d = 0; d <= 9; d++) KEYS[48 + d] = String(d);

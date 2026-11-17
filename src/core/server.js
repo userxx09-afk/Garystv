@@ -9,6 +9,7 @@ const { spawn, execFile } = require('child_process');
 const { findFfmpeg, findVlc } = require('./tools');
 const { bestVariant, HLS_INPUT, RECONNECT } = require('./hls');
 const { Timeshift } = require('./timeshift');
+const { Captions } = require('./captions');
 const { Diagnostics } = require('./diagnostics');
 const { Sports } = require('./sports');
 const { Family } = require('./family');
@@ -105,8 +106,9 @@ function hasQuickSync(ffmpeg) {
 async function videoPlan(core, input, key, keyEvery = 2) {
   if (await isH264(core, input, key)) return { copy: true, video: ['-c:v', 'copy'] };
   const keys = ['-force_key_frames', `expr:gte(t,n_forced*${keyEvery})`];
-  if (await hasQuickSync(findFfmpeg(core.settings))) return { copy: false, video: ['-c:v', 'h264_qsv', '-preset', 'veryfast', '-b:v', '6M', '-maxrate', '6M', ...keys] };
-  return { copy: false, video: ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-maxrate', '6M', '-bufsize', '12M', ...keys] };
+  // -a53cc 1: closed captions in the antenna video are carried into the converted picture, where the player reads them.
+  if (await hasQuickSync(findFfmpeg(core.settings))) return { copy: false, video: ['-c:v', 'h264_qsv', '-preset', 'veryfast', '-b:v', '6M', '-maxrate', '6M', '-a53cc', '1', ...keys] };
+  return { copy: false, video: ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-maxrate', '6M', '-bufsize', '12M', '-a53cc', '1', ...keys] };
 }
 
 // Transcodes to H.264/AAC MPEG-TS that the built-in player can show. Over-the-air
@@ -223,6 +225,13 @@ function createServer(core) {
     return peers.call(peers.find(at.peerId), method, `/api/recordings/${encodeURIComponent(at.recId)}`, body);
   };
   const diag = core.diag = new Diagnostics(core); // playback health: why live TV stuttered
+  // Closed captions read out of finished recordings (live TV keeps them in the stream).
+  core.captions = new Captions({
+    ffmpeg: () => findFfmpeg(core.settings),
+    dir: () => path.join(core.storage.localDir, '.captions'),
+    find: (id) => core.recordings.find((r) => r.id === id),
+    note: (m) => core.note(m),
+  });
   const timeshift = core.timeshift = new Timeshift({
     health: diag,
     ffmpeg: () => findFfmpeg(core.settings),
@@ -416,7 +425,7 @@ function createServer(core) {
       if (!who.ok) {
         // The screens' own files aren't secret; the start page becomes the sign-in page.
         if (['/', '/index.html'].includes(url.pathname)) return fs.readFile(path.join(UI_DIR, 'login.html'), (err, data) => { res.writeHead(200, { 'Content-Type': MIME['.html'], 'Cache-Control': 'no-store' }); res.end(data); });
-        if (url.pathname.startsWith('/api/') || /^\/(events|stream|direct|timeshift|peer|arlo)\b/.test(url.pathname)) return send(res, 401, { error: 'Sign in first.', login: true });
+        if (url.pathname.startsWith('/api/') || /^\/(events|stream|direct|timeshift|peer|arlo|captions)\b/.test(url.pathname)) return send(res, 401, { error: 'Sign in first.', login: true });
       }
     }
     const caller = who.home ? checkCaller(req) : { ok: true };
@@ -460,6 +469,14 @@ function createServer(core) {
             : { 'Content-Type': 'video/mp2t', 'Cache-Control': 'max-age=3600' });
           res.end(data);
         });
+      }
+      // A recording's captions, as WebVTT. 202 while they're still being read out of it.
+      const cc = /^\/captions\/rec\/([^/]+)$/.exec(url.pathname);
+      if (cc) {
+        const r = core.captions.get(decodeURIComponent(cc[1]));
+        if (r.status === 'pending') return send(res, 202, { pending: true });
+        res.writeHead(200, { 'Content-Type': 'text/vtt; charset=utf-8', 'Cache-Control': 'no-store' });
+        return res.end(r.status === 'ready' ? r.text : 'WEBVTT\n');
       }
       // A recording at the other place (sharing.js): played from there, through here.
       const far = /^\/(direct|stream)\/rec\/(~[^/]+)$/.exec(url.pathname);
