@@ -3,6 +3,11 @@
 // Add a video or DVD). Each is converted to one standard file (H.264 video, AAC stereo sound,
 // MP4) in the recordings folder, one at a time, at low priority, and listed like a recording.
 //
+// Downloads: a movie, an episode or a show from the IPTV provider's archive (Download in
+// Movies, Shows or the Guide) is saved the same way, so it can be watched later without the
+// provider. It only uses a stream when one is free on its plan, and gives it up to anyone who
+// wants to watch (tuners.js); then it starts again once the plan is free.
+//
 // DVDs: the main title is the largest set of VTS_nn_1..n.VOB files in VIDEO_TS. Home-made and
 // other unprotected discs work; copy-protected (CSS) discs aren't supported.
 const fs = require('fs');
@@ -11,6 +16,9 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn, execFile } = require('child_process');
 const { findFfmpeg } = require('./tools');
+const { RECONNECT } = require('./hls');
+
+const WAIT_MS = 60000; // a download waiting for a free stream (or disk room) looks again this often
 
 const VIDEO_EXT = /\.(mp4|m4v|mkv|avi|mov|wmv|mpg|mpeg|ts|m2ts|mts|vob|webm|flv|3gp|dv|divx|ogv)$/i;
 const safe = (s) => String(s || '').replace(/[<>:"/\\|?*\x00-\x1f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 80) || 'Video';
@@ -104,11 +112,15 @@ function probe(ffmpeg, file) {
 // The ffmpeg command for one conversion. input: a file path, or 'pipe:0' for a DVD's VOBs fed in.
 // H.264 (8-bit) video is kept as it is; anything else is converted. Interlaced video (DVDs, camcorders)
 // is deinterlaced, and stretched DVD pictures are made square-pixel so every player shows them right.
-function convertArgs({ input, dvd, info, out }) {
-  const copyVideo = !dvd && info && info.video && info.video.codec === 'h264' && /^yuv(j)?420p$/.test(info.video.pixFmt || '');
+// net: input is the provider's address (a download): reconnect after a blip, and when what's in it
+// couldn't be read beforehand, keep the picture as it is (provider video is almost always H.264).
+function convertArgs({ input, dvd, info, out, net }) {
+  const known = info && info.video;
+  const copyVideo = !dvd && (known ? info.video.codec === 'h264' && /^yuv(j)?420p$/.test(info.video.pixFmt || '') : !!net);
   return [
     '-hide_banner', '-loglevel', 'error', '-nostats', '-progress', 'pipe:1', '-y',
     ...(dvd ? ['-f', 'mpeg', '-probesize', '50M', '-analyzeduration', '30M'] : []),
+    ...(net ? ['-user_agent', 'Mozilla/5.0', ...RECONNECT] : []),
     '-fflags', '+genpts', '-i', input,
     '-map', '0:v:0', '-map', '0:a:0?', '-sn', '-dn', '-map_metadata', '-1',
     ...(copyVideo ? ['-c:v', 'copy'] : ['-vf', 'yadif=deint=interlaced,scale=trunc(ih*dar/2)*2:ih,setsar=1,scale=-2:min(ih\\,1080)',
@@ -168,18 +180,42 @@ class Importer {
     return [this.add({ source: { file: tmp, temp: true }, title: title || niceTitle(name), kind: 'file' })];
   }
 
-  add({ source, title, kind }) {
+  // Download from Movies, Shows or the Guide. id: a movie (m~), an episode (e~) or a show in the
+  // provider's archive (c~), as core/vod.js names them; the login is looked up when it starts, never kept here.
+  // item: { title, subtitle, season, episode, desc, poster, year, duration (s) } for My Recordings.
+  addDownload(id, item = {}) {
+    id = String(id || '');
+    if (!/^[mec]~[^~]+~[^~]+~[^~]+$/.test(id)) throw new Error('Only a movie, an episode or a show from your IPTV provider can be downloaded.');
+    if (!this.core.vod) throw new Error('Downloads need an IPTV provider.');
+    this.core.vod.provider(id.split('~')[1]); // still set up?
+    const had = this.core.recordings.find((r) => r.source && r.source.vod === id && r.status !== 'failed');
+    if (had) return { id: had.id, title: had.title, already: true, status: had.status };
+    const title = safe(item.title || 'Download');
+    const season = Number.isInteger(+item.season) && item.season !== '' && item.season != null ? +item.season : null;
+    const episode = Number.isInteger(+item.episode) && item.episode !== '' && item.episode != null ? +item.episode : null;
+    const se = season != null && episode != null ? ` - S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}` : '';
+    const sub = String(item.subtitle || '').trim();
+    const year = /^\d{4}$/.test(String(item.year || '')) ? ` (${item.year})` : '';
+    const name = id.startsWith('m~') ? `${title}${year}` : `${title}${se}${sub && !se ? ` - ${safe(sub)}` : ''}`;
+    return this.add({
+      source: { vod: id, duration: +item.duration > 0 ? +item.duration : 0 }, title, kind: 'download', name,
+      extra: { subtitle: sub.slice(0, 200), desc: String(item.desc || '').slice(0, 2000), poster: String(item.poster || '').slice(0, 1000), season, episode },
+    });
+  }
+
+  add({ source, title, kind, name, extra = {} }) {
     const now = Date.now();
     title = safe(title);
+    name = safe(name || title);
     const dir = path.join(this.core.storage.recordDir(), title);
-    let file = path.join(dir, `${title}.mp4`);
-    for (let i = 2; fs.existsSync(file) || this.core.recordings.some((r) => r.file === file); i++) file = path.join(dir, `${title} (${i}).mp4`);
+    let file = path.join(dir, `${name}.mp4`);
+    for (let i = 2; fs.existsSync(file) || this.core.recordings.some((r) => r.file === file); i++) file = path.join(dir, `${name} (${i}).mp4`);
     const rec = {
-      id: newId(), imported: kind, source, title, subtitle: '', desc: '', channelNumber: '', channelName: kind === 'dvd' ? 'DVD' : 'Video file',
-      start: now, end: now, recordedAt: now, file, size: 0, status: 'importing', progress: 0, error: null, position: 0, watched: false, commercials: [],
+      id: newId(), imported: kind, source, title, subtitle: '', desc: '', channelNumber: '', channelName: { dvd: 'DVD', download: 'Download' }[kind] || 'Video file',
+      start: now, end: now, recordedAt: now, file, size: 0, status: 'importing', progress: 0, error: null, position: 0, watched: false, commercials: [], ...extra,
     };
     this.core.store.write('recordings', [rec, ...this.core.recordings]);
-    this.core.note(`importing ${kind === 'dvd' ? 'a DVD' : 'a video'}: ${title}`);
+    this.core.note(`${kind === 'download' ? 'downloading' : `importing ${kind === 'dvd' ? 'a DVD' : 'a video'}`}: ${title}${extra.subtitle ? ` - ${extra.subtitle}` : ''}`);
     this.core.changed('recordings');
     this.queue.push(rec.id);
     this.next();
@@ -189,11 +225,13 @@ class Importer {
   // At startup: imports the app was closed during start again (if what they came from is still there).
   resume() {
     for (const r of this.core.recordings.filter((x) => x.status === 'importing')) {
-      const there = r.source && (r.source.dvd ? r.source.dvd.every((f) => fs.existsSync(f)) : fs.existsSync(r.source.file));
-      if (there) { this.core.patchRecording(r.id, { progress: 0 }); this.queue.push(r.id); } else this.core.patchRecording(r.id, { status: 'failed', error: 'The app was closed while this was being added, and the video is no longer there.' });
+      const there = r.source && (r.source.vod ? this.hasProvider(r.source.vod) : r.source.dvd ? r.source.dvd.every((f) => fs.existsSync(f)) : fs.existsSync(r.source.file));
+      if (there) { this.core.patchRecording(r.id, { progress: 0, waiting: null }); this.queue.push(r.id); } else this.core.patchRecording(r.id, { status: 'failed', waiting: null, error: r.source && r.source.vod ? 'The app was closed during this download, and that IPTV provider is no longer set up.' : 'The app was closed while this was being added, and the video is no longer there.' });
     }
     this.next();
   }
+
+  hasProvider(vodId) { try { return !!(this.core.vod && this.core.vod.provider(String(vodId).split('~')[1])); } catch (_) { return false; } }
 
   async next() {
     if (this.busy) return;
@@ -207,8 +245,8 @@ class Importer {
     } catch (e) {
       try { fs.unlinkSync(`${rec.file}.part`); } catch (_) {}
       if (this.core.recordings.some((r) => r.id === id) && !(this.busy && this.busy.cancelled)) {
-        this.core.patchRecording(id, { status: 'failed', error: e.message, progress: null });
-        this.core.note(`import failed: ${rec.title}: ${e.message}`);
+        this.core.patchRecording(id, { status: 'failed', error: e.message, progress: null, waiting: null });
+        this.core.note(`${rec.source && rec.source.vod ? 'download' : 'import'} failed: ${rec.title}: ${e.message}`);
       }
     }
     this.busy = null;
@@ -218,12 +256,76 @@ class Importer {
   async convert(rec) {
     const ffmpeg = findFfmpeg(this.core.settings);
     if (!ffmpeg) throw new Error('ffmpeg is not installed (Settings > Status), so videos can\'t be converted.');
+    if (rec.source.vod) return this.download(rec, ffmpeg);
     const dvd = !!rec.source.dvd;
     const info = dvd ? null : await probe(ffmpeg, rec.source.file);
     if (!dvd && info && !info.video) throw new Error('That file has no video in it.');
+    await this.run(rec, ffmpeg, { input: dvd ? 'pipe:0' : rec.source.file, dvd, info });
+    await this.finish(rec, ffmpeg, info);
+  }
+
+  // A download: waits for a free stream on its plan (and room on the disk), then saves it. When
+  // someone wants that stream to watch, it lets go and starts over once the plan is free again.
+  async download(rec, ffmpeg) {
+    const id = rec.source.vod, srcId = id.split('~')[1];
+    const busy = this.busy;
+    for (;;) {
+      if (busy.cancelled) throw new Error('cancelled');
+      let lease = null, why = null;
+      busy.bumped = false;
+      if (this.core.recordingRoom && !this.core.recordingRoom(rec.title)) why = 'Waiting for room on the recordings disk';
+      else {
+        try {
+          lease = this.core.tuners.acquireDownload(srcId, rec.title, () => { busy.bumped = true; if (busy.proc && busy.proc.exitCode == null) busy.proc.kill(); });
+        } catch (e) {
+          if (e.status !== 409) throw e;
+          why = `Waiting for a free stream: ${e.message}`;
+        }
+      }
+      if (!lease) {
+        if (this.core.recordings.find((r) => r.id === rec.id && r.waiting !== why)) this.core.patchRecording(rec.id, { waiting: why });
+        await this.pause(WAIT_MS);
+        continue;
+      }
+      let info = null;
+      try {
+        this.core.patchRecording(rec.id, { waiting: null, progress: 0 });
+        const { url } = await this.core.vod.input(id);
+        info = await probe(ffmpeg, url);
+        if (info && !info.video) throw new Error('The provider sent no video for this one.');
+        if (!info || !info.duration) info = { ...(info || {}), duration: rec.source.duration || 0 };
+        if (!busy.bumped) await this.run(rec, ffmpeg, { input: url, info, net: true });
+      } catch (e) {
+        if (!busy.bumped || busy.cancelled) throw e;
+      } finally {
+        this.core.tuners.release(lease.id);
+      }
+      if (busy.cancelled) throw new Error('cancelled');
+      if (busy.bumped) {
+        try { fs.unlinkSync(`${rec.file}.part`); } catch (_) {}
+        this.core.patchRecording(rec.id, { progress: 0, waiting: 'Paused while the stream is used for watching; it starts again when the plan is free' });
+        await this.pause(WAIT_MS);
+        continue;
+      }
+      return this.finish(rec, ffmpeg, info);
+    }
+  }
+
+  // A wait that deleting the download (or closing the app) cuts short.
+  pause(ms) {
+    return new Promise((resolve) => {
+      const t = setTimeout(done, ms);
+      const busy = this.busy;
+      function done() { clearTimeout(t); if (busy) busy.wake = null; resolve(); }
+      if (busy) busy.wake = done;
+    });
+  }
+
+  // One ffmpeg run into <file>.part; throws if it fails.
+  async run(rec, ffmpeg, { input, dvd = false, info = null, net = false }) {
     fs.mkdirSync(path.dirname(rec.file), { recursive: true });
     const part = `${rec.file}.part`;
-    const proc = spawn(ffmpeg, convertArgs({ input: dvd ? 'pipe:0' : rec.source.file, dvd, info, out: part }), { stdio: [dvd ? 'pipe' : 'ignore', 'pipe', 'pipe'], windowsHide: true });
+    const proc = spawn(ffmpeg, convertArgs({ input, dvd, info, out: part, net }), { stdio: [dvd ? 'pipe' : 'ignore', 'pipe', 'pipe'], windowsHide: true });
     this.busy.proc = proc;
     try { os.setPriority(proc.pid, 10); } catch (_) { /* fine at normal priority */ }
     let err = '';
@@ -259,6 +361,10 @@ class Importer {
     const code = await new Promise((resolve) => proc.on('close', resolve));
     if (this.busy && this.busy.cancelled) throw new Error('cancelled');
     if (code !== 0) throw new Error((err.trim().split('\n').pop() || `ffmpeg stopped (${code})`).slice(0, 300));
+  }
+
+  async finish(rec, ffmpeg, info) {
+    const part = `${rec.file}.part`;
     fs.renameSync(part, rec.file);
     const done = await probe(ffmpeg, rec.file);
     const ms = Math.round(((done && done.duration) || (info && info.duration) || 0) * 1000);
@@ -266,8 +372,8 @@ class Importer {
     if (rec.source.temp) { try { fs.unlinkSync(rec.source.file); } catch (_) {} }
     const now = Date.now();
     // The player reads the length as finishedAt - recordedAt, as for a recording.
-    this.core.patchRecording(rec.id, { status: 'complete', progress: null, size, recordedAt: now, finishedAt: now + ms, start: now, end: now + ms, source: rec.source.temp ? null : rec.source });
-    this.core.note(`import finished: ${rec.title} (${Math.round(ms / 60000)} min, ${(size / 1e9).toFixed(1)} GB)`);
+    this.core.patchRecording(rec.id, { status: 'complete', progress: null, waiting: null, size, recordedAt: now, finishedAt: now + ms, start: now, end: now + ms, source: rec.source.temp ? null : rec.source });
+    this.core.note(`${rec.source.vod ? 'download' : 'import'} finished: ${rec.title} (${Math.round(ms / 60000)} min, ${(size / 1e9).toFixed(1)} GB)`);
   }
 
   // Deleting one that's waiting or being converted.
@@ -277,6 +383,7 @@ class Importer {
     if (rec && rec.source && rec.source.temp) { try { fs.unlinkSync(rec.source.file); } catch (_) {} }
     if (!this.busy || this.busy.id !== id) return;
     this.busy.cancelled = true;
+    if (this.busy.wake) this.busy.wake(); // waiting for a stream: stop waiting
     const proc = this.busy.proc;
     if (proc && proc.exitCode == null) {
       await new Promise((r) => { proc.once('close', r); proc.kill(); });
@@ -284,7 +391,13 @@ class Importer {
     if (rec) { try { fs.unlinkSync(`${rec.file}.part`); } catch (_) {} }
   }
 
-  stop() { this.queue = []; if (this.busy && this.busy.proc) { this.busy.cancelled = true; this.busy.proc.kill(); } }
+  stop() {
+    this.queue = [];
+    if (!this.busy) return;
+    this.busy.cancelled = true;
+    if (this.busy.wake) this.busy.wake();
+    if (this.busy.proc) this.busy.proc.kill();
+  }
 }
 
 module.exports = { Importer, convertArgs, dvdTitle, videoTsOf, niceTitle, VIDEO_EXT };

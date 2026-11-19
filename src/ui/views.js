@@ -157,8 +157,9 @@ const DvrView = {
     $('#dvrDetail').innerHTML = `<div class="title">${esc(r.title)}</div>
       <div class="sub">${esc([fmt.se(r), r.subtitle].filter(Boolean).join('  ·  '))}</div>
       <div class="meta"><span>${esc(r.channelNumber)} ${esc(r.channelName)}</span><span>${fmt.when(r.start)}</span><span>${fmt.dur(r.end - r.start)}</span><span>${fmt.size(r.size)}</span>
-        <span class="status-pill st-${r.status}">${r.status === 'recording' ? '● Recording' : r.status === 'importing' ? `Adding · ${r.progress || 0}%` : r.status}</span>${r.simulated ? '<span class="tag">PRACTICE</span>' : ''}${r.at ? `<span class="tag">AT ${esc(r.at.toUpperCase())}</span>` : ''}</div>
+        <span class="status-pill st-${r.status}">${r.status === 'recording' ? '● Recording' : r.status === 'importing' ? `${addingWord(r)} · ${r.progress || 0}%` : r.status}</span>${r.simulated ? '<span class="tag">PRACTICE</span>' : ''}${r.at ? `<span class="tag">AT ${esc(r.at.toUpperCase())}</span>` : ''}</div>
       ${r.error ? `<div class="s" style="color:var(--yellow)">${esc(r.error)}</div>` : ''}
+      ${r.status === 'importing' && r.waiting ? `<div class="s" style="color:var(--yellow)">${esc(r.waiting)}</div>` : ''}
       <div class="desc">${esc(r.desc || '')}</div>
       ${r.position > 30 ? `<div class="s">Stopped at ${fmt.clock(r.position)}</div>` : ''}
       ${r.saved ? '<div class="s">★ Saved: never deleted to make room or by a series\' keep limit.</div>' : ''}`;
@@ -173,8 +174,9 @@ const DvrView = {
   async recordingMenu(r) {
     if (!r) return;
     if (r.status === 'importing') {
-      const v = await Modal.menu(r.title, `<div class="s">Being added: ${r.progress ? `${r.progress}% done` : 'starting...'}. It can be watched when it's done.</div>`,
-        [{ label: '✕  Stop adding it', value: 'delete', cls: 'danger' }, { label: 'Close', value: null }]);
+      const dl = r.imported === 'download';
+      const v = await Modal.menu(r.title, `<div class="s">${dl ? 'Downloading' : 'Being added'}: ${r.waiting ? esc(r.waiting) : r.progress ? `${r.progress}% done` : 'starting...'}. It can be watched when it's done.</div>`,
+        [{ label: dl ? '✕  Stop the download' : '✕  Stop adding it', value: 'delete', cls: 'danger' }, { label: 'Close', value: null }]);
       if (v === 'delete') this.remove(r);
       return;
     }
@@ -196,7 +198,8 @@ const DvrView = {
 
   async remove(r) {
     if (r.status === 'importing') {
-      if (!(await Modal.confirm('Stop adding it?', `${r.title} won't be added. The original video isn't touched.`, 'Stop adding'))) return;
+      const dl = r.imported === 'download';
+      if (!(await Modal.confirm(dl ? 'Stop the download?' : 'Stop adding it?', dl ? `${r.title}${r.subtitle ? ` - ${r.subtitle}` : ''} won't be downloaded. You can still watch it from your provider.` : `${r.title} won't be added. The original video isn't touched.`, dl ? 'Stop download' : 'Stop adding'))) return;
       await api.del(`/api/recordings/${r.id}`);
       return toast('Stopped');
     }
@@ -208,7 +211,7 @@ const DvrView = {
   // What the menu offers for one recording.
   menuFor(r) {
     const items = [];
-    if (r.status === 'importing') return [{ label: '✕ Stop adding it...', run: () => this.remove(r), cls: 'danger' }];
+    if (r.status === 'importing') return [{ label: r.imported === 'download' ? '✕ Stop the download...' : '✕ Stop adding it...', run: () => this.remove(r), cls: 'danger' }];
     if (r.position > 30 && !r.watched) items.push({ label: `▶ Resume from ${fmt.clock(r.position)}`, run: () => Player.play('rec', r.id, { offset: r.position }), cls: 'primary' });
     items.push({ label: r.position > 30 ? '⟲ Start over' : '▶ Play', run: () => Player.play('rec', r.id), cls: r.position > 30 ? '' : 'primary' });
     if (r.status === 'recording') items.push({ label: '■ Stop recording', run: async () => { await api.post('/api/jobs/skip', { id: r.jobId }); toast('Recording stopped'); } });
@@ -336,7 +339,7 @@ function recItem(r) {
   return `<div class="item nav ${r.watched || r.status === 'recording' ? '' : 'unwatched'}" data-key="r-${r.id}" data-rec="${r.id}">
     <div class="main"><div class="t">${r.status === 'recording' ? '<span class="dot pulse"></span>' : ''}${r.saved ? '<span class="fav">★</span>' : ''}${esc(r.subtitle || r.title)}</div>
     <div class="s">${esc([fmt.se(r), `${r.channelNumber} ${r.channelName}`].filter(Boolean).join('  ·  '))}</div></div>
-    <div class="m">${fmt.when(r.start)}<br>${r.status === 'importing' ? `<span class="status-pill st-importing">adding ${r.progress || 0}%</span>` : r.status !== 'complete' ? `<span class="status-pill st-${r.status}">${r.status}</span>` : fmt.dur(r.end - r.start)}</div></div>`;
+    <div class="m">${fmt.when(r.start)}<br>${r.status === 'importing' ? `<span class="status-pill st-importing">${r.waiting ? 'waiting' : `${addingWord(r).toLowerCase()} ${r.progress || 0}%`}</span>` : r.status !== 'complete' ? `<span class="status-pill st-${r.status}">${r.status}</span>` : fmt.dur(r.end - r.start)}</div></div>`;
 }
 
 // ---------------- Timers ----------------
@@ -865,3 +868,6 @@ const SearchView = {
     return false;
   },
 };
+
+// A video being added to My Recordings: a download from the provider, or a DVD / file.
+function addingWord(r) { return r.imported === 'download' ? 'Downloading' : 'Adding'; }

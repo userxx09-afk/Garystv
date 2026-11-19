@@ -247,6 +247,43 @@ const App = {
     await this.loadAll();
   },
 
+  // ---------- downloads (core/importer.js) ----------
+  // The download of a movie / episode / archived show (vod id), if there is one that hasn't failed.
+  downloadOf(id) { return (this.recordings || []).find((r) => r.source && r.source.vod === id && r.status !== 'failed') || null; },
+
+  // A choice for a menu: "Download", or where its download is at. -> { label, value } or null.
+  downloadChoice(id) {
+    const r = this.downloadOf(id);
+    if (!r) return { label: '⤓  Download (watch later, even without the provider)', value: 'download' };
+    if (r.status === 'importing') return { label: `⤓  Downloading${r.waiting ? ' (waiting)' : ` · ${r.progress || 0}%`}: see My Recordings`, value: 'downloads' };
+    return { label: '▶  Watch the download', value: 'watchdl' };
+  },
+
+  // Starts the download. item: { title, subtitle, season, episode, desc, poster, year, duration (s) }.
+  async download(id, item, quiet = false) {
+    try {
+      const r = await api.post('/api/download', { id, item });
+      if (!quiet) toast(r.already ? `${item.title} is already in My Recordings` : `⤓ Downloading ${item.title}${item.subtitle ? ` · ${item.subtitle}` : ''}. It shows up in My Recordings.`);
+      await this.loadAll();
+      return r;
+    } catch (e) { toast(e.message); return null; }
+  },
+
+  // What a download choice does: start it, open My Recordings, or play what's there.
+  async downloadPicked(v, id, item) {
+    if (v === 'download') await this.download(id, item);
+    if (v === 'downloads') this.go('dvr');
+    if (v === 'watchdl') { const r = this.downloadOf(id); if (r) Player.play('rec', r.id, { offset: r.position > 30 && !r.watched ? r.position : 0 }); }
+  },
+
+  // A show in the guide that's over and still in the provider's archive (catch-up): its vod id, or null.
+  archiveId(row, p) {
+    const ch = (this.state.channels || []).find((c) => c.id === row.id) || row;
+    const now = Date.now();
+    if (!ch.archiveDays || !ch.sourceId || p.filler || p.end > now || p.start < now - ch.archiveDays * 86400000) return null;
+    return `c~${ch.sourceId}~${ch.id.slice(ch.sourceId.length + 1)}~${p.start}-${p.end}`;
+  },
+
   // R in the guide: none -> this show; this show -> whole series; series -> cancel.
   async quickRecord(row, p) {
     if (row && p && p.filler) return this.manualDialog(row.id); // no listing: record by time instead
@@ -285,6 +322,12 @@ const App = {
     else if (p.end > now) choices.push({ html: '<span class="dot"></span> Record this show', value: 'once', cls: airing ? '' : 'primary' });
     if (p.end > now && (!job || job.status === 'skipped')) choices.push({ html: '<span class="dot"></span> Record, start early / end late...', value: 'oncePad' });
     if (job && (job.status === 'scheduled' || job.status === 'recording')) choices.push({ label: '⏩  End later...', value: 'later' });
+    // Over, but the provider still has it: download it (a show still to come is recorded instead).
+    const archived = this.archiveId(row, p);
+    if (archived) {
+      const c = this.downloadChoice(archived);
+      choices.push(c.value === 'download' ? { ...c, cls: 'primary' } : c);
+    } else if (p.end > now && (!job || job.status === 'skipped')) choices.push({ label: '⤓  Download: record it to My Recordings', value: 'once' });
     choices.push(series ? { html: '<span class="dot series"></span> Change series timer', value: 'series' } : { html: '<span class="dot series"></span> Record series...', value: 'series' });
     choices.push({ label: 'Close', value: null });
     const body = `<div class="sub">${esc([fmt.se(p), p.subtitle].filter(Boolean).join('  ·  '))}</div>
@@ -300,6 +343,9 @@ const App = {
       if (v === 'later') await this.endLater(job);
       if (v === 'cancel') await this.cancelProgram(row, p);
       if (v === 'series') await this.seriesDialog(row, p, series);
+      if (archived) {
+        await this.downloadPicked(v, archived, { title: p.title, subtitle: p.subtitle || '', season: p.season, episode: p.episode, desc: p.desc || '', duration: (p.end - p.start) / 1000 });
+      }
     } catch (e) { toast(e.message); }
   },
 

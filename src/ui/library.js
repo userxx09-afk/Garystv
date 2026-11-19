@@ -174,6 +174,7 @@ function libraryView(kind) {
       const choices = saved
         ? [{ label: `▶  Resume from ${fmt.clock(saved.position)}`, value: 'resume', cls: 'primary' }, { label: '⟲  Start over', value: 'play' }]
         : [{ label: '▶  Watch', value: 'play', cls: 'primary' }];
+      choices.push(App.downloadChoice(v.id));
       choices.push({ label: this.isFav(v.id) ? '★ Take off favorites' : '☆ Add to favorites', value: 'fav' }, { label: 'Close', value: null });
       const body = `<div class="vod-info">${m.poster ? `<img src="${esc(m.poster)}" alt="">` : ''}<div>
         <div class="meta" style="color:var(--muted)">${esc([m.year, m.genre, m.duration ? fmt.dur(m.duration * 1000) : '', m.rating ? `★ ${m.rating}` : ''].filter(Boolean).join(' · '))}</div>
@@ -184,6 +185,29 @@ function libraryView(kind) {
       if (c === 'resume') Player.play('vod', v.id, { offset: saved.position, item });
       if (c === 'play') Player.play('vod', v.id, { item });
       if (c === 'fav') this.toggleFav({ ...v, poster: v.poster || m.poster, year: v.year || m.year });
+      await App.downloadPicked(c, v.id, { title: m.name, year: m.year || '', desc: m.plot || '', poster: m.poster || '', duration: m.duration || 0 });
+    },
+
+    // ---------- downloads ----------
+    // What My Recordings needs for one episode of the open show.
+    epItem(e) {
+      const s = this.show;
+      return { title: s.name, subtitle: e.title && !/^episode \d+$/i.test(e.title) ? e.title : '', season: e.season, episode: e.episode, desc: e.plot || '', poster: e.poster || s.poster || '', duration: e.duration || 0 };
+    },
+    // Every episode of a season not downloaded yet, one after another (the server downloads them in turn).
+    async downloadSeason(season) {
+      const todo = season.episodes.filter((e) => !App.downloadOf(e.id));
+      if (!todo.length) return toast(`All of Season ${season.season} is already downloaded or on its way`);
+      let n = 0;
+      for (const e of todo) if (await App.download(e.id, this.epItem(e), true)) n++;
+      toast(`⤓ Downloading ${n} episode${n === 1 ? '' : 's'} of ${this.show.name} Season ${season.season}. They show up in My Recordings.`);
+      App.render(Nav.current && Nav.current.dataset.key);
+    },
+    // A ⤓ / ✓ next to an episode that's downloading or downloaded.
+    dlMark(id) {
+      const r = App.downloadOf(id);
+      if (!r) return '';
+      return r.status === 'importing' ? `⤓ ${r.waiting ? 'Waiting' : `${r.progress || 0}%`}<br>` : '⤓ Downloaded<br>';
     },
 
     async resumeMenu(c) {
@@ -210,16 +234,17 @@ function libraryView(kind) {
             <h2><span class="btn nav" data-key="up" id="upBtn">‹ ${esc(this.title)}</span> ${esc(s.name)}</h2>
             <div class="meta">${esc([s.year, s.genre, s.rating ? `★ ${s.rating}` : '', `${s.seasons.length} season${s.seasons.length === 1 ? '' : 's'}`].filter(Boolean).join(' · '))}</div>
             <div class="desc">${esc(s.plot || '')}</div>
-            <div class="seasons"><span class="btn nav" data-key="favshow" id="favShow">${this.isFav(s.id) ? '★ Favorite' : '☆ Add to favorites'}</span>${s.seasons.map((x) => `<span class="btn nav${x === season ? ' picked' : ''}" data-key="s-${x.season}" data-season="${x.season}">${x.episodes.length && x.episodes.every((e) => watched.has(e.id)) ? '✓ ' : ''}Season ${x.season}</span>`).join('')}</div>
+            <div class="seasons"><span class="btn nav" data-key="favshow" id="favShow">${this.isFav(s.id) ? '★ Favorite' : '☆ Add to favorites'}</span>${season && season.episodes.length ? `<span class="btn nav" data-key="dlseason" id="dlSeason">⤓ Download Season ${season.season}</span>` : ''}${s.seasons.map((x) => `<span class="btn nav${x === season ? ' picked' : ''}" data-key="s-${x.season}" data-season="${x.season}">${x.episodes.length && x.episodes.every((e) => watched.has(e.id)) ? '✓ ' : ''}Season ${x.season}</span>`).join('')}</div>
           </div></div>
           <div class="list" id="eps">${season ? season.episodes.map((e) => {
             const at = saved.get(e.id), seen = watched.has(e.id), next = e.id === s.next;
-            const mark = at ? `Stopped at ${fmt.clock(at.position)}<br>` : seen ? '✓ Watched<br>' : next ? '▶ Up next<br>' : '';
+            const mark = this.dlMark(e.id) + (at ? `Stopped at ${fmt.clock(at.position)}<br>` : seen ? '✓ Watched<br>' : next ? '▶ Up next<br>' : '');
             return `<div class="item nav${seen && !at ? ' watched' : ''}" data-key="e-${esc(e.id)}" data-ep="${esc(e.id)}"${seen && !at ? ' style="opacity:.6"' : ''}><div class="main"><div class="t">${seen && !at ? '✓ ' : ''}${e.episode ? `${e.episode}. ` : ''}${esc(e.title)}</div>
               <div class="s">${esc(e.plot || '')}</div></div><div class="m">${mark}${e.duration ? fmt.dur(e.duration * 1000) : ''}</div></div>`;
           }).join('') : '<div class="empty">No episodes listed.</div>'}</div>
         </div>`;
       $('#upBtn', root).onclick = () => this.closeShow();
+      if ($('#dlSeason', root)) $('#dlSeason', root).onclick = () => this.downloadSeason(season);
       $('#favShow', root).onclick = async () => { await this.toggleFav({ id: s.id, name: s.name, poster: s.poster, year: s.year, rating: s.rating }); App.render('favshow'); };
       $$('[data-season]', root).forEach((el) => { el.onclick = () => { this.season = +el.dataset.season; App.render(`s-${el.dataset.season}`); }; });
       $$('[data-ep]', root).forEach((el) => {
@@ -285,6 +310,10 @@ function libraryView(kind) {
       const c = d.cont && this.continueItems().find((x) => x.id === d.cont);
       const fv = v || (d.item && this.favItems().find((x) => x.id === d.item));
       if (fv) items.push({ label: movies ? '▶ Watch...' : '▦ Episodes', run: () => this.open(fv), cls: 'primary' }, this.favItem(fv));
+      if (fv && movies) {
+        const dc = App.downloadChoice(fv.id);
+        items.push({ label: dc.label.replace(/ {2}/, ' '), run: () => App.downloadPicked(dc.value, fv.id, { title: fv.name, year: fv.year || '', poster: fv.poster || '' }) });
+      }
       if (c) {
         items.push(c.next ? { label: `▶ Play ${c.subtitle || 'next episode'}`, run: () => Player.play('vod', c.id, { item: c }), cls: 'primary' }
           : { label: `▶ Resume from ${fmt.clock(c.position)}`, run: () => Player.play('vod', c.id, { offset: c.position, item: c }), cls: 'primary' });
@@ -294,6 +323,11 @@ function libraryView(kind) {
       if (d.ep) {
         items.push({ label: '▶ Play this episode', run: () => Nav.current.click(), cls: 'primary' });
         const show = this.show, seen = show && (show.watched || []).includes(d.ep);
+        const ep = show && show.seasons.flatMap((x) => x.episodes).find((x) => x.id === d.ep);
+        if (ep) {
+          const c = App.downloadChoice(ep.id);
+          items.push({ label: c.label.replace(/ {2}/, ' ').replace(' (watch later, even without the provider)', ' this episode'), run: async () => { await App.downloadPicked(c.value, ep.id, this.epItem(ep)); if (c.value === 'download' && App.view === this) App.render(`e-${ep.id}`); } });
+        }
         if (show) {
           items.push({ label: seen ? '○ Mark as not watched' : '✓ Mark as watched', run: async () => { await this.mark(d.ep, !seen); } });
           if (!seen) items.push({ label: '✓ Mark this and earlier episodes watched', run: async () => { await this.markThrough(d.ep); } });
