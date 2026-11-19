@@ -8,11 +8,13 @@
 // themselves (no cross-site requests, and the relay key stays on the engine).
 //
 // Relay protocol (same as Tapper's AlexaLink.kt):
-//   POST /tv/register {name}      -> {tvId, token}      (X-Tapper-Key when the relay has one)
+//   POST /tv/register {name, app} -> {tvId, token}      (X-Tapper-Key when the relay has one)
 //   POST /tv/pair                 -> {code, expiresInSec, linked}
 //   GET  /tv/status               -> {linked}
 //   POST /tv/unlink               -> {ok}
 //   GET  /tv/next  (long poll 25s) -> {commands: [{type, query?, number?}]}
+//     types: tune, number, channelUp, channelDown, pause, resume, stop, linked,
+//            guide, recordings, home, back (the last four need relay 1.0 / alexa/relay)
 // Authenticated calls carry X-Tapper-Tv: tvId and Authorization: Bearer token.
 
 class Alexa {
@@ -59,7 +61,7 @@ class Alexa {
   }
 
   async register(name) {
-    const { status, data } = await this.call('POST', '/tv/register', { body: { name: String(name || 'GarysTV').slice(0, 60) } });
+    const { status, data } = await this.call('POST', '/tv/register', { body: { name: String(name || 'GarysTV').slice(0, 60), app: 'garystv' } });
     if (status === 403) throw Object.assign(new Error("The relay's key doesn't match. Check the key in Settings > Alexa."), { status: 403 });
     if (status !== 200 || !data || !data.tvId) throw Object.assign(new Error(`The relay answered HTTP ${status}.`), { status: 502 });
     return { tvId: data.tvId, token: data.token };
@@ -111,7 +113,7 @@ function byNumber(n, channels) {
   return live.find((c) => String(c.number) === want) || live.find((c) => String(c.number).startsWith(`${want}.`)) || null;
 }
 
-const TYPES = new Set(['tune', 'number', 'channelUp', 'channelDown', 'pause', 'resume', 'stop', 'linked']);
+const TYPES = new Set(['tune', 'number', 'channelUp', 'channelDown', 'pause', 'resume', 'stop', 'linked', 'guide', 'recordings', 'home', 'back']);
 function clean(list) {
   return (Array.isArray(list) ? list : []).filter((c) => c && TYPES.has(c.type)).slice(0, 20).map((c) => ({
     type: c.type,
