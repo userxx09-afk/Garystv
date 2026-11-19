@@ -72,6 +72,15 @@ To refresh the lineup from iptv-org (re-tests every stream; takes a few minutes)
 
 Settings > **Channels & matching** shows how each tuner channel was matched to a guide listing (by number, call sign, name). Fix any match marked *Likely*/*Check*, and hide channels you never watch.
 
+## Alexa
+
+"Alexa, ask Tapper to play ESPN". GarysTV uses the same Tapper Alexa relay and skill as the Tapper app (see `alexa/` in the [Tapper IPTV repository](https://github.com/userxx09-afk/iptv/tree/main/alexa) for running the relay and creating the skill).
+
+1. Settings > **Alexa** (on any screen): enter the relay's address (`https://...`) and, if the relay has a `REGISTER_KEY`, the key. This is saved on the engine, once for every TV. On the server it can also come from `ALEXA_RELAY_URL` / `ALEXA_RELAY_KEY` in the environment.
+2. On each TV: Settings > Alexa > **Link this TV to Alexa**, then say the code: "Alexa, ask Tapper to link code 123 456".
+
+Then: play a channel by name or number, next / previous channel, pause, resume, stop watching. One Alexa account controls one TV, the one linked last (Tapper or GarysTV). Commands reach a TV only while GarysTV is on screen there; the engine passes them on (the TV never talks to the relay itself) and works out which channel was meant.
+
 ## Remote / keyboard
 
 | Key | Action |

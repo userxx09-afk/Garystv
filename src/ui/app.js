@@ -554,4 +554,5 @@ function tickClock() {
   if (!window.GTV_SERVER) history.pushState({ gtv: 1 }, '', location.hash); // the TV apps have their own Back
   Updates.startCheck();
   connectEvents();
+  AlexaVoice.start(); // Settings > Alexa
 })();
