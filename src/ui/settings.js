@@ -1,12 +1,12 @@
 // Settings: tuners & IPTV providers, guide sources, matching channels to the
 // guide, recording options and status.
-/* global App, Teams, Updates, GTVAndroid, categoryOf, CATEGORY_RULES, GuideView, Player, Xfinity, XFINITY_DEFAULTS, XFINITY_LINEUPS */
+/* global App, Teams, Updates, AlexaVoice, GTVAndroid, categoryOf, CATEGORY_RULES, GuideView, Player, Xfinity, XFINITY_DEFAULTS, XFINITY_LINEUPS */
 const SettingsView = {
   title: 'Settings',
   section: 'sources',
   chFilter: '',
   hints: [['↑↓←→', 'Move'], ['OK', 'Select'], ['Tab', 'Next field'], ['Esc', 'Back']],
-  sections: [['sources', 'Antenna & Providers'], ['guide', 'Guide data'], ['channels', 'Channels & matching'], ['startup', 'When it starts'], ['recording', 'Recording'], ['media', 'Movies & Shows'], ['teams', 'My Teams'], ['xfinity', 'Xfinity'], ['arlo', 'Cameras'], ['cta', 'CTA'], ['remote', 'Other locations'], ['updates', 'Updates'], ['backup', 'Backup & restore'], ['status', 'Status']],
+  sections: [['sources', 'Antenna & Providers'], ['guide', 'Guide data'], ['channels', 'Channels & matching'], ['startup', 'When it starts'], ['recording', 'Recording'], ['media', 'Movies & Shows'], ['teams', 'My Teams'], ['xfinity', 'Xfinity'], ['arlo', 'Cameras'], ['alexa', 'Alexa'], ['cta', 'CTA'], ['remote', 'Other locations'], ['updates', 'Updates'], ['backup', 'Backup & restore'], ['status', 'Status']],
 
   // With the activity log highlighted (Status), ↑↓ scroll it; at its top, ↑ moves on as usual.
   onKey(e) {
@@ -843,6 +843,58 @@ const SettingsView = {
   // ---------- other locations ----------
   // Devices on this home network just use GarysTV. From anywhere else (over Tailscale /
   // headscale), a device signs in once with the password set here (core/auth.js).
+  // Alexa (core/alexa.js, alexa.js): the relay is the engine's; linking is this screen's own.
+  async alexa(pane) {
+    let o;
+    try { o = await api.get('/api/alexa'); } catch (e) { pane.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+    const again = () => { if (document.body.contains(pane)) this.alexa(pane); };
+    AlexaVoice.overview = o;
+    const tv = AlexaVoice.creds();
+    pane.innerHTML = `<div class="box"><h3>Alexa</h3>
+        <div class="s">Say <b>"Alexa, ask Tapper to play ESPN"</b>. It uses the same Tapper Alexa relay and skill as the Tapper app (the alexa folder of the Tapper IPTV repository). The relay is set once here, for every TV that uses this GarysTV; then link each TV below.</div>
+        <div class="field"><label>Relay address</label><input id="axUrl" class="nav" data-key="ax-url" value="${esc(o.url)}" placeholder="https://alexa.example.com"></div>
+        <div class="field"><label>${o.hasKey ? 'Replace the relay key' : 'Relay key (only if the relay has a REGISTER_KEY)'}</label><input id="axKey" type="password" autocomplete="off" class="nav" data-key="ax-key" placeholder="${o.hasKey ? 'A key is saved' : 'Leave empty if none'}"></div>
+        <div class="actions"><div class="btn nav primary" id="axSave" data-key="ax-save">Save</div>${o.keyFrom === 'settings' ? '<div class="btn nav danger" id="axKeyDel" data-key="ax-keydel">Remove key</div>' : ''}</div></div>
+      <div class="box"><h3>This TV</h3>
+        <div id="axState" class="s" style="margin:.4rem 0">${!o.configured ? 'Alexa is off until the relay address is saved.' : tv ? 'Asking the relay...' : 'Not linked yet.'}</div>
+        ${o.configured ? `<div class="actions"><div class="btn nav primary" id="axLink" data-key="ax-link">Link this TV to Alexa</div>${tv ? '<div class="btn nav" id="axUnlink" data-key="ax-unlink">Unlink</div>' : ''}</div>` : ''}
+        <div class="s" style="font-size:.85rem">One Alexa account controls one TV: the one linked last (a Tapper TV or a GarysTV one). To control a different TV, link that one. Commands reach the TV only while GarysTV is on screen.</div></div>
+      <div class="box"><h3>What you can say</h3><div class="s">"Alexa, ask Tapper to play ESPN" (or put on, or watch)<br>"Alexa, ask Tapper to go to channel 204"<br>"Alexa, ask Tapper for the next channel" / "previous channel"<br>"Alexa, ask Tapper to pause" / "resume" / "stop watching"</div></div>`;
+    const url = $('#axUrl', pane), key = $('#axKey', pane);
+    url._onFocus = () => url.focus();
+    key._onFocus = () => key.focus();
+    $('#axSave', pane).onclick = async () => {
+      const body = { url: url.value.trim() };
+      if (key.value.trim()) body.key = key.value.trim();
+      try { await api.put('/api/alexa', body); AlexaVoice.refresh(); toast(body.url ? 'Saved. Now link this TV.' : 'Alexa turned off'); again(); } catch (e) { toast(e.message, 6000); }
+    };
+    const del = $('#axKeyDel', pane);
+    if (del) del.onclick = async () => { try { await api.put('/api/alexa', { key: '' }); toast('Key removed'); again(); } catch (e) { toast(e.message); } };
+    const state = $('#axState', pane);
+    if (o.configured && tv) {
+      api.post('/api/alexa/status', { tv }).then((r) => {
+        if (!r.known) AlexaVoice.forget();
+        state.innerHTML = r.linked ? '✅ Linked. Say "Alexa, ask Tapper to play ESPN".' : 'Not linked yet.';
+      }).catch((e) => { state.textContent = e.message; });
+    }
+    const link = $('#axLink', pane);
+    if (link) link.onclick = async () => {
+      state.textContent = 'Asking the relay for a code...';
+      try {
+        const r = await api.post('/api/alexa/pair', { tv: AlexaVoice.creds(), name: AlexaVoice.name() });
+        AlexaVoice.keep(r.tv);
+        AlexaVoice.refresh(); // start listening now, so "linked" shows up here
+        const code = r.code.replace(/^(\d{3})(\d{3})$/, '$1 $2');
+        state.innerHTML = `Say: <b>"Alexa, ask Tapper to link code ${esc(code)}"</b> (within ${Math.round((r.expiresInSec || 600) / 60)} minutes).`;
+      } catch (e) { state.textContent = e.message; }
+    };
+    const unlink = $('#axUnlink', pane);
+    if (unlink) unlink.onclick = async () => {
+      await api.post('/api/alexa/unlink', { tv: AlexaVoice.creds() }).catch(() => null);
+      state.textContent = 'Unlinked.';
+    };
+  },
+
   async remote(pane) {
     let r;
     try { r = await api.get('/api/remote'); } catch (e) { pane.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }

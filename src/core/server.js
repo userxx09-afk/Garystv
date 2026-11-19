@@ -22,6 +22,7 @@ const { Auth } = require('./auth');
 const { Peers } = require('./peers');
 const { Sharing, remoteRecording } = require('./sharing');
 const { Arlo } = require('./arlo');
+const { Alexa } = require('./alexa');
 
 const UI_DIR = path.join(__dirname, '..', 'ui');
 const VERSION = require('../../package.json').version;
@@ -216,6 +217,7 @@ function createServer(core) {
   // each ask, so accounts added to it work without a restart.
   const family = core.family = new Family(core, { secretsFile: process.env.GTV_SECRETS_FILE || (process.platform === 'linux' ? '/etc/garystv/secrets.env' : null) });
   const sharing = core.sharing = new Sharing(core, peers);
+  const alexa = core.alexa = new Alexa(core);
   const peerOnly = (req) => { if (!req.who.peer) throw new Error('Only for a linked GarysTV.'); return req.who.peer; };
   // A recording at the other place (sharing.js): changes go to it.
   const atPeer = (id, method, body) => {
@@ -265,7 +267,7 @@ function createServer(core) {
     ['GET', '/api/ping', () => ({ app: 'GarysTV', name: require('os').hostname(), platform: process.platform, addresses: lanAddresses() })], // TV app looks for this when searching the network
     ['GET', '/api/state', () => ({
       // The TMDb key itself stays on the server; screens only learn whether there is one.
-      settings: { ...core.settings, tmdbKey: undefined, tmdbKeyFrom: tmdb.keySource() }, types: core.describeTypes(), sources: core.sources, guides: core.guides,
+      settings: { ...core.settings, tmdbKey: undefined, tmdbKeyFrom: tmdb.keySource(), alexaKey: undefined }, types: core.describeTypes(), sources: core.sources, guides: core.guides,
       // Not the stream addresses: the screens play through /stream, and IPTV ones hold the login.
       channels: core.channels.map(({ streamUrl, catchupUrl, ...c }) => c), // both hold the IPTV login guideChannels: core.guideData.channels.map(({ id, names, number, providerName }) => ({ id, names, number, providerName })),
       rules: core.rules, status: { ...core.status(), tools: tools.status(), platform: process.platform, version: VERSION }, favLists: core.favLists,
@@ -379,6 +381,13 @@ function createServer(core) {
     ['POST', '/api/arlo/motion', (q, b) => arlo.motion(b)],
     ['POST', '/api/arlo/test', () => arlo.test()],
     // Updates: the Windows app's own (src/app-updates.js), or a home server's (core/server-updates.js).
+    // Alexa (alexa.js): the relay is set here once; each screen passes its own relay id ({tv}).
+    ['GET', '/api/alexa', () => alexa.overview()],
+    ['PUT', '/api/alexa', (q, b) => alexa.save(b)],
+    ['POST', '/api/alexa/pair', (q, b) => alexa.pair(b)],
+    ['POST', '/api/alexa/status', (q, b) => alexa.status(b)],
+    ['POST', '/api/alexa/unlink', (q, b) => alexa.unlink(b)],
+    ['POST', '/api/alexa/next', (q, b) => alexa.next(b)], // long poll, up to ~25s
     ['GET', '/api/app-update', () => (core.appUpdater ? core.appUpdater.status() : { supported: false })],
     ['POST', '/api/app-update/check', () => (core.appUpdater ? core.appUpdater.check() : null)],
     ['POST', '/api/app-update/install', () => { if (!core.appUpdater) throw new Error('This GarysTV has no updater.'); return core.appUpdater.install(); }],
