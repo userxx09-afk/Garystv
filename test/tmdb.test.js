@@ -4,7 +4,7 @@ const http = require('http');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { Tmdb, parseTitle } = require('../src/core/tmdb');
+const { Tmdb, parseTitle, similarity } = require('../src/core/tmdb');
 const { Store } = require('../src/core/store');
 
 test('Provider names become a title and year', () => {
@@ -60,6 +60,53 @@ test('TMDb lookups: either key type, kept answers, failures not kept', async () 
     settings.tmdbKey = 'bad';
     tmdb.clearCache();
     assert.match((await tmdb.lookup('movies', 'The Matrix')).error, /refused the key/);
+  } finally {
+    clearTimeout(tmdb.saveTimer);
+    server.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Quality tags never stop a match', () => {
+  for (const raw of ['4K | The Matrix', '|UHD| The Matrix HDR', 'The Matrix 4K', 'The Matrix ᴴᴰ', 'The Matrix ⁴ᴷ', '4K - The Matrix',
+    'HD: The Matrix', 'The Matrix FHD 2160p HEVC', 'EN | The Matrix | 4K', 'The Matrix (4K HDR)', 'The Matrix DV HDR10+ Atmos', 'The Matrix MULTI']) {
+    assert.equal(parseTitle(raw).title, 'The Matrix', raw);
+  }
+  assert.equal(parseTitle('Sub Zero').title, 'Sub Zero'); // real words stay
+  assert.equal(parseTitle('Cam').title, 'Cam');
+  assert.equal(parseTitle('Spider-Man HD').title, 'Spider-Man');
+});
+
+test('Near-identical titles count as the same; sequels and others do not', () => {
+  assert.ok(similarity('Spiderman', 'Spider-Man') > 0.9);
+  assert.ok(similarity('Fast and Furious', 'Fast & Furious') > 0.9);
+  assert.ok(similarity('Matrix', 'The Matrix') > 0.9);
+  assert.ok(similarity('Harry Potter Sorcerers Stone', "Harry Potter and the Sorcerer's Stone") > 0.8);
+  assert.ok(similarity('The Matrx', 'The Matrix') > 0.8);
+  assert.ok(similarity('Toy Story', 'Toy Story 4') < 0.7);
+  assert.ok(similarity('Breaking Bad', 'The Matrix') < 0.3);
+});
+
+test('The closest TMDb result wins, and an old "nothing found" is asked again', async () => {
+  const server = http.createServer((req, res) => {
+    const q = new URL(req.url, 'http://x').searchParams.get('query');
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ results: q === 'Toy Story' ? [
+      { id: 4, title: 'Toy Story 4', release_date: '2019-06-19' },
+      { id: 1, title: 'Toy Story', release_date: '1995-10-30' },
+    ] : q === 'Gladiator' ? [{ id: 98, title: 'Gladiator', release_date: '2000-05-01' }] : [] }));
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gtv-tmdb-'));
+  const core = { store: new Store(dir), settings: { tmdbKey: 'k' } };
+  core.store.write('tmdbcache', { 'movie|gladiator|': { status: 'none', at: Date.now() } }); // from the old matcher
+  const tmdb = new Tmdb(core, { api: `http://127.0.0.1:${server.address().port}` });
+  try {
+    const t = await tmdb.lookup('movies', '4K | Toy Story');
+    assert.equal(t.tmdbId, 1);
+    assert.equal(t.confidence >= 0.9, true);
+    assert.equal((await tmdb.lookup('movies', 'Gladiator 4K')).status, 'found');
+    assert.equal((await tmdb.lookup('movies', 'Nope HD')).status, 'none');
   } finally {
     clearTimeout(tmdb.saveTimer);
     server.close();
