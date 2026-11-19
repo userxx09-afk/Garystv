@@ -1,9 +1,9 @@
 // Alexa voice control (core/alexa.js): "Alexa, ask Tapper to play ESPN". While GarysTV is on
 // screen, this screen keeps one request open to the engine, which passes it to the Tapper Alexa
 // relay, and acts on what Alexa queued: play a channel by name or number, next and previous
-// channel, pause, resume, stop. Each screen links to Alexa on its own (Settings > Alexa); the
+// channel, pause, resume, stop, open the guide or My Recordings, go home, go back. Each screen links to Alexa on its own (Settings > Alexa); the
 // last one linked is the one Alexa controls.
-/* global App, Player, Health, Multiview, MANAGING, Modal */
+/* global App, Player, Health, Multiview, MANAGING, Modal, atStart */
 const AlexaVoice = {
   overview: null, running: false, wake: null, checked: 0,
 
@@ -69,6 +69,10 @@ const AlexaVoice = {
         else if (!this.playing() && App.lastChannel) { this.leaveOverlays(); Player.play('live', App.lastChannel); }
         return;
       }
+      if (c.type === 'guide') { this.leaveOverlays(); App.go('guide'); return; }
+      if (c.type === 'recordings') { this.leaveOverlays(); App.go('dvr'); return; }
+      if (c.type === 'home') { this.leaveOverlays(); App.home(); return; }
+      if (c.type === 'back') { if (!atStart()) App.back(); return; } // never leaves the app
       if (c.type === 'stop') {
         if (typeof Multiview !== 'undefined' && Multiview.active) { Multiview.stop(); return; }
         if (this.playing()) { Player.stop(); App.render(); }

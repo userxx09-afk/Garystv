@@ -73,3 +73,9 @@ test('Links a screen through the relay and turns what Alexa heard into channels'
     server.close();
   }
 });
+
+test('keeps the navigation commands the relay sends (guide, recordings, home, back)', () => {
+  const { clean } = require('../src/core/alexa');
+  const got = clean([{ type: 'guide' }, { type: 'recordings' }, { type: 'home' }, { type: 'back' }, { type: 'volume' }]).map((c) => c.type);
+  assert.deepStrictEqual(got, ['guide', 'recordings', 'home', 'back']);
+});
