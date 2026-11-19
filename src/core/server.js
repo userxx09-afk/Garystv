@@ -313,6 +313,8 @@ function createServer(core) {
     // My Recordings > Add a video or DVD (core/importer.js). Sending a file from a browser is /api/import/upload, below.
     ['GET', '/api/import', () => core.importer.overview()],
     ['POST', '/api/import', (q, b) => core.importer.addPath(b)],
+    // Download a movie, an episode or a show from the provider's archive into My Recordings (importer.js).
+    ['POST', '/api/download', (q, b) => core.importer.addDownload(b.id, b.item)],
     ['GET', '/api/search', (q) => core.search(q.q)],
     ['PUT', '/api/settings', (q, b) => core.updateSettings(b)],
     // Where recordings are saved (storage.js): network storage, or back to this computer.

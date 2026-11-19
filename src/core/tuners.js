@@ -109,6 +109,13 @@ class Tuners {
         if (watching) { this.bump(watching, `Stopped so "${what}" could record`); pick = c; break; }
       }
     }
+    // A download (importer.js) gives way to anyone who wants to watch; it starts again later.
+    if (!pick && kind !== 'rec') {
+      for (const c of list) {
+        const dl = [...this.uses.values()].find((u) => u.kind === 'dl' && u.sourceId === c.sourceId);
+        if (dl) { this.bump(dl, `Paused so ${what || 'live TV'} could be watched; it starts again when the plan is free`); pick = c; break; }
+      }
+    }
     if (!pick) {
       // Someone watching at the other place (sharing.js) can be asked to let a recording have the plan.
       const ask = kind !== 'rec' ? [] : list.flatMap((c) => {
@@ -129,12 +136,24 @@ class Tuners {
     const src = this.source(sourceId);
     if (!src) throw new Error('Not found');
     if (this.free(src) <= 0) {
-      const movie = [...this.uses.values()].find((u) => u.kind === 'vod' && u.sourceId === sourceId);
+      const movie = [...this.uses.values()].find((u) => u.kind === 'vod' && u.sourceId === sourceId)
+        || [...this.uses.values()].find((u) => u.kind === 'dl' && u.sourceId === sourceId); // a download waits for the movie
       if (!movie) throw Object.assign(new Error(this.busyMessage({ sourceId })), { status: 409 });
       this.bump(movie, 'Replaced by another movie stream');
     }
     const id = `t${++this.n}`;
     this.uses.set(id, { id, sourceId, channelId: null, kind: 'vod', what, since: Date.now(), onBump });
+    this.core.emit('tuners');
+    return { id };
+  }
+
+  // A download (importer.js): only when a stream is free on its plan; it never takes one from anybody.
+  acquireDownload(sourceId, what = '', onBump = null) {
+    const src = this.source(sourceId);
+    if (!src) throw new Error('That IPTV provider is no longer set up.');
+    if (this.free(src) <= 0) throw Object.assign(new Error(this.busyMessage({ sourceId })), { status: 409 });
+    const id = `t${++this.n}`;
+    this.uses.set(id, { id, sourceId, channelId: null, kind: 'dl', what, since: Date.now(), onBump });
     this.core.emit('tuners');
     return { id };
   }
@@ -151,7 +170,7 @@ class Tuners {
 
   busyMessage(ch) {
     const src = this.source(ch.sourceId);
-    const users = this.using(src).map((u) => `${u.kind === 'rec' ? 'recording' : 'watching'} ${u.what || (u.kind === 'vod' ? 'a movie' : 'a channel')}${u.where ? ` at ${u.where}` : ''}`);
+    const users = this.using(src).map((u) => `${useWord(u)} ${u.what || (u.kind === 'vod' ? 'a movie' : 'a channel')}${u.where ? ` at ${u.where}` : ''}`);
     const n = capacity(src);
     return `${src.name} is in use (${n} stream${n === 1 ? '' : 's'} at once): ${users.join(', ') || 'busy'}.${ch.id ? ' No other plan has this channel free.' : ''}`;
   }
@@ -160,7 +179,7 @@ class Tuners {
   overview() {
     return this.core.sources.filter((s) => s.enabled && capacity(s) !== Infinity).map((s) => ({
       name: s.name, capacity: capacity(s),
-      using: this.using(s).map((u) => `${u.kind === 'rec' ? 'Recording' : 'Watching'} ${u.what || (u.kind === 'vod' ? 'a movie' : 'a channel')}${u.where ? ` (at ${u.where})` : ''}`),
+      using: this.using(s).map((u) => `${useWord(u, true)} ${u.what || (u.kind === 'vod' ? 'a movie' : 'a channel')}${u.where ? ` (at ${u.where})` : ''}`),
     }));
   }
 
@@ -171,6 +190,11 @@ class Tuners {
       return src && capacity(src) !== Infinity ? { plan: planKey(src), kind: u.kind, what: u.what } : null;
     }).filter(Boolean);
   }
+}
+
+function useWord(u, cap) {
+  const w = u.kind === 'rec' ? 'recording' : u.kind === 'dl' ? 'downloading' : 'watching';
+  return cap ? w[0].toUpperCase() + w.slice(1) : w;
 }
 
 module.exports = { Tuners, capacity, planKey };
