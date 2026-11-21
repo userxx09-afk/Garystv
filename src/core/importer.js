@@ -6,7 +6,9 @@
 // Downloads: a movie, an episode or a show from the IPTV provider's archive (Download in
 // Movies, Shows or the Guide) is saved the same way, so it can be watched later without the
 // provider. It only uses a stream when one is free on its plan, and gives it up to anyone who
-// wants to watch (tuners.js); then it starts again once the plan is free.
+// wants to watch (tuners.js); then it starts again once the plan is free. Pause stops it and
+// frees the stream until Resume (it starts over from the beginning then: a half-saved file can't
+// be carried on); deleting it while it's going stops it and throws away what was saved so far.
 //
 // DVDs: the main title is the largest set of VTS_nn_1..n.VOB files in VIDEO_TS. Home-made and
 // other unprotected discs work; copy-protected (CSS) discs aren't supported.
@@ -224,7 +226,7 @@ class Importer {
 
   // At startup: imports the app was closed during start again (if what they came from is still there).
   resume() {
-    for (const r of this.core.recordings.filter((x) => x.status === 'importing')) {
+    for (const r of this.core.recordings.filter((x) => x.status === 'importing' && !x.paused)) {
       const there = r.source && (r.source.vod ? this.hasProvider(r.source.vod) : r.source.dvd ? r.source.dvd.every((f) => fs.existsSync(f)) : fs.existsSync(r.source.file));
       if (there) { this.core.patchRecording(r.id, { progress: 0, waiting: null }); this.queue.push(r.id); } else this.core.patchRecording(r.id, { status: 'failed', waiting: null, error: r.source && r.source.vod ? 'The app was closed during this download, and that IPTV provider is no longer set up.' : 'The app was closed while this was being added, and the video is no longer there.' });
     }
@@ -244,7 +246,9 @@ class Importer {
       await this.convert(rec);
     } catch (e) {
       try { fs.unlinkSync(`${rec.file}.part`); } catch (_) {}
-      if (this.core.recordings.some((r) => r.id === id) && !(this.busy && this.busy.cancelled)) {
+      if (this.busy && this.busy.paused && !this.busy.cancelled) {
+        this.core.patchRecording(id, { progress: 0, waiting: null });
+      } else if (this.core.recordings.some((r) => r.id === id) && !(this.busy && this.busy.cancelled)) {
         this.core.patchRecording(id, { status: 'failed', error: e.message, progress: null, waiting: null });
         this.core.note(`${rec.source && rec.source.vod ? 'download' : 'import'} failed: ${rec.title}: ${e.message}`);
       }
@@ -270,7 +274,7 @@ class Importer {
     const id = rec.source.vod, srcId = id.split('~')[1];
     const busy = this.busy;
     for (;;) {
-      if (busy.cancelled) throw new Error('cancelled');
+      if (busy.cancelled || busy.paused) throw new Error('stopped');
       let lease = null, why = null;
       busy.bumped = false;
       if (this.core.recordingRoom && !this.core.recordingRoom(rec.title)) why = 'Waiting for room on the recordings disk';
@@ -296,11 +300,11 @@ class Importer {
         if (!info || !info.duration) info = { ...(info || {}), duration: rec.source.duration || 0 };
         if (!busy.bumped) await this.run(rec, ffmpeg, { input: url, info, net: true });
       } catch (e) {
-        if (!busy.bumped || busy.cancelled) throw e;
+        if (!busy.bumped || busy.cancelled || busy.paused) throw e;
       } finally {
         this.core.tuners.release(lease.id);
       }
-      if (busy.cancelled) throw new Error('cancelled');
+      if (busy.cancelled || busy.paused) throw new Error('stopped');
       if (busy.bumped) {
         try { fs.unlinkSync(`${rec.file}.part`); } catch (_) {}
         this.core.patchRecording(rec.id, { progress: 0, waiting: 'Paused while the stream is used for watching; it starts again when the plan is free' });
@@ -323,6 +327,7 @@ class Importer {
 
   // One ffmpeg run into <file>.part; throws if it fails.
   async run(rec, ffmpeg, { input, dvd = false, info = null, net = false }) {
+    if (this.busy.cancelled || this.busy.paused) throw new Error('stopped'); // paused while it was getting ready
     fs.mkdirSync(path.dirname(rec.file), { recursive: true });
     const part = `${rec.file}.part`;
     const proc = spawn(ffmpeg, convertArgs({ input, dvd, info, out: part, net }), { stdio: [dvd ? 'pipe' : 'ignore', 'pipe', 'pipe'], windowsHide: true });
@@ -359,7 +364,7 @@ class Importer {
       proc.stdin.on('error', () => { /* ffmpeg stopped early: its exit says why */ });
     }
     const code = await new Promise((resolve) => proc.on('close', resolve));
-    if (this.busy && this.busy.cancelled) throw new Error('cancelled');
+    if (this.busy && (this.busy.cancelled || this.busy.paused)) throw new Error('stopped');
     if (code !== 0) throw new Error((err.trim().split('\n').pop() || `ffmpeg stopped (${code})`).slice(0, 300));
   }
 
@@ -376,12 +381,43 @@ class Importer {
     this.core.note(`${rec.source.vod ? 'download' : 'import'} finished: ${rec.title} (${Math.round(ms / 60000)} min, ${(size / 1e9).toFixed(1)} GB)`);
   }
 
-  // Deleting one that's waiting or being converted.
+  // Pause (My Recordings): stops a download (or a video being added) and frees its stream until
+  // Resume. What was saved so far is thrown away; Resume starts it over. Kept paused across restarts.
+  async hold(id) {
+    const rec = this.core.recordings.find((r) => r.id === id);
+    if (!rec || rec.status !== 'importing') throw Object.assign(new Error('That one isn\'t downloading any more.'), { status: 409 });
+    if (rec.paused) return { paused: true };
+    this.queue = this.queue.filter((x) => x !== id);
+    this.core.patchRecording(id, { paused: true, waiting: null, progress: 0 });
+    if (this.busy && this.busy.id === id) {
+      this.busy.paused = true;
+      if (this.busy.wake) this.busy.wake(); // waiting for a stream: stop waiting
+      const proc = this.busy.proc;
+      if (proc && proc.exitCode == null) await new Promise((r) => { proc.once('close', r); proc.kill(); });
+    }
+    try { fs.unlinkSync(`${rec.file}.part`); } catch (_) {}
+    this.core.note(`${rec.source && rec.source.vod ? 'download' : 'import'} paused: ${rec.title}`);
+    return { paused: true };
+  }
+
+  // Resume: back in line; it starts from the beginning when it's its turn (and a stream is free).
+  unhold(id) {
+    const rec = this.core.recordings.find((r) => r.id === id);
+    if (!rec || rec.status !== 'importing') throw Object.assign(new Error('That one isn\'t downloading any more.'), { status: 409 });
+    if (!rec.paused) return { paused: false };
+    this.core.patchRecording(id, { paused: false, waiting: null, progress: 0 });
+    if (!this.queue.includes(id) && !(this.busy && this.busy.id === id)) this.queue.push(id);
+    this.core.note(`${rec.source && rec.source.vod ? 'download' : 'import'} resumed: ${rec.title}`);
+    this.next();
+    return { paused: false };
+  }
+
+  // Deleting one that's waiting, paused or being converted: what was saved so far is deleted too.
   async cancel(id) {
     this.queue = this.queue.filter((x) => x !== id);
     const rec = this.core.recordings.find((r) => r.id === id);
     if (rec && rec.source && rec.source.temp) { try { fs.unlinkSync(rec.source.file); } catch (_) {} }
-    if (!this.busy || this.busy.id !== id) return;
+    if (!this.busy || this.busy.id !== id) { if (rec) { try { fs.unlinkSync(`${rec.file}.part`); } catch (_) {} } return; }
     this.busy.cancelled = true;
     if (this.busy.wake) this.busy.wake(); // waiting for a stream: stop waiting
     const proc = this.busy.proc;

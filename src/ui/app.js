@@ -255,7 +255,7 @@ const App = {
   downloadChoice(id) {
     const r = this.downloadOf(id);
     if (!r) return { label: '⤓  Download (watch later, even without the provider)', value: 'download' };
-    if (r.status === 'importing') return { label: `⤓  Downloading${r.waiting ? ' (waiting)' : ` · ${r.progress || 0}%`}: see My Recordings`, value: 'downloads' };
+    if (r.status === 'importing') return { label: r.paused ? '❚❚  Download paused: see My Recordings' : `⤓  Downloading${r.waiting ? ' (waiting)' : ` · ${r.progress || 0}%`}: see My Recordings`, value: 'downloads' };
     return { label: '▶  Watch the download', value: 'watchdl' };
   },
 

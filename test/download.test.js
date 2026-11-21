@@ -118,3 +118,61 @@ test('a movie downloads into My Recordings, waiting for the stream and starting 
     assert.strictEqual(core.tuners.uses.size, 0, 'the stream is given back');
   } finally { server.close(); }
 });
+
+test('a download can be paused (freeing its stream), resumed, and cancelled (deleting what was saved)', { skip: !ffmpeg && 'ffmpeg not installed', timeout: 120000 }, async () => {
+  const src = tmp(), out = tmp();
+  const movie = path.join(src, 'movie.mp4');
+  execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=25:duration=6', '-f', 'lavfi', '-i', 'sine=duration=6',
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', movie]);
+  const data = fs.readFileSync(movie);
+  const server = http.createServer((req, res) => { // sends it slowly, so it's still going when paused
+    const m = /bytes=(\d+)-(\d*)/.exec(req.headers.range || '');
+    const from = m ? +m[1] : 0, to = m && m[2] ? +m[2] + 1 : data.length;
+    res.writeHead(m ? 206 : 200, { 'Content-Type': 'video/mp4', 'Content-Length': to - from, 'Accept-Ranges': 'bytes', ...(m ? { 'Content-Range': `bytes ${from}-${to - 1}/${data.length}` } : {}) });
+    let i = from;
+    const tick = setInterval(() => { if (i >= to) { clearInterval(tick); res.end(); return; } res.write(data.subarray(i, i = Math.min(to, i + 16384))); }, 20);
+    req.on('close', () => clearInterval(tick));
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  try {
+    const core = fakeCore(out, `http://127.0.0.1:${server.address().port}/movie/u/p/5.mp4`);
+    const imp = new Importer(core);
+    imp.pause = () => new Promise((r) => setTimeout(r, 200));
+    const downloading = () => [...core.tuners.uses.values()].some((u) => u.kind === 'dl');
+    const { id } = imp.addDownload('m~src1~5~mp4', { title: 'Test Movie', duration: 6 });
+    const file = rec(core, id).file;
+    await until(() => downloading() && fs.existsSync(`${file}.part`));
+    await imp.hold(id);
+    await until(() => !imp.busy);
+    assert.strictEqual(rec(core, id).paused, true);
+    assert.strictEqual(rec(core, id).status, 'importing', 'paused, not failed');
+    assert.ok(!downloading(), 'the stream is free while paused');
+    assert.ok(!fs.existsSync(`${file}.part`));
+    // A restart keeps it paused.
+    const imp2 = new Importer(core);
+    imp2.resume();
+    assert.ok(!imp2.busy && !imp2.queue.length);
+    // Resume: it starts again and finishes.
+    const inputs = core.inputs;
+    imp.unhold(id);
+    const r = await until(() => rec(core, id).status !== 'importing' && rec(core, id));
+    assert.strictEqual(r.status, 'complete', r.error);
+    assert.ok(core.inputs > inputs);
+    assert.ok(fs.existsSync(r.file));
+    // Cancel while downloading: the partial file goes, and the stream is given back.
+    const two = imp.addDownload('e~src1~9~mp4', { title: 'Other', season: 1, episode: 1, duration: 6 });
+    const file2 = rec(core, two.id).file;
+    await until(() => downloading() && fs.existsSync(`${file2}.part`));
+    await imp.cancel(two.id);
+    await until(() => !imp.busy);
+    assert.ok(!fs.existsSync(`${file2}.part`) && !fs.existsSync(file2));
+    assert.ok(!downloading());
+    // Cancel while paused.
+    const three = imp.addDownload('e~src1~10~mp4', { title: 'Other', season: 1, episode: 2, duration: 6 });
+    await until(() => downloading());
+    await imp.hold(three.id);
+    await until(() => !imp.busy);
+    await imp.cancel(three.id);
+    assert.ok(!fs.existsSync(`${rec(core, three.id).file}.part`));
+  } finally { server.close(); }
+});
