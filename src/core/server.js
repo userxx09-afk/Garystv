@@ -341,7 +341,9 @@ function createServer(core) {
     ['POST', '/api/rules/:id/move', (q, b, p) => core.moveRule(p.id, b.delta)],
     ['POST', '/api/jobs/skip', (q, b) => core.skipJob(b.id, b.skip !== false)],
     ['POST', '/api/jobs/extend', (q, b) => core.extendJob(String(b.id || ''), b.minutes)],
-    ['PUT', '/api/recordings/:id', (q, b, p) => atPeer(p.id, 'PUT', b) || core.patchRecording(p.id, { position: b.position, watched: b.watched, saved: b.saved === undefined ? undefined : !!b.saved })],
+    // { paused: true/false }: Pause / Resume a download (or a video being added), importer.js.
+    ['PUT', '/api/recordings/:id', (q, b, p) => atPeer(p.id, 'PUT', b) || (b.paused !== undefined ? (b.paused ? core.importer.hold(p.id) : core.importer.unhold(p.id))
+      : core.patchRecording(p.id, { position: b.position, watched: b.watched, saved: b.saved === undefined ? undefined : !!b.saved }))],
     ['GET', '/api/sports/leagues', () => sports.leagues()],
     ['GET', '/api/sports/teams', (q) => sports.teams(q.league)],
     ['GET', '/api/sports/games', () => sports.games()],

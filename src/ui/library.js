@@ -207,7 +207,7 @@ function libraryView(kind) {
     dlMark(id) {
       const r = App.downloadOf(id);
       if (!r) return '';
-      return r.status === 'importing' ? `⤓ ${r.waiting ? 'Waiting' : `${r.progress || 0}%`}<br>` : '⤓ Downloaded<br>';
+      return r.status === 'importing' ? `⤓ ${r.paused ? 'Paused' : r.waiting ? 'Waiting' : `${r.progress || 0}%`}<br>` : '⤓ Downloaded<br>';
     },
 
     async resumeMenu(c) {

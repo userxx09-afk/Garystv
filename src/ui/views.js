@@ -157,9 +157,9 @@ const DvrView = {
     $('#dvrDetail').innerHTML = `<div class="title">${esc(r.title)}</div>
       <div class="sub">${esc([fmt.se(r), r.subtitle].filter(Boolean).join('  ·  '))}</div>
       <div class="meta"><span>${esc(r.channelNumber)} ${esc(r.channelName)}</span><span>${fmt.when(r.start)}</span><span>${fmt.dur(r.end - r.start)}</span><span>${fmt.size(r.size)}</span>
-        <span class="status-pill st-${r.status}">${r.status === 'recording' ? '● Recording' : r.status === 'importing' ? `${addingWord(r)} · ${r.progress || 0}%` : r.status}</span>${r.simulated ? '<span class="tag">PRACTICE</span>' : ''}${r.at ? `<span class="tag">AT ${esc(r.at.toUpperCase())}</span>` : ''}</div>
+        <span class="status-pill st-${r.status}">${r.status === 'recording' ? '● Recording' : r.status === 'importing' ? (r.paused ? '❚❚ Paused' : `${addingWord(r)} · ${r.progress || 0}%`) : r.status}</span>${r.simulated ? '<span class="tag">PRACTICE</span>' : ''}${r.at ? `<span class="tag">AT ${esc(r.at.toUpperCase())}</span>` : ''}</div>
       ${r.error ? `<div class="s" style="color:var(--yellow)">${esc(r.error)}</div>` : ''}
-      ${r.status === 'importing' && r.waiting ? `<div class="s" style="color:var(--yellow)">${esc(r.waiting)}</div>` : ''}
+      ${r.status === 'importing' && r.paused ? '<div class="s" style="color:var(--yellow)">Paused. Press OK to resume or cancel it.</div>' : r.status === 'importing' && r.waiting ? `<div class="s" style="color:var(--yellow)">${esc(r.waiting)}</div>` : ''}
       <div class="desc">${esc(r.desc || '')}</div>
       ${r.position > 30 ? `<div class="s">Stopped at ${fmt.clock(r.position)}</div>` : ''}
       ${r.saved ? '<div class="s">★ Saved: never deleted to make room or by a series\' keep limit.</div>' : ''}`;
@@ -175,8 +175,10 @@ const DvrView = {
     if (!r) return;
     if (r.status === 'importing') {
       const dl = r.imported === 'download';
-      const v = await Modal.menu(r.title, `<div class="s">${dl ? 'Downloading' : 'Being added'}: ${r.waiting ? esc(r.waiting) : r.progress ? `${r.progress}% done` : 'starting...'}. It can be watched when it's done.</div>`,
-        [{ label: dl ? '✕  Stop the download' : '✕  Stop adding it', value: 'delete', cls: 'danger' }, { label: 'Close', value: null }]);
+      const v = await Modal.menu(r.title, `<div class="s">${r.paused ? `Paused. Resume starts it again from the beginning${dl ? ' when a stream is free' : ''}.` : `${dl ? 'Downloading' : 'Being added'}: ${r.waiting ? esc(r.waiting) : r.progress ? `${r.progress}% done` : 'starting...'}. It can be watched when it's done.`}</div>`,
+        [r.paused ? { label: '▶  Resume', value: 'resume', cls: 'primary' } : { label: '❚❚  Pause', value: 'pause' },
+          { label: dl ? '✕  Cancel the download' : '✕  Stop adding it', value: 'delete', cls: 'danger' }, { label: 'Close', value: null }]);
+      if (v === 'pause' || v === 'resume') this.setPaused(r, v === 'pause');
       if (v === 'delete') this.remove(r);
       return;
     }
@@ -196,12 +198,18 @@ const DvrView = {
     if (v === 'delete') this.remove(r);
   },
 
+  // Pause / Resume a download (or a video being added): core/importer.js hold / unhold.
+  async setPaused(r, on) {
+    try { await api.put(`/api/recordings/${r.id}`, { paused: on }); } catch (e) { return toast(e.message); }
+    toast(on ? 'Paused. Its stream is free for watching.' : 'Resumed. It starts again from the beginning.');
+  },
+
   async remove(r) {
     if (r.status === 'importing') {
       const dl = r.imported === 'download';
-      if (!(await Modal.confirm(dl ? 'Stop the download?' : 'Stop adding it?', dl ? `${r.title}${r.subtitle ? ` - ${r.subtitle}` : ''} won't be downloaded. You can still watch it from your provider.` : `${r.title} won't be added. The original video isn't touched.`, dl ? 'Stop download' : 'Stop adding'))) return;
+      if (!(await Modal.confirm(dl ? 'Cancel the download?' : 'Stop adding it?', dl ? `${r.title}${r.subtitle ? ` - ${r.subtitle}` : ''} won't be downloaded, and what was saved so far is deleted. You can still watch it from your provider.` : `${r.title} won't be added. The original video isn't touched.`, dl ? 'Cancel download' : 'Stop adding'))) return;
       await api.del(`/api/recordings/${r.id}`);
-      return toast('Stopped');
+      return toast(dl ? 'Download cancelled' : 'Stopped');
     }
     if (!(await Modal.confirm('Delete recording?', `${r.title}${r.subtitle ? ` - ${r.subtitle}` : ''} will be permanently deleted.`, 'Delete'))) return;
     await api.del(`/api/recordings/${r.id}`);
@@ -211,7 +219,10 @@ const DvrView = {
   // What the menu offers for one recording.
   menuFor(r) {
     const items = [];
-    if (r.status === 'importing') return [{ label: r.imported === 'download' ? '✕ Stop the download...' : '✕ Stop adding it...', run: () => this.remove(r), cls: 'danger' }];
+    if (r.status === 'importing') {
+      return [r.paused ? { label: '▶ Resume', run: () => this.setPaused(r, false), cls: 'primary' } : { label: '❚❚ Pause', run: () => this.setPaused(r, true) },
+        { label: r.imported === 'download' ? '✕ Cancel the download...' : '✕ Stop adding it...', run: () => this.remove(r), cls: 'danger' }];
+    }
     if (r.position > 30 && !r.watched) items.push({ label: `▶ Resume from ${fmt.clock(r.position)}`, run: () => Player.play('rec', r.id, { offset: r.position }), cls: 'primary' });
     items.push({ label: r.position > 30 ? '⟲ Start over' : '▶ Play', run: () => Player.play('rec', r.id), cls: r.position > 30 ? '' : 'primary' });
     if (r.status === 'recording') items.push({ label: '■ Stop recording', run: async () => { await api.post('/api/jobs/skip', { id: r.jobId }); toast('Recording stopped'); } });
@@ -339,7 +350,7 @@ function recItem(r) {
   return `<div class="item nav ${r.watched || r.status === 'recording' ? '' : 'unwatched'}" data-key="r-${r.id}" data-rec="${r.id}">
     <div class="main"><div class="t">${r.status === 'recording' ? '<span class="dot pulse"></span>' : ''}${r.saved ? '<span class="fav">★</span>' : ''}${esc(r.subtitle || r.title)}</div>
     <div class="s">${esc([fmt.se(r), `${r.channelNumber} ${r.channelName}`].filter(Boolean).join('  ·  '))}</div></div>
-    <div class="m">${fmt.when(r.start)}<br>${r.status === 'importing' ? `<span class="status-pill st-importing">${r.waiting ? 'waiting' : `${addingWord(r).toLowerCase()} ${r.progress || 0}%`}</span>` : r.status !== 'complete' ? `<span class="status-pill st-${r.status}">${r.status}</span>` : fmt.dur(r.end - r.start)}</div></div>`;
+    <div class="m">${fmt.when(r.start)}<br>${r.status === 'importing' ? `<span class="status-pill st-importing">${r.paused ? 'paused' : r.waiting ? 'waiting' : `${addingWord(r).toLowerCase()} ${r.progress || 0}%`}</span>` : r.status !== 'complete' ? `<span class="status-pill st-${r.status}">${r.status}</span>` : fmt.dur(r.end - r.start)}</div></div>`;
 }
 
 // ---------------- Timers ----------------
