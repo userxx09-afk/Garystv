@@ -11,6 +11,9 @@ const https = require('https');
 const { spawn } = require('child_process');
 const { findFfmpeg } = require('./tools');
 
+// Camera Keeper knows GarysTV by this: the household's TVs don't show other people's cameras.
+const UA = `GarysTV/${(() => { try { return require('../../package.json').version; } catch (_) { return '0'; } })()}`;
+
 const DEFAULTS = { enabled: false, url: 'http://127.0.0.1:8090', cameras: [] };
 const RENEW_MS = 5 * 60000; // Camera Keeper forgets a GarysTV that hasn't checked in for 30 minutes
 // What /arlo/view may fetch from Camera Keeper: a clip as it records, or a saved one.
@@ -89,7 +92,7 @@ class Arlo {
     const url = new URL(a.base + path);
     const lib = url.protocol === 'https:' ? https : http;
     const data = body ? JSON.stringify(body) : null;
-    const headers = { Accept: 'application/json', ...(a.auth ? { Authorization: a.auth } : {}), ...(data ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } : {}) };
+    const headers = { Accept: 'application/json', 'User-Agent': UA, ...(a.auth ? { Authorization: a.auth } : {}), ...(data ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } : {}) };
     return new Promise((resolve, reject) => {
       const req = lib.request(url, { method, timeout: 8000, headers }, (res) => {
         let text = '';
@@ -120,7 +123,10 @@ class Arlo {
     const on = new Set(this.settings.cameras);
     const brandOf = (c) => c.brand || (String(c.id).startsWith('blink-') ? 'blink' : 'arlo');
     const cameras = (r.cameras || []).map((c) => ({ id: String(c.id), name: c.name, model: c.model, battery: c.battery, unavailable: !!c.unavailable, lastMotion: c.last_motion,
-      brand: brandOf(c), account: c.account ? `${brandOf(c)}:${c.account}` : null, on: on.has(String(c.id)) }));
+      brand: brandOf(c), account: c.account ? `${brandOf(c)}:${c.account}` : null, on: on.has(String(c.id)),
+      // Newer Camera Keepers say whether it can be watched live, and send its newest picture.
+      live: c.live !== undefined ? !!c.live : brandOf(c) !== 'blink' && !c.unavailable,
+      thumb: safeThumb(c.thumb) ? `/arlo/thumb?src=${encodeURIComponent(c.thumb)}` : null }));
     // Accounts (newer Camera Keepers list them; older ones only name each camera's account).
     let accounts = Array.isArray(r.accounts) ? r.accounts.map((x) => ({ id: `${x.brand}:${x.username}`, brand: x.brand, username: x.username, connected: !!x.connected, waitingForCode: !!x.waiting_for_code })) : [];
     for (const c of cameras) if (c.account && !accounts.some((x) => x.id === c.account)) accounts.push({ id: c.account, brand: c.brand, username: c.account.split(':').slice(1).join(':'), connected: true, waitingForCode: false });
@@ -267,7 +273,7 @@ class Arlo {
     if (!id || a.error) { res.writeHead(400); return res.end(); }
     const url = new URL(`${a.base}/api/camera/${encodeURIComponent(id)}/live.mjpg`);
     const lib = url.protocol === 'https:' ? https : http;
-    const up = lib.get(url, { headers: a.auth ? { Authorization: a.auth } : {} }, (r) => {
+    const up = lib.get(url, { headers: { 'User-Agent': UA, ...(a.auth ? { Authorization: a.auth } : {}) } }, (r) => {
       if (r.statusCode !== 200) { r.resume(); res.writeHead(r.statusCode === 404 ? 404 : 502); return res.end(); }
       res.writeHead(200, { 'Content-Type': r.headers['content-type'] || 'multipart/x-mixed-replace; boundary=frame', 'Cache-Control': 'no-store' });
       r.pipe(res);
@@ -287,7 +293,7 @@ class Arlo {
     if (a.error) { res.writeHead(400); return res.end(); }
     const url = new URL(a.base + p);
     const lib = url.protocol === 'https:' ? https : http;
-    const up = lib.get(url, { timeout: 8000, headers: a.auth ? { Authorization: a.auth } : {} }, (r) => {
+    const up = lib.get(url, { timeout: 8000, headers: { 'User-Agent': UA, ...(a.auth ? { Authorization: a.auth } : {}) } }, (r) => {
       if (r.statusCode !== 200) { r.resume(); res.writeHead(404); return res.end(); }
       res.writeHead(200, { 'Content-Type': r.headers['content-type'] || 'image/jpeg', 'Cache-Control': 'max-age=86400' });
       r.pipe(res);
@@ -308,7 +314,7 @@ class Arlo {
     if (a.error) { res.writeHead(400); return res.end(); }
     const input = a.base + path;
     // The sign-in goes in a header: ffmpeg only sends one from the address after being asked.
-    const auth = a.auth ? ['-headers', `Authorization: ${a.auth}\r\n`] : [];
+    const auth = ['-user_agent', UA, ...(a.auth ? ['-headers', `Authorization: ${a.auth}\r\n`] : [])];
     const look = big ? ['-t', '120', '-an', '-vf', 'fps=15,scale=1280:-2', '-q:v', '5'] : ['-t', '30', '-an', '-vf', 'fps=10,scale=640:-2', '-q:v', '7'];
     // -re: show it at normal speed (a finished clip would otherwise be sent all at once).
     const proc = spawn(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-re', ...auth, '-i', input, ...look,
