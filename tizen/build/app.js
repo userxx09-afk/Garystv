@@ -99,6 +99,24 @@ const App = {
     if (view !== GuideView) Nav.restore(keep);
   },
 
+  // ---------- recent channels ----------
+  // The last 10 live channels watched on this device, newest first (for PREV CH and Recent channels).
+  recentIds() { try { return JSON.parse(localStorage.getItem('gtv.recent') || '[]'); } catch (_) { return []; } },
+  noteRecent(id) {
+    const ids = [id, ...this.recentIds().filter((x) => x !== id)].slice(0, 10);
+    try { localStorage.setItem('gtv.recent', JSON.stringify(ids)); } catch (_) { /* private mode */ }
+  },
+  recentChannelList() {
+    const byId = new Map(((this.state && this.state.channels) || []).filter((c) => !c.hidden).map((c) => [c.id, c]));
+    return this.recentIds().map((id) => byId.get(id)).filter(Boolean);
+  },
+  // The channel before the one watched last (or before the one playing now).
+  previousChannel() {
+    const list = this.recentChannelList();
+    const now = typeof Player !== 'undefined' && Player.channel ? Player.channel.id : list[0] && list[0].id;
+    return list.find((c) => c.id !== now) || null;
+  },
+
   // ---------- recording actions ----------
   jobFor(row, p) { return this.schedule.find((j) => j.id === `${row.id}@${p.start}`); },
   seriesRuleFor(p) {
@@ -106,10 +124,11 @@ const App = {
     return this.state.rules.find((r) => r.type === 'series' && r.title.toLowerCase().replace(/[^a-z0-9]/g, '') === t);
   },
 
-  async recordOnce(row, p) {
+  async recordOnce(row, p, pads = {}) {
     await api.post('/api/rules', {
       type: 'once', channelId: row.id, start: p.start, end: p.end, title: p.title, subtitle: p.subtitle || '', desc: p.desc || '',
       season: p.season ?? null, episode: p.episode ?? null, categories: p.categories || [], isNew: !!p.isNew, programId: p.programId || '',
+      ...(pads.prePad !== undefined ? { prePad: pads.prePad } : {}), ...(pads.postPad !== undefined ? { postPad: pads.postPad } : {}),
     });
     toast(`● Will record ${p.title}`);
     await this.loadAll();
@@ -162,6 +181,7 @@ const App = {
       const job = this.jobFor(row, p);
       if (job && job.status !== 'skipped') {
         if (job.status !== 'recording') items.push({ label: `✕ Don't record "${p.title}"`, run: () => this.cancelProgram(row, p) });
+        if (job.status === 'scheduled' || job.status === 'recording') items.push({ label: `⏩ End "${p.title}" later...`, run: () => this.endLater(job) });
       } else items.push({ label: `● Record "${p.title}"`, run: () => this.recordOnce(row, p) });
       const series = this.seriesRuleFor(p);
       items.push({ label: series ? '●● Change the series timer...' : `●● Record every episode of "${p.title}"...`, run: () => this.seriesDialog(row, p, series) });
@@ -227,6 +247,43 @@ const App = {
     await this.loadAll();
   },
 
+  // ---------- downloads (core/importer.js) ----------
+  // The download of a movie / episode / archived show (vod id), if there is one that hasn't failed.
+  downloadOf(id) { return (this.recordings || []).find((r) => r.source && r.source.vod === id && r.status !== 'failed') || null; },
+
+  // A choice for a menu: "Download", or where its download is at. -> { label, value } or null.
+  downloadChoice(id) {
+    const r = this.downloadOf(id);
+    if (!r) return { label: '⤓  Download (watch later, even without the provider)', value: 'download' };
+    if (r.status === 'importing') return { label: r.paused ? '❚❚  Download paused: see My Recordings' : `⤓  Downloading${r.waiting ? ' (waiting)' : ` · ${r.progress || 0}%`}: see My Recordings`, value: 'downloads' };
+    return { label: '▶  Watch the download', value: 'watchdl' };
+  },
+
+  // Starts the download. item: { title, subtitle, season, episode, desc, poster, year, duration (s) }.
+  async download(id, item, quiet = false) {
+    try {
+      const r = await api.post('/api/download', { id, item });
+      if (!quiet) toast(r.already ? `${item.title} is already in My Recordings` : `⤓ Downloading ${item.title}${item.subtitle ? ` · ${item.subtitle}` : ''}. It shows up in My Recordings.`);
+      await this.loadAll();
+      return r;
+    } catch (e) { toast(e.message); return null; }
+  },
+
+  // What a download choice does: start it, open My Recordings, or play what's there.
+  async downloadPicked(v, id, item) {
+    if (v === 'download') await this.download(id, item);
+    if (v === 'downloads') this.go('dvr');
+    if (v === 'watchdl') { const r = this.downloadOf(id); if (r) Player.play('rec', r.id, { offset: r.position > 30 && !r.watched ? r.position : 0 }); }
+  },
+
+  // A show in the guide that's over and still in the provider's archive (catch-up): its vod id, or null.
+  archiveId(row, p) {
+    const ch = (this.state.channels || []).find((c) => c.id === row.id) || row;
+    const now = Date.now();
+    if (!ch.archiveDays || !ch.sourceId || p.filler || p.end > now || p.start < now - ch.archiveDays * 86400000) return null;
+    return `c~${ch.sourceId}~${ch.id.slice(ch.sourceId.length + 1)}~${p.start}-${p.end}`;
+  },
+
   // R in the guide: none -> this show; this show -> whole series; series -> cancel.
   async quickRecord(row, p) {
     if (row && p && p.filler) return this.manualDialog(row.id); // no listing: record by time instead
@@ -260,8 +317,17 @@ const App = {
     const series = this.seriesRuleFor(p);
     const choices = [];
     if (airing) choices.push({ label: '▶  Watch now', value: 'watch', cls: 'primary' });
+    if (airing && Player.startOverChoice(row, p)) choices.push({ label: '⟲  Start over (from the beginning)', value: 'over' });
     if (job && job.status !== 'skipped') choices.push({ label: job.status === 'recording' ? '■  Stop recording this show' : '✕  Don\'t record this show', value: 'cancel', cls: 'danger' });
     else if (p.end > now) choices.push({ html: '<span class="dot"></span> Record this show', value: 'once', cls: airing ? '' : 'primary' });
+    if (p.end > now && (!job || job.status === 'skipped')) choices.push({ html: '<span class="dot"></span> Record, start early / end late...', value: 'oncePad' });
+    if (job && (job.status === 'scheduled' || job.status === 'recording')) choices.push({ label: '⏩  End later...', value: 'later' });
+    // Over, but the provider still has it: download it (a show still to come is recorded instead).
+    const archived = this.archiveId(row, p);
+    if (archived) {
+      const c = this.downloadChoice(archived);
+      choices.push(c.value === 'download' ? { ...c, cls: 'primary' } : c);
+    } else if (p.end > now && (!job || job.status === 'skipped')) choices.push({ label: '⤓  Download: record it to My Recordings', value: 'once' });
     choices.push(series ? { html: '<span class="dot series"></span> Change series timer', value: 'series' } : { html: '<span class="dot series"></span> Record series...', value: 'series' });
     choices.push({ label: 'Close', value: null });
     const body = `<div class="sub">${esc([fmt.se(p), p.subtitle].filter(Boolean).join('  ·  '))}</div>
@@ -271,10 +337,51 @@ const App = {
     const v = await Modal.menu(p.title, body, choices);
     try {
       if (v === 'watch') Player.play('live', row.id);
+      if (v === 'over') Player.startOver(row, p);
       if (v === 'once') await this.recordOnce(row, p);
+      if (v === 'oncePad') { const pads = await this.padDialog(p.title); if (pads) await this.recordOnce(row, p, pads); }
+      if (v === 'later') await this.endLater(job);
       if (v === 'cancel') await this.cancelProgram(row, p);
       if (v === 'series') await this.seriesDialog(row, p, series);
+      if (archived) {
+        await this.downloadPicked(v, archived, { title: p.title, subtitle: p.subtitle || '', season: p.season, episode: p.episode, desc: p.desc || '', duration: (p.end - p.start) / 1000 });
+      }
     } catch (e) { toast(e.message); }
+  },
+
+  // Start early / End late for one show. -> { prePad, postPad } or null if cancelled.
+  // current: the timer's values when changing one already set.
+  padDialog(title, current = {}, okLabel = 'Record this show') {
+    const o = { prePad: current.prePad ?? null, postPad: current.postPad ?? null };
+    return Modal.open((m, close) => {
+      m.innerHTML = `<div class="title">${esc(title)}</div><div class="s">Use ←/→ to change an option. Default uses Settings › Recording (games end later).</div><div class="menu-list" id="opts"></div>
+        <div class="actions"><div class="btn nav primary" id="ok">${esc(okLabel)}</div><div class="btn nav" id="cx">Cancel</div></div>`;
+      const opts = $('#opts', m);
+      const idx = (vals, v) => Math.max(0, vals.findIndex((x) => x.value === v));
+      opts.appendChild(optionRow('Start early', PAD_EARLY, idx(PAD_EARLY, o.prePad), (v) => { o.prePad = v; }));
+      opts.appendChild(optionRow('End late', PAD_LATE, idx(PAD_LATE, o.postPad), (v) => { o.postPad = v; }));
+      $('#cx', m).onclick = () => close(null);
+      $('#ok', m).onclick = () => close(o);
+    });
+  },
+
+  // A game running over: add time to the end of this one airing (a recording already going keeps going).
+  async endLater(job) {
+    if (!job) return;
+    const extra = job.extraMin || 0;
+    const choices = [[15, '15 minutes'], [30, '30 minutes'], [60, '1 hour'], [120, '2 hours']]
+      .map(([min, label]) => ({ label: `+ ${label}`, value: extra + min }));
+    if (extra) choices.push({ label: `Take off the extra ${extra} min`, value: 0 });
+    choices.push({ label: 'Cancel', value: null });
+    const ends = new Date(job.recEnd).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    const v = await Modal.menu(`End "${job.title}" later`, `<div class="s">Now ends at ${esc(ends)}${extra ? ` (${extra} min added)` : ''}.</div>`, choices);
+    if (v == null) return;
+    try {
+      await api.post('/api/jobs/extend', { id: job.id, minutes: v });
+      const at = new Date(job.recEnd + (v - extra) * 60000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      toast(`"${job.title}" now records until ${at}`);
+    } catch (e) { toast(e.message); }
+    await this.loadAll();
   },
 
   seriesDialog(row, p, existing) {
@@ -288,8 +395,8 @@ const App = {
       add('Episodes', [{ label: 'New only', value: true }, { label: 'All (including reruns)', value: false }], 'newOnly');
       if (row) add('Channel', [{ label: `${row.number} ${row.name} only`, value: row.id }, { label: 'Any channel', value: null }], 'channelId');
       add('Keep', [{ label: 'All episodes', value: 0 }, { label: 'Latest 3', value: 3 }, { label: 'Latest 5', value: 5 }, { label: 'Latest 10', value: 10 }], 'keep');
-      add('Start early', [{ label: 'Default', value: null }, { label: 'On time', value: 0 }, { label: '2 min', value: 2 }, { label: '5 min', value: 5 }], 'prePad');
-      add('End late', [{ label: 'Default', value: null }, { label: 'On time', value: 0 }, { label: '5 min', value: 5 }, { label: '15 min', value: 15 }, { label: '30 min', value: 30 }, { label: '1 hour', value: 60 }], 'postPad');
+      add('Start early', PAD_EARLY, 'prePad');
+      add('End late', PAD_LATE, 'postPad');
       $('#cx', m).onclick = () => close();
       if (existing) $('#del', m).onclick = async () => { await api.del(`/api/rules/${existing.id}`); toast('Series timer deleted'); close(true); };
       $('#ok', m).onclick = async () => {
@@ -349,14 +456,28 @@ function heldLeft(e) {
 }
 document.addEventListener('keyup', (e) => { if (e.key === 'ArrowLeft') held.start = 0; });
 
+// In a text box, the arrows used to stay in it, so the highlight couldn't get off it (only Back,
+// which left the screen). Now ↑↓ move off it, and ←→ do too once the cursor is at that end of
+// the text (so you can still move along what you typed). Dropdowns, dates, times and numbers keep
+// ←→ for changing their value.
+function leavesBox(a, key) {
+  if (key === 'ArrowUp' || key === 'ArrowDown') return a.tagName !== 'TEXTAREA' || (key === 'ArrowUp' ? a.selectionStart === 0 : a.selectionEnd === a.value.length);
+  if (key !== 'ArrowLeft' && key !== 'ArrowRight') return false;
+  if (a.tagName === 'SELECT' || a.selectionStart == null) return a.type === 'checkbox'; // no cursor: date, time, number
+  if (a.selectionStart !== a.selectionEnd) return false;
+  return key === 'ArrowLeft' ? a.selectionStart === 0 : a.selectionEnd === a.value.length;
+}
+
 document.addEventListener('keydown', (e) => {
   const a = document.activeElement;
   const typing = a && ['INPUT', 'SELECT', 'TEXTAREA'].includes(a.tagName);
   if (typing) {
     if (App.view && App.view.onKey && !Modal.top() && App.view.onKey(e)) e.preventDefault();
     else if (e.key === 'Escape') { a.blur(); App.back(); e.preventDefault(); }
+    else if (leavesBox(a, e.key) && Nav.handle(e)) { a.blur(); e.preventDefault(); }
     return;
   }
+  if (Multiview.onKey(e)) { e.preventDefault(); return; } // the grid of channels gets every key while it's up
   if (Player.onKey(e)) { e.preventDefault(); return; } // while watching, holding ← keeps rewinding
   if (heldLeft(e)) { if (held.fired === 1) { held.fired = 2; App.toTop(); } e.preventDefault(); return; }
   if (Modal.top()) {
@@ -368,6 +489,7 @@ document.addEventListener('keydown', (e) => {
   }
   if (App.view && App.view.onKey && App.view.onKey(e)) { e.preventDefault(); return; }
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (k === 'PreviousChannel' && !Modal.top()) { Player.previousChannel(); e.preventDefault(); return; } // PREV CH from the guide too
   if ((k === 'ContextMenu' || k === 'm') && !(e.ctrlKey || e.altKey)) { App.menu(); e.preventDefault(); return; }
   const jumps = { g: 'guide', d: 'dvr', t: 'timers', s: 'search', h: 'home', Home: 'home', F1: 'guide' };
   if (jumps[k] && !(e.ctrlKey || e.altKey)) { App.go(jumps[k]); e.preventDefault(); return; }
@@ -478,4 +600,5 @@ function tickClock() {
   if (!window.GTV_SERVER) history.pushState({ gtv: 1 }, '', location.hash); // the TV apps have their own Back
   Updates.startCheck();
   connectEvents();
+  AlexaVoice.start(); // Settings > Alexa
 })();
