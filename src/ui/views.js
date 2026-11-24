@@ -683,6 +683,7 @@ const ArloView = {
       <div class="actions" style="justify-content:center"><div class="btn nav" data-key="live-close" id="liveClose">‹ Back to clips</div><div class="btn nav" data-key="live-again" id="liveAgain">⟲ Keep watching</div></div>`;
     const box = $('#arloPlay', root), img = $('#arloImg', root), left = $('#liveLeft', root);
     let seen = false;
+    const began = Date.now();
     img.onerror = () => { if (!seen) { box.classList.remove('waiting'); box.classList.add('failed'); } };
     img.src = server(`/arlo/live?camera=${encodeURIComponent(w.id)}&n=${w.n}`);
     $('#liveClose', root).onclick = () => this.onBack();
@@ -706,6 +707,7 @@ const ArloView = {
         else if (st.state === 'live') left.textContent = `${Math.floor(st.secondsLeft / 60)}:${String(st.secondsLeft % 60).padStart(2, '0')} left`;
         else if (st.state === 'starting') left.textContent = 'Waking up the camera...';
         else if (seen) left.textContent = 'Live view ended. Press Keep watching to see more.';
+        else if (Date.now() - began > 5000) { box.classList.remove('waiting'); box.classList.add('failed'); left.textContent = "The camera didn't start. Press Keep watching to try again."; }
       } catch (_) { /* try again next time */ } finally { busy = false; }
     };
     const timer = setInterval(tick, 1500);
