@@ -364,8 +364,10 @@ const GuideView = {
 
   open() {
     const r = this.rows[this.row], p = this.focused();
-    if (r && p && p.filler) { Player.play('live', r.id); return; } // no listing (e.g. free channels): OK just tunes in
-    if (r && p) App.programDialog(r, p).then(() => this.refresh());
+    const now = Date.now();
+    // On now (or no listing, e.g. free channels): OK tunes straight in. Hold OK for the menu.
+    if (r && p && (p.filler || (p.start <= now && now < p.end))) { Player.play('live', r.id); return; }
+    if (r && p) App.programDialog(r, p).then(() => this.refresh()); // still to come or over: record it, etc.
   },
 
   async refresh() {
@@ -389,6 +391,7 @@ const GuideView = {
     if (r) items.push({ label: `▶ Watch ${r.number} ${r.name}${xf ? ' on Xfinity' : ''}`, run: () => Player.play('live', r.id), cls: 'primary' });
     if (xf) items.push({ label: '▶ Watch in GarysTV instead', run: () => Player.play('live', r.id, { here: true }) });
     if (xfBackup) items.push({ label: '▶ Watch in Xfinity instead', run: () => Xfinity.tryChannel(rc, true) });
+    if (r && p && !p.filler) items.push({ label: `ⓘ ${p.title}: details, start over, record...`, run: () => App.programDialog(r, p).then(() => this.refresh()) });
     if (r) items.push(...App.numberItem(r, after));
     items.push({ label: '🔢 Go to a channel number...', run: () => this.pad() });
     if (r) items.push(...App.recordItems(r, p).map((c) => ({ ...c, run: () => Promise.resolve(c.run()).then(() => this.refresh()) })));
