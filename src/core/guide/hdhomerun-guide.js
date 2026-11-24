@@ -7,7 +7,15 @@ module.exports = {
   needsSource: 'hdhomerun',
 
   async fetch(config, { source, hours = 24 }) {
-    const auth = source && source.config && source.config.deviceAuth;
+    let auth = source && source.config && source.config.deviceAuth;
+    // DeviceAuth changes over time; the tuner always has the current one.
+    const host = source && source.config && source.config.host;
+    if (host) {
+      try {
+        const res = await fetch(`${/^https?:\/\//.test(host) ? host.replace(/\/$/, '') : `http://${host}`}/discover.json`, { signal: AbortSignal.timeout(4000) });
+        if (res.ok) auth = (await res.json()).DeviceAuth || auth;
+      } catch (_) {}
+    }
     if (!auth) throw new Error('Scan the HDHomeRun tuner first so the guide can use its device ID.');
     const channels = new Map();
     const programs = {};
@@ -16,7 +24,11 @@ module.exports = {
     for (let page = 0; page < 12 && cursor < until; page++) {
       const url = `https://api.hdhomerun.com/api/guide.php?DeviceAuth=${encodeURIComponent(auth)}&Start=${cursor}`;
       const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
-      if (!res.ok) throw new Error(`HDHomeRun guide returned ${res.status}`);
+      if (!res.ok) {
+        if (page > 0) break; // keep the hours already fetched
+        const body = (await res.text().catch(() => '')).trim().slice(0, 120);
+        throw new Error(`HDHomeRun guide returned ${res.status}${body ? `: ${body}` : ''}`);
+      }
       const data = await res.json();
       if (!Array.isArray(data) || !data.length) break;
       let latest = cursor;

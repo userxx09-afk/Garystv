@@ -166,6 +166,17 @@ class DvrCore extends EventEmitter {
     const recheckFree = () => this.sources.filter((s) => s.type === 'free' && s.enabled && Date.now() - (s.scannedAt || 0) > 60000).forEach((s) => this.scanSource(s.id).catch(() => {}));
     recheckFree();
     this.freeTimer = setInterval(recheckFree, 24 * 3600000);
+    // An antenna tuner the router moved to a new address: find it again and rescan (saves the new address).
+    const recheckTuners = () => this.sources.filter((s) => s.type === 'hdhomerun' && s.enabled && s.config && s.config.host).forEach(async (s) => {
+      const host = /^https?:\/\//.test(s.config.host) ? s.config.host.replace(/\/$/, '') : `http://${s.config.host}`;
+      try {
+        const res = await fetch(`${host}/discover.json`, { signal: AbortSignal.timeout(4000) });
+        if (res.ok) return;
+      } catch (_) {}
+      this.scanSource(s.id).catch((e) => this.note(`${s.name}: ${e.message}`));
+    });
+    recheckTuners();
+    this.tunerTimer = setInterval(recheckTuners, 10 * 60000);
     this.tick();
   }
 
@@ -176,6 +187,7 @@ class DvrCore extends EventEmitter {
     clearInterval(this.guideTimer);
     clearTimeout(this.soonTimer);
     clearInterval(this.freeTimer);
+    clearInterval(this.tunerTimer);
     const writing = [...this.active.values()].map((a) => a.handle.done);
     for (const a of this.active.values()) a.handle.stop();
     if (this.timeshift) this.timeshift.stopAll();
