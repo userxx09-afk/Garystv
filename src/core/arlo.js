@@ -7,6 +7,7 @@
 // it plays in a plain <img> on every TV, needs no second video decoder (TVs often have only
 // one, and the TV itself is using it), and Arlo's HEVC video plays everywhere this way.
 const http = require('http');
+const net = require('net');
 const https = require('https');
 const { spawn } = require('child_process');
 const { findFfmpeg } = require('./tools');
@@ -96,6 +97,9 @@ class Arlo {
     return new Promise((resolve, reject) => {
       const req = lib.request(url, { method, timeout: 8000, headers }, (res) => {
         let text = '';
+        // Camera Keeper's own address (when Settings gives it as an address, like 100.64.0.8):
+        // its motion calls are let in from there, also over the VPN (server.js, fromKeeper).
+        if (net.isIP(a.host) && res.statusCode < 300) this.keeperIp = String((res.socket && res.socket.remoteAddress) || '').replace(/^::ffff:/, '');
         res.on('data', (c) => { text += c; });
         res.on('end', () => {
           if (res.statusCode >= 300) {
@@ -150,6 +154,12 @@ class Arlo {
       if (s.enabled && this.lastError !== e.message) this.core.note(`arlo: ${e.message}`);
       this.lastError = e.message;
     }
+  }
+
+  // A motion call from the Camera Keeper this GarysTV talks to (by its address, see request()).
+  fromKeeper(req) {
+    const ip = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+    return !!this.keeperIp && ip === this.keeperIp;
   }
 
   // From Camera Keeper: { camera, camera_id, time, file, live, clip }. Passed to the screens if

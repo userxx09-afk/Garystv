@@ -191,3 +191,15 @@ test('Arlo: GarysTV says who it is, and the camera list carries live and the new
     assert.match(agents[0], /^GarysTV\//);
   } finally { keeper.close(); }
 });
+
+test('Arlo: motion calls are let in from the Camera Keeper address GarysTV uses', async () => {
+  const keeper = http.createServer((req, res) => { res.setHeader('Content-Type', 'application/json'); res.end('{"ok":true}'); });
+  await new Promise((r) => keeper.listen(0, '127.0.0.1', r));
+  const arlo = new Arlo(fakeCore({ enabled: true, url: `http://127.0.0.1:${keeper.address().port}`, cameras: [] }), () => {});
+  try {
+    assert.strictEqual(arlo.fromKeeper({ socket: { remoteAddress: '127.0.0.1' } }), false); // nothing asked yet
+    await arlo.request('GET', '/api/cameras');
+    assert.strictEqual(arlo.fromKeeper({ socket: { remoteAddress: '::ffff:127.0.0.1' } }), true);
+    assert.strictEqual(arlo.fromKeeper({ socket: { remoteAddress: '100.64.0.9' } }), false);
+  } finally { keeper.close(); }
+});

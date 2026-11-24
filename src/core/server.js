@@ -416,7 +416,10 @@ function createServer(core) {
     const url = new URL(req.url, 'http://x');
     const q = Object.fromEntries(url.searchParams);
     // At home: as always. From another location: a linked GarysTV's key, or a device that signed in (auth.js).
-    const who = (core.peers && core.peers.check(req)) || auth.check(req);
+    let who = (core.peers && core.peers.check(req)) || auth.check(req);
+    // Camera Keeper's motion calls come from wherever it runs (another home, over the VPN):
+    // let them in from its address, and only that call (core/arlo.js).
+    if (!who.ok && url.pathname === '/api/arlo/motion' && req.method === 'POST' && arlo.fromKeeper(req)) who = { home: false, ok: true, keeper: true };
     req.who = who;
     // Another GarysTV linking with this one (from wherever it is): checked with this one's password (peers.js).
     if (url.pathname === '/api/peer/link' && req.method === 'POST' && !req.headers.origin) {
