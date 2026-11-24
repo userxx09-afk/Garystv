@@ -56,7 +56,7 @@ function readBody(req, limit = 1e6) {
 }
 
 // ffmpeg input, picture/sound selection and clean-up shared by the player stream and the live buffer.
-function decodeArgs(input, { live, seek = 0, copy = false }) {
+function decodeArgs(input, { live, seek = 0, copy = false, silent = false }) {
   const args = [];
   if (input.lavfi) args.push('-re', '-f', 'lavfi', '-i', input.lavfi, '-f', 'lavfi', '-i', 'sine=frequency=330:sample_rate=48000');
   else {
@@ -70,8 +70,11 @@ function decodeArgs(input, { live, seek = 0, copy = false }) {
     // A file still being written: wait at its end for more, and stop 20s after it stops growing.
     if (input.growing) args.push('-follow', '1', '-rw_timeout', '20000000');
     args.push('-i', input.url);
+    // Sound that can't be decoded: a silent track in its place (-shortest ends with the picture).
+    if (silent) args.push('-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo');
   }
-  args.push('-map', '0:v:0', '-map', input.lavfi ? '1:a:0' : '0:a:0?');
+  args.push('-map', '0:v:0', '-map', input.lavfi || silent ? '1:a:0' : '0:a:0?');
+  if (silent && !input.lavfi) args.push('-shortest');
   if (!copy) args.push('-vf', 'yadif=deint=interlaced,scale=-2:min(ih\\,1080)');
   return args;
 }
@@ -82,18 +85,25 @@ function decodeArgs(input, { live, seek = 0, copy = false }) {
 //    straight through; only the sound is converted (about 10% of one core)
 //  - other video (antenna TV is usually MPEG-2) uses the graphics chip's encoder
 //    (Intel Quick Sync) when there is one, else the software encoder
-const h264Seen = new Map(); // channel stream or recording file -> true/false
-async function isH264(core, input, key) {
-  if (input.lavfi || !input.url) return false;
-  if (h264Seen.has(key)) return h264Seen.get(key);
+const codecsSeen = new Map(); // channel stream or recording file -> { video, audio }
+// ATSC 3.0 (NextGen TV) channels send AC-4 sound, which ffmpeg can't decode yet.
+const UNDECODABLE_AUDIO = new Set(['ac4']);
+async function probeCodecs(core, input, key) {
+  if (input.lavfi || !input.url) return { video: '', audio: '' };
+  if (codecsSeen.has(key)) return codecsSeen.get(key);
   const ffmpeg = findFfmpeg(core.settings);
   const probe = ffmpeg && path.join(path.dirname(ffmpeg), path.basename(ffmpeg).replace(/ffmpeg/i, 'ffprobe'));
-  if (!probe || !fs.existsSync(probe)) return false;
-  const codec = await new Promise((resolve) => execFile(probe, ['-v', 'error', ...(input.hls ? HLS_INPUT : []), '-probesize', '1000000', '-analyzeduration', '1000000',
-    '-select_streams', 'v:0', '-show_entries', 'stream=codec_name', '-of', 'csv=p=0', input.url], { timeout: 8000, windowsHide: true },
-  (err, out) => resolve(err ? '' : String(out).trim())));
-  if (codec) h264Seen.set(key, codec.startsWith('h264'));
-  return codec.startsWith('h264');
+  if (!probe || !fs.existsSync(probe)) return { video: '', audio: '' };
+  const out = await new Promise((resolve) => execFile(probe, ['-v', 'error', ...(input.hls ? HLS_INPUT : []), '-probesize', '1000000', '-analyzeduration', '1000000',
+    '-show_entries', 'stream=codec_type,codec_name', '-of', 'csv=p=0', input.url], { timeout: 8000, windowsHide: true },
+  (err, o) => resolve(err ? '' : String(o))));
+  const codecs = { video: '', audio: '' };
+  for (const line of out.split(/\r?\n/)) { // e.g. "h264,video" / "ac4,audio" (ffprobe prints codec_name first)
+    const [name = '', type = ''] = line.trim().split(',');
+    if ((type === 'video' || type === 'audio') && !codecs[type]) codecs[type] = name;
+  }
+  if (codecs.video || codecs.audio) codecsSeen.set(key, codecs);
+  return codecs;
 }
 
 let quickSync = null; // Promise<boolean>, checked once
@@ -104,12 +114,20 @@ function hasQuickSync(ffmpeg) {
 }
 
 // -> { copy, video: ffmpeg video output options }. keyEvery: seconds between keyframes (live buffer pieces).
+// silent: the sound can't be decoded (AC-4), so the picture plays with silence instead of failing.
+const silentNoted = new Set();
 async function videoPlan(core, input, key, keyEvery = 2) {
-  if (await isH264(core, input, key)) return { copy: true, video: ['-c:v', 'copy'] };
+  const codecs = await probeCodecs(core, input, key);
+  const silent = UNDECODABLE_AUDIO.has(codecs.audio);
+  if (silent && !silentNoted.has(key)) {
+    silentNoted.add(key);
+    core.note(`this channel's sound (${codecs.audio.toUpperCase()}, ATSC 3.0) can't be played yet, so it plays without sound`);
+  }
+  if (codecs.video.startsWith('h264')) return { copy: true, silent, video: ['-c:v', 'copy'] };
   const keys = ['-force_key_frames', `expr:gte(t,n_forced*${keyEvery})`];
   // -a53cc 1: closed captions in the antenna video are carried into the converted picture, where the player reads them.
-  if (await hasQuickSync(findFfmpeg(core.settings))) return { copy: false, video: ['-c:v', 'h264_qsv', '-preset', 'veryfast', '-b:v', '6M', '-maxrate', '6M', '-a53cc', '1', ...keys] };
-  return { copy: false, video: ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-maxrate', '6M', '-bufsize', '12M', '-a53cc', '1', ...keys] };
+  if (await hasQuickSync(findFfmpeg(core.settings))) return { copy: false, silent, video: ['-c:v', 'h264_qsv', '-preset', 'veryfast', '-b:v', '6M', '-maxrate', '6M', '-a53cc', '1', ...keys] };
+  return { copy: false, silent, video: ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-maxrate', '6M', '-bufsize', '12M', '-a53cc', '1', ...keys] };
 }
 
 // Transcodes to H.264/AAC MPEG-TS that the built-in player can show. Over-the-air
@@ -118,7 +136,7 @@ async function streamVideo(core, req, res, input, { live, seek = 0, key }) {
   const ffmpeg = findFfmpeg(core.settings);
   if (!ffmpeg) return send(res, 501, { error: 'ffmpeg is not installed, so the built-in player is unavailable.' });
   const plan = await videoPlan(core, input, key);
-  const args = ['-hide_banner', '-loglevel', 'error', ...decodeArgs(input, { live, seek, copy: plan.copy }), ...plan.video,
+  const args = ['-hide_banner', '-loglevel', 'error', ...decodeArgs(input, { live, seek, copy: plan.copy, silent: plan.silent }), ...plan.video,
     ...(live ? ['-af', 'aresample=async=1'] : []), '-c:a', 'aac', '-ac', '2', '-b:a', '160k', '-f', 'mpegts', 'pipe:1']; // seamless audio, as in timeshift.js
   const proc = spawn(ffmpeg, args, { stdio: ['ignore', 'pipe', 'pipe'] });
   let err = '';
@@ -252,7 +270,7 @@ function createServer(core) {
       const key = input.url;
       if (input.url && /\.m3u8(\?|$)/i.test(input.url)) Object.assign(input, { url: await bestVariant(input.url), hls: true });
       const plan = await videoPlan(core, input, key);
-      return [...decodeArgs(input, { live: true, copy: plan.copy }), ...plan.video];
+      return [...decodeArgs(input, { live: true, copy: plan.copy, silent: plan.silent }), ...plan.video];
     },
   });
   const broadcast = (msg) => { for (const c of clients) c.write(`data: ${JSON.stringify(msg)}\n\n`); };

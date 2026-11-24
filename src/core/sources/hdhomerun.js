@@ -50,8 +50,8 @@ async function discoverCloud() {
   }
 }
 
-async function getJson(url) {
-  const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+async function getJson(url, timeoutMs = 8000) {
+  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
   if (!res.ok) throw new Error(`${url} returned ${res.status}`);
   return res.json();
 }
@@ -68,16 +68,32 @@ module.exports = {
     return udp.length ? udp : discoverCloud();
   },
 
-  async resolveHost(config) {
-    if (config.host) return config.host;
+  // -> { host, info }. Tries the saved address first; if the tuner isn't there (the router gave it a
+  // new address), looks on the network for the same tuner (by its device ID), or the only one found.
+// The scan then saves the address it was found at.
+  async locate(config) {
+    if (config.host) {
+      try { return { host: config.host, info: await getJson(`${base(config.host)}/discover.json`, 4000) }; } catch (_) {}
+    }
     const found = await this.discover();
-    if (!found.length) throw new Error('No HDHomeRun tuner found on the network. Enter its IP address in Settings.');
-    return found[0].host;
+    const tuners = (await Promise.all(found.map(async (f) => {
+      try { return { host: f.host, info: await getJson(`${base(f.host)}/discover.json`, 4000) }; } catch (_) { return null; }
+    }))).filter(Boolean);
+    const same = config.deviceId && tuners.find((t) => t.info.DeviceID === config.deviceId);
+    if (same) return same;
+    if (tuners.length === 1) return tuners[0];
+    if (config.host) throw new Error(`The HDHomeRun tuner isn't answering at ${config.host} and wasn't found elsewhere on the network.`);
+    throw new Error('No HDHomeRun tuner found on the network. Enter its IP address in Settings.');
+  },
+
+  async resolveHost(config) {
+    return (await this.locate(config)).host;
   },
 
   async scan(config) {
-    const host = await this.resolveHost(config);
-    const info = await getJson(`${base(host)}/discover.json`);
+    const located = await this.locate(config);
+    const host = located.host;
+    const info = located.info;
     const lineup = await getJson(info.LineupURL || `${base(host)}/lineup.json`);
     return {
       config: { ...config, host, deviceAuth: info.DeviceAuth, deviceId: info.DeviceID },
