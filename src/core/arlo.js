@@ -24,6 +24,17 @@ function safePath(p) {
   return !p.includes('..') && (LIVE_PATH.test(p) || CLIP_PATH.test(p)) ? p : null;
 }
 
+// A camera id as Camera Keeper writes them (Arlo device ids, blink-123, ipcam-...).
+function safeCam(id) {
+  id = String(id || '');
+  return /^[A-Za-z0-9_.:-]{1,80}$/.test(id) && !id.includes('..') ? id : null;
+}
+
+function liveState(r) {
+  r = r || {};
+  return { state: r.state || 'off', error: r.error || null, secondsLeft: +r.seconds_left || 0, viewers: +r.viewers || 0 };
+}
+
 function safeThumb(p) {
   p = String(p || '');
   return !p.includes('..') && THUMB_PATH.test(p) ? p : null;
@@ -229,6 +240,43 @@ class Arlo {
       out.when_full = b.whenFull;
     }
     return this.request('POST', '/api/storage', out);
+  }
+
+  // Home > Cameras > Watch live: Camera Keeper opens the camera's live stream (one per camera,
+  // shared by every TV and phone watching it) and sends it as JPEG pictures, which GarysTV passes
+  // straight through (/arlo/live). It stops a few seconds after the last viewer leaves, or after
+  // 3 minutes, so a battery camera isn't drained; "Keep watching" starts it again.
+  async liveStart(camera) {
+    const id = safeCam(camera);
+    if (!id) throw new Error('Which camera?');
+    if (id.startsWith('blink-')) throw new Error("Blink cameras can't be watched live here. Use the Blink app.");
+    const r = await this.request('POST', `/api/camera/${encodeURIComponent(id)}/live`);
+    if (r && r.state === 'error') throw new Error(r.error || "The camera didn't start.");
+    return liveState(r);
+  }
+
+  async liveState(camera) {
+    const id = safeCam(camera);
+    if (!id) throw new Error('Which camera?');
+    return liveState(await this.request('GET', `/api/camera/${encodeURIComponent(id)}/live`));
+  }
+
+  live(req, res, camera) {
+    const id = safeCam(camera);
+    const a = this.address;
+    if (!id || a.error) { res.writeHead(400); return res.end(); }
+    const url = new URL(`${a.base}/api/camera/${encodeURIComponent(id)}/live.mjpg`);
+    const lib = url.protocol === 'https:' ? https : http;
+    const up = lib.get(url, { headers: a.auth ? { Authorization: a.auth } : {} }, (r) => {
+      if (r.statusCode !== 200) { r.resume(); res.writeHead(r.statusCode === 404 ? 404 : 502); return res.end(); }
+      res.writeHead(200, { 'Content-Type': r.headers['content-type'] || 'multipart/x-mixed-replace; boundary=frame', 'Cache-Control': 'no-store' });
+      r.pipe(res);
+    });
+    // No overall timeout (it's a stream), but give up if Camera Keeper doesn't answer at all.
+    up.setTimeout(30000, () => up.destroy(new Error('timed out')));
+    up.on('response', () => up.setTimeout(0));
+    up.on('error', (e) => { this.core.note(`arlo: live view: ${e.message}`); if (!res.headersSent) res.writeHead(502); res.end(); });
+    req.on('close', () => up.destroy()); // Camera Keeper sees the viewer leave and stops the camera
   }
 
   // A clip's still picture, passed through from Camera Keeper (the TVs may not be able to reach it).

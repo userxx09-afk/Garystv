@@ -473,11 +473,14 @@ const TimersView = {
 // (core/arlo.js). OK plays a clip big, as pictures like the motion pop-up; Back closes it.
 // Hold OK (or a long press) on a clip: save it (★, never deleted by cleanup), delete it, or
 // select several; while selecting, OK ticks clips and the bar above deletes or saves them.
+// Watch live (the buttons above the clips, or Hold OK) shows a camera live, straight from the
+// camera (not a clip): Camera Keeper wakes it, and stops it 3 minutes later or once nobody watches.
 const ArloView = {
   title: 'Cameras',
   camera: null, // a camera id, or null for all of them
   account: null, // "arlo:email" / "blink:email", or null for every account
   cams: null, clips: null, error: null, loadedAt: 0, loading: false, playing: null,
+  watching: null, // { id, name, n } while a camera is shown live
   selecting: false, picked: new Set(),
   get hints() {
     return this.selecting ? [['↑↓', 'Move'], ['OK', 'Tick'], ['M', 'Delete · Save'], ['Esc', 'Done']]
@@ -525,12 +528,14 @@ const ArloView = {
       $('#arloSet', root).onclick = () => { SettingsView.section = 'arlo'; App.go('settings'); };
       return;
     }
+    if (this.watching) return this.renderLive(root);
     if (this.playing) return this.renderPlaying(root);
     if (!this.loading && (!this.clips || Date.now() - this.loadedAt > 20000)) setTimeout(() => this.load(), 0);
     const all = (this.cams && this.cams.cameras) || [];
     const accounts = (this.cams && this.cams.accounts) || [];
     if (this.account && this.cams && !accounts.some((a) => a.id === this.account)) this.account = null;
     const cams = this.shownCams();
+    const liveCams = this.liveCams(this.camera ? cams.filter((c) => c.id === this.camera) : cams);
     const clips = this.clips || [];
     const camName = (id) => (all.find((c) => c.id === id) || {}).name;
     const accName = (a) => (a.brand === 'ipcam' ? a.username : `${a.brand === 'blink' ? 'Blink' : 'Arlo'} · ${a.username}`);
@@ -542,6 +547,7 @@ const ArloView = {
       ${waiting.length ? `<div class="s" style="margin-bottom:.8rem;color:var(--yellow)">Waiting for a verification code: ${waiting.map((a) => esc(accName(a))).join(', ')}. Enter it on Camera Keeper's Arlo page.</div>` : ''}
       <div class="tabs" style="flex-wrap:wrap"><div class="tab nav ${this.camera ? '' : 'on'}" data-key="cam-all" data-cam="">${curAcc ? 'All its cameras' : 'All cameras'}</div>
         ${cams.map((c) => `<div class="tab nav ${this.camera === c.id ? 'on' : ''}" data-key="cam-${esc(c.id)}" data-cam="${esc(c.id)}">${esc(c.name)}${c.unavailable ? ' <span class="tag">OFFLINE</span>' : ''}</div>`).join('')}</div>
+      ${!this.selecting && liveCams.length ? `<div class="actions" style="flex-wrap:wrap;margin-bottom:.8rem">${liveCams.map((c) => `<div class="btn nav" data-key="live-${esc(c.id)}" data-live="${esc(c.id)}">● Watch ${esc(c.name)} live</div>`).join('')}</div>` : ''}
       ${this.cams && !this.cams.connected ? '<div class="s" style="margin-bottom:.8rem;color:var(--yellow)">Camera Keeper isn\'t signed in to Arlo right now, so new clips won\'t come in. Sign in on its own page.</div>' : ''}
       ${this.selecting ? `<div class="actions selbar"><b>${this.picked.size} selected</b>
         <div class="btn nav danger" data-key="sel-delete" id="selDelete">🗑 Delete${this.picked.size ? ` ${this.picked.size}` : ''}</div>
@@ -564,6 +570,7 @@ const ArloView = {
       </div>`;
     $$('[data-cam]', root).forEach((el) => { el.onclick = () => this.pick(el.dataset.cam); });
     $$('[data-acct]', root).forEach((el) => { el.onclick = () => this.pickAccount(el.dataset.acct); });
+    $$('[data-live]', root).forEach((el) => { el.onclick = () => this.watch(all.find((c) => c.id === el.dataset.live)); });
     $$('[data-clip]', root).forEach((el) => {
       const c = () => clips.find((x) => x.key === el.dataset.clip);
       el.onclick = () => (this.selecting ? this.toggle(el.dataset.clip) : this.play(c()));
@@ -655,6 +662,55 @@ const ArloView = {
     $('#arloSave', root).onclick = () => this.star(c, !c.starred);
   },
 
+  // ---- live ----
+  // Cameras that can be watched live: not Blink (Camera Keeper can't), and not offline.
+  liveCams(cams) {
+    return (cams || []).filter((c) => c.brand !== 'blink' && !String(c.id).startsWith('blink-') && !c.unavailable);
+  },
+
+  async watch(cam, again) {
+    if (!cam) return;
+    if (!again) toast(`Waking up ${cam.name}...`, 2500);
+    try { await api.post('/api/arlo/live', { camera: cam.id }); } catch (e) { return toast(e.message, 7000); }
+    this.watching = { id: cam.id, name: cam.name, n: ((this.watching && this.watching.n) || 0) + 1 };
+    this.playing = null;
+    App.render(again ? 'live-again' : 'live-close');
+  },
+
+  renderLive(root) {
+    const w = this.watching;
+    root.innerHTML = `<div class="arlo-play waiting live" id="arloPlay"><img id="arloImg" alt=""><div class="cap"><span class="live-badge">LIVE</span><b>${esc(w.name)}</b> <span id="liveLeft">Waking up the camera...</span></div></div>
+      <div class="actions" style="justify-content:center"><div class="btn nav" data-key="live-close" id="liveClose">‹ Back to clips</div><div class="btn nav" data-key="live-again" id="liveAgain">⟲ Keep watching</div></div>`;
+    const box = $('#arloPlay', root), img = $('#arloImg', root), left = $('#liveLeft', root);
+    let seen = false;
+    img.onerror = () => { if (!seen) { box.classList.remove('waiting'); box.classList.add('failed'); } };
+    img.src = server(`/arlo/live?camera=${encodeURIComponent(w.id)}&n=${w.n}`);
+    $('#liveClose', root).onclick = () => this.onBack();
+    $('#liveAgain', root).onclick = () => this.watch(w, true);
+    // How it's going (Camera Keeper's session): waking up, time left, ended or failed.
+    let busy = false;
+    const tick = async () => {
+      if (!document.body.contains(img)) { // left the screen, or drawn again
+        clearInterval(timer);
+        img.onerror = null; img.src = ''; // ends the stream, so Camera Keeper stops the camera
+        if (App.view !== this) this.watching = null;
+        return;
+      }
+      if (img.naturalWidth && !seen) { seen = true; box.classList.remove('waiting'); }
+      if (busy) return;
+      busy = true;
+      try {
+        const st = await api.get(`/api/arlo/live?camera=${encodeURIComponent(w.id)}`);
+        if (!document.body.contains(left)) return;
+        if (st.state === 'error') { box.classList.remove('waiting'); box.classList.add('failed'); left.textContent = st.error || "The camera didn't start."; }
+        else if (st.state === 'live') left.textContent = `${Math.floor(st.secondsLeft / 60)}:${String(st.secondsLeft % 60).padStart(2, '0')} left`;
+        else if (st.state === 'starting') left.textContent = 'Waking up the camera...';
+        else if (seen) left.textContent = 'Live view ended. Press Keep watching to see more.';
+      } catch (_) { /* try again next time */ } finally { busy = false; }
+    };
+    const timer = setInterval(tick, 1500);
+  },
+
   // Delete a saved clip (asks first), then back to the list on the clip that took its place.
   async remove(c) {
     if (!c) return;
@@ -675,6 +731,13 @@ const ArloView = {
   },
 
   onBack() {
+    if (this.watching) {
+      const id = this.watching.id;
+      this.stop();
+      this.watching = null;
+      App.render(`live-${id}`);
+      return true;
+    }
     if (this.selecting && !this.playing) { this.endSelect(Nav.current && Nav.current.dataset.clip ? `clip-${Nav.current.dataset.clip}` : undefined); return true; }
     if (!this.playing) return false;
     const key = this.playing.key;
@@ -701,6 +764,13 @@ const ArloView = {
       items.push({ label: 'Done selecting', run: () => this.endSelect() });
       return { title: `${n} selected`, items };
     }
+    if (this.watching) {
+      const w = this.watching;
+      return { title: `${w.name} live`, items: [{ label: '⟲ Keep watching', run: () => this.watch(w, true), cls: 'primary' }, { label: '‹ Back to clips', run: () => this.onBack() }] };
+    }
+    const liveId = d.live || (c && c.cameraId) || this.camera;
+    const liveCam = this.liveCams((this.cams && this.cams.cameras) || []).find((x) => x.id === liveId);
+    if (liveCam) items.push({ label: `● Watch ${liveCam.name} live`, run: () => this.watch(liveCam), cls: 'primary' });
     if (c) {
       items.push({ label: `🗑 Delete this clip...`, run: () => this.remove(c), cls: 'danger' });
       items.push({ label: '☑ Select several...', run: () => this.startSelect(c.key) });
@@ -713,7 +783,7 @@ const ArloView = {
       items.push({ label: `🗑 Delete ${this.playing.camera}, ${fmt.when(this.playing.time)}...`, run: () => this.remove(this.playing), cls: 'danger' });
     }
     items.push({ label: '⟳ Check for new clips', run: () => this.load() });
-    items.push({ label: 'Camera settings', run: () => { this.stop(); this.playing = null; SettingsView.section = 'arlo'; App.go('settings'); } });
+    items.push({ label: 'Camera settings', run: () => { this.stop(); this.playing = null; this.watching = null; SettingsView.section = 'arlo'; App.go('settings'); } });
     return { title: this.title, items };
   },
 
@@ -726,6 +796,7 @@ const ArloView = {
       if (c || this.playing) { this.remove(c || this.playing); return true; }
       return false;
     }
+    if (this.watching) return false;
     if (this.playing || !(e.key === 'ArrowLeft' || e.key === 'ArrowRight')) return false;
     if (!Nav.current || Nav.current.classList.contains('tab') || Nav.current.closest('#topnav')) return false;
     const ids = [null, ...this.shownCams().map((c) => c.id)];

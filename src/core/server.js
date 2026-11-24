@@ -384,6 +384,8 @@ function createServer(core) {
     ['POST', '/api/arlo/storage', (q, b) => arlo.setStorage(b)],
     ['POST', '/api/arlo/motion', (q, b) => arlo.motion(b)],
     ['POST', '/api/arlo/test', () => arlo.test()],
+    ['POST', '/api/arlo/live', (q, b) => arlo.liveStart(b.camera)], // Home > Cameras > Watch live
+    ['GET', '/api/arlo/live', (q) => arlo.liveState(q.camera)],
     // Updates: the Windows app's own (src/app-updates.js), or a home server's (core/server-updates.js).
     // Alexa (alexa.js): the relay is set here once; each screen passes its own relay id ({tv}).
     ['GET', '/api/alexa', () => alexa.overview()],
@@ -467,6 +469,7 @@ function createServer(core) {
       }
       // A motion clip for the pop-up, as pictures (core/arlo.js).
       if (url.pathname === '/arlo/view') return arlo.view(req, res, q.src, q.big === '1');
+      if (url.pathname === '/arlo/live') return arlo.live(req, res, q.camera); // a camera live, as pictures
       if (url.pathname === '/arlo/thumb') return arlo.thumb(req, res, q.src); // a clip's picture (Home > Cameras)
       // Live TV buffer: the playlist (starts the buffer if needed) and its video pieces.
       const tsm = /^\/timeshift\/([^/]+)\/(live\.m3u8|seg\d+\.ts)$/.exec(url.pathname);
