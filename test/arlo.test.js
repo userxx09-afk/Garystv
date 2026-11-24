@@ -136,3 +136,36 @@ test('Arlo: deleting a clip asks Camera Keeper to delete it', async () => {
     keeper.close();
   }
 });
+
+test('Arlo: watching a camera live starts it at Camera Keeper and passes the pictures through', async () => {
+  const calls = [];
+  const keeper = http.createServer((req, res) => {
+    calls.push(`${req.method} ${req.url} ${req.headers.authorization || ''}`);
+    if (req.url === '/api/camera/A1/live.mjpg') {
+      res.writeHead(200, { 'Content-Type': 'multipart/x-mixed-replace; boundary=frame' });
+      return res.end('--frame\r\nContent-Type: image/jpeg\r\nContent-Length: 3\r\n\r\nJPG\r\n');
+    }
+    res.setHeader('Content-Type', 'application/json');
+    if (req.url === '/api/camera/A1/live') return res.end(JSON.stringify({ state: 'starting', error: null, seconds_left: 180, viewers: 0 }));
+    if (req.url === '/api/camera/OFF/live') { res.statusCode = 404; return res.end(JSON.stringify({ state: 'error', error: "That camera isn't available." })); }
+    res.statusCode = 404; res.end('{}');
+  });
+  await new Promise((r) => keeper.listen(0, '127.0.0.1', r));
+  const arlo = new Arlo(fakeCore({ enabled: true, url: `http://u:p@127.0.0.1:${keeper.address().port}`, cameras: [] }), () => {});
+  const tv = http.createServer((req, res) => arlo.live(req, res, new URL(req.url, 'http://x').searchParams.get('camera')));
+  await new Promise((r) => tv.listen(0, '127.0.0.1', r));
+  try {
+    assert.deepStrictEqual(await arlo.liveStart('A1'), { state: 'starting', error: null, secondsLeft: 180, viewers: 0 });
+    assert.strictEqual((await arlo.liveState('A1')).state, 'starting');
+    await assert.rejects(arlo.liveStart('OFF'), /isn't available/);
+    await assert.rejects(arlo.liveStart('blink-12'), /Blink/);
+    await assert.rejects(arlo.liveStart('../x'), /Which camera/);
+    const body = await new Promise((resolve, reject) => http.get(`http://127.0.0.1:${tv.address().port}/arlo/live?camera=A1`, (r) => {
+      assert.match(r.headers['content-type'], /multipart\/x-mixed-replace/);
+      let t = ''; r.on('data', (c) => { t += c; }); r.on('end', () => resolve(t));
+    }).on('error', reject));
+    assert.match(body, /JPG/);
+    assert.ok(calls.includes(`POST /api/camera/A1/live Basic ${Buffer.from('u:p').toString('base64')}`));
+    assert.ok(calls.some((c) => c.startsWith('GET /api/camera/A1/live.mjpg Basic ')));
+  } finally { keeper.close(); tv.close(); }
+});
