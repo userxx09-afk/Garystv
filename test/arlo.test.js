@@ -169,3 +169,25 @@ test('Arlo: watching a camera live starts it at Camera Keeper and passes the pic
     assert.ok(calls.some((c) => c.startsWith('GET /api/camera/A1/live.mjpg Basic ')));
   } finally { keeper.close(); tv.close(); }
 });
+
+test('Arlo: GarysTV says who it is, and the camera list carries live and the newest picture', async () => {
+  const agents = [];
+  const keeper = http.createServer((req, res) => {
+    agents.push(req.headers['user-agent']);
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ connected: true, cameras: [
+      { id: 'A1', name: 'Front Door', live: true, thumb: '/media/Front_Door/2026-11-24/08-00-00.jpg' },
+      { id: 'ip-1', name: 'Yard', live: false, unavailable: true },
+      { id: 'blink-9', name: 'Shed', brand: 'blink' }, // an older Camera Keeper: no live flag
+    ] }));
+  });
+  await new Promise((r) => keeper.listen(0, '127.0.0.1', r));
+  const arlo = new Arlo(fakeCore({ enabled: true, url: `http://127.0.0.1:${keeper.address().port}`, cameras: [] }), () => {});
+  try {
+    const { cameras } = await arlo.cameras();
+    assert.deepStrictEqual(cameras.map((c) => [c.id, c.live]), [['A1', true], ['ip-1', false], ['blink-9', false]]);
+    assert.strictEqual(cameras[0].thumb, `/arlo/thumb?src=${encodeURIComponent('/media/Front_Door/2026-11-24/08-00-00.jpg')}`);
+    assert.strictEqual(cameras[1].thumb, null);
+    assert.match(agents[0], /^GarysTV\//);
+  } finally { keeper.close(); }
+});

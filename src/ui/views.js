@@ -665,21 +665,21 @@ const ArloView = {
   // ---- live ----
   // Cameras that can be watched live: not Blink (Camera Keeper can't), and not offline.
   liveCams(cams) {
-    return (cams || []).filter((c) => c.brand !== 'blink' && !String(c.id).startsWith('blink-') && !c.unavailable);
+    return (cams || []).filter((c) => (c.live !== undefined ? c.live : c.brand !== 'blink' && !c.unavailable) && !String(c.id).startsWith('blink-'));
   },
 
   async watch(cam, again) {
     if (!cam) return;
     if (!again) toast(`Waking up ${cam.name}...`, 2500);
     try { await api.post('/api/arlo/live', { camera: cam.id }); } catch (e) { return toast(e.message, 7000); }
-    this.watching = { id: cam.id, name: cam.name, n: ((this.watching && this.watching.n) || 0) + 1 };
+    this.watching = { id: cam.id, name: cam.name, thumb: cam.thumb || null, n: ((this.watching && this.watching.n) || 0) + 1 };
     this.playing = null;
     App.render(again ? 'live-again' : 'live-close');
   },
 
   renderLive(root) {
     const w = this.watching;
-    root.innerHTML = `<div class="arlo-play waiting live" id="arloPlay"><img id="arloImg" alt=""><div class="cap"><span class="live-badge">LIVE</span><b>${esc(w.name)}</b> <span id="liveLeft">Waking up the camera...</span></div></div>
+    root.innerHTML = `<div class="arlo-play waiting live${w.thumb ? ' snap' : ''}" id="arloPlay"${w.thumb ? ` style="background-image:url('${esc(server(w.thumb))}')"` : ''}><img id="arloImg" alt=""><div class="cap"><span class="live-badge">LIVE</span><b>${esc(w.name)}</b> <span id="liveLeft">Waking up the camera...</span></div></div>
       <div class="actions" style="justify-content:center"><div class="btn nav" data-key="live-close" id="liveClose">‹ Back to clips</div><div class="btn nav" data-key="live-again" id="liveAgain">⟲ Keep watching</div></div>`;
     const box = $('#arloPlay', root), img = $('#arloImg', root), left = $('#liveLeft', root);
     let seen = false;
@@ -696,7 +696,7 @@ const ArloView = {
         if (App.view !== this) this.watching = null;
         return;
       }
-      if (img.naturalWidth && !seen) { seen = true; box.classList.remove('waiting'); }
+      if (img.naturalWidth && !seen) { seen = true; box.classList.remove('waiting', 'snap'); box.style.backgroundImage = ''; }
       if (busy) return;
       busy = true;
       try {

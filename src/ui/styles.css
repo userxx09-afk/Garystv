@@ -266,6 +266,8 @@ pre.log { margin: 0; font-size: .8rem; color: var(--muted); white-space: pre-wra
 .arlo-play.waiting::before { content: "Loading the clip..."; position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 1.2rem; }
 .arlo-play.failed::before { content: "This clip couldn't be played."; position: absolute; inset: 0; display: grid; place-items: center; color: var(--yellow); font-size: 1.2rem; }
 .arlo-play.live.waiting::before { content: "Waking up the camera... (up to 20 seconds)"; }
+.arlo-play.snap { background-size: contain; background-position: center; background-repeat: no-repeat; }
+.arlo-play.live.snap.waiting::before { background: #0008; }
 .arlo-play.live.failed::before { content: "The camera didn't send a picture."; }
 .motion.waiting::before { content: "Camera waking up…"; position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 1rem; }
 
