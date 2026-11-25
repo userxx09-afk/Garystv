@@ -27,6 +27,8 @@ const GuideView = {
   // Show one favorites list (or all channels with null). Watching from it, channel up/down stays in it.
   // keepId: stay on that channel if it's still shown.
   setList(id, keepId) {
+    const lists = (App.state && App.state.favLists) || [];
+    if (id === ALL_FAVS && lists.length === 1) id = lists[0].id; // "All favorites" with only one list is that list
     this.listId = id || null;
     if (!this.list) this.listId = null; // deleted meanwhile
     try { if (this.listId) localStorage.setItem('gtv.favlist', this.listId); else localStorage.removeItem('gtv.favlist'); } catch (_) { /* private mode */ }
@@ -39,7 +41,7 @@ const GuideView = {
   applyList() {
     const l = this.list, f = this.filter;
     this.rows = this.all.filter((r) => (!l || l.channelIds.includes(r.id)) && (!f || inFilter(r, f)));
-    App.guideRows = this.rows;
+    if (this.all.length) App.guideRows = this.rows; // not before the guide has loaded (at startup), so Live TV and channel up/down still work
   },
 
   // ---------- categories: Sports, News, Movies... and, inside each, the provider's own groups ----------
