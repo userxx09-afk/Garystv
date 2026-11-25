@@ -287,7 +287,8 @@ function createServer(core) {
       // The TMDb key itself stays on the server; screens only learn whether there is one.
       settings: { ...core.settings, tmdbKey: undefined, tmdbKeyFrom: tmdb.keySource(), alexaKey: undefined }, types: core.describeTypes(), sources: core.sources, guides: core.guides,
       // Not the stream addresses: the screens play through /stream, and IPTV ones hold the login.
-      channels: core.channels.map(({ streamUrl, catchupUrl, ...c }) => c), // both hold the IPTV login guideChannels: core.guideData.channels.map(({ id, names, number, providerName }) => ({ id, names, number, providerName })),
+      channels: core.channels.map(({ streamUrl, catchupUrl, ...c }) => c), // both hold the IPTV login
+      guideChannels: core.guideData.channels.map(({ id, names, number, providerName }) => ({ id, names, number, providerName })),
       rules: core.rules, status: { ...core.status(), tools: tools.status(), platform: process.platform, version: VERSION }, favLists: core.favLists,
     })],
     // Linked GarysTVs at other locations (peers.js).

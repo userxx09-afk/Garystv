@@ -393,6 +393,7 @@ const GuideView = {
     if (xfBackup) items.push({ label: '▶ Watch in Xfinity instead', run: () => Xfinity.tryChannel(rc, true) });
     if (r && p && !p.filler) items.push({ label: `ⓘ ${p.title}: details, start over, record...`, run: () => App.programDialog(r, p).then(() => this.refresh()) });
     if (r) items.push(...App.numberItem(r, after));
+    if (r) items.push(...App.guideItem(r, after));
     items.push({ label: '🔢 Go to a channel number...', run: () => this.pad() });
     if (r) items.push(...App.recordItems(r, p).map((c) => ({ ...c, run: () => Promise.resolve(c.run()).then(() => this.refresh()) })));
     if (r) items.push(...App.channelFavItems(r, after));

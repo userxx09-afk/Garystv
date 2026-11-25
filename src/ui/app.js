@@ -160,6 +160,13 @@ const App = {
     return [{ label: `🔢 Change channel number (now ${c.number})...`, run: async () => { const done = await SettingsView.numberDialog(c); if (done) await after(done.number); } }];
   },
 
+  // Which guide listing (what's on) goes with just this channel: the same box as Settings > Channels & matching.
+  guideItem(ch, after = () => this.loadAll()) {
+    const c = this.state.channels.find((x) => x.id === ch.id);
+    if (!c) return [];
+    return [{ label: '📺 Change its guide listing...', run: async () => { if (await SettingsView.matchDialog(c)) await after(); } }];
+  },
+
   // Recording choices for a channel and the show on it, for the hold-OK menus.
   recordItems(row, p) {
     const now = Date.now();
