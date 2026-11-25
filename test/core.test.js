@@ -362,6 +362,7 @@ test('Big guides and lists: read off the main thread, sent zipped, no logins in 
     const st = JSON.parse(zlib.gunzipSync(zipped.body));
     assert.equal(st.channels.length, 300);
     assert.ok(!JSON.stringify(st.channels).includes('/live/user/'));
+    assert.ok(Array.isArray(st.guideChannels), 'Settings > Channels & matching needs the guide channels'); // was lost in a comment once, which left that page blank
     const plain = await get({});
     assert.equal(plain.res.headers['content-encoding'], undefined);
     assert.equal(JSON.parse(plain.body).channels.length, 300);

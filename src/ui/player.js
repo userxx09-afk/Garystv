@@ -632,6 +632,8 @@ const Player = {
     favs.forEach((f, i) => choices.push({ label: f.label, value: `fav${i}` }));
     const num = App.numberItem(ch, async (n) => { ch.number = n; await App.loadAll(); this.showOsd(`${n} ${ch.name}`); });
     if (num.length) choices.push({ label: num[0].label, value: 'num' });
+    const gl = App.guideItem(ch);
+    if (gl.length) choices.push({ label: gl[0].label, value: 'guideListing' });
     choices.push({ label: this.cc ? '㏄ Captions: on (turn off)' : '㏄ Captions: off (turn on)', value: 'cc' });
     choices.push({ label: '▦ Multiview: watch up to 4 channels', value: 'multi' });
     choices.push({ label: '🔢 Go to a channel number', value: 'pad' });
@@ -666,6 +668,7 @@ const Player = {
       else if (v === 'home') App.home();
       else if (v === 'pad') this.pad();
       else if (v === 'num') await num[0].run();
+      else if (v === 'guideListing') await gl[0].run();
       else if (typeof v === 'string' && v.startsWith('fav')) await favs[+v.slice(3)].run();
       else if (v === 'vlc') this.openVlc('live', ch.id);
       else if (v === 'xfinity' && await Xfinity.tryChannel(ch, true)) { this.stop(); App.render(); }

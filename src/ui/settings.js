@@ -262,7 +262,7 @@ const SettingsView = {
       title: `${c.number} ${c.name}`,
       items: [
         ...App.numberItem(c),
-        { label: 'Change its guide listing...', run: () => this.matchDialog(c) },
+        ...App.guideItem(c),
         { label: c.hidden ? 'Show it in the guide' : 'Hide it from the guide', run: () => api.put(`/api/channels/${encodeURIComponent(c.id)}`, { hidden: !c.hidden }) },
         { label: c.favorite ? '📌 Unpin it from the top of the guide' : '📌 Pin it to the top of the guide', run: () => api.put(`/api/channels/${encodeURIComponent(c.id)}`, { favorite: !c.favorite }) },
       ],
