@@ -1,5 +1,5 @@
 // Home menu, My Recordings (DVR), Timers, Arlo and Search screens.
-/* global App, Player, GuideView, MoviesView, ShowsView, SettingsView, Teams */
+/* global App, Player, GuideView, MoviesView, ShowsView, SettingsView, Teams, startChoice */
 const ICONS = {
   guide: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 9v11M3 14.5h18"/></svg>',
   live: '<svg viewBox="0 0 24 24"><rect x="2.5" y="5" width="19" height="13" rx="2"/><path d="M8 21h8M10 9.5v5l4.5-2.5z"/></svg>',
@@ -48,7 +48,9 @@ const HomeView = {
           const ch = App.lastChannel || (App.guideRows && App.guideRows[0] && App.guideRows[0].id) || (App.state.channels.find((c) => !c.hidden) || {}).id;
           if (ch) Player.play('live', ch); else toast('No channels yet - add your tuner in Settings.');
         } else {
-          if (k === 'guide') GuideView.setList(null); // the Guide tile is every channel; a favorites card is one list
+          // The Guide tile shows what Settings > When it starts says (all channels unless a list is picked there);
+          // a favorites card is one list.
+          if (k === 'guide') { const l = startChoice().list; GuideView.setList(l === 'last' ? null : l || null); }
           App.go(k);
         }
       };
