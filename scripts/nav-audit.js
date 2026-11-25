@@ -67,7 +67,7 @@ const AUDIT = async (screen, opts) => {
       // Anything but the highlight changed (a list redrawn, a tab switched): start the next press from a fresh copy.
       stale = !document.body.contains(el) || App.viewName !== before.view || Modal.stack.length !== before.modal || document.querySelector('#view').innerHTML.length !== html;
       if (App.viewName !== before.view || Modal.stack.length !== before.modal) continue; // the screen changed on purpose (rare for arrows)
-      if (now === el || !now || !document.body.contains(now)) {
+      if (now === el || !now || !document.body.contains(now) || (key(now) && key(now) === key(el))) {
         if (that.length) problems.push({ dir, from: label(el), there: label(that.sort((p, q) => Math.abs(p.b.top - a.top) - Math.abs(q.b.top - a.top))[0].x), kind: 'stuck' });
         continue;
       }
@@ -79,6 +79,10 @@ const AUDIT = async (screen, opts) => {
       // ←/→ with something level that way, but went to another row instead.
       // (← into a side menu lands on the page you're on, on purpose.)
       const skipped = (dir === 'left' || dir === 'right') && that.length && !overlapV(b) && !(now.closest('.menu') && now.classList.contains('on'));
+      // ←/→ that didn't go that way at all: off the end of a list onto the next/previous item
+      // (← acting as ↑, → as ↓), which is what it feels like on the TV.
+      const sideways = (dir === 'right' && cx(b) <= cx(a) + 4 && b.left < a.right - 4) || (dir === 'left' && cx(b) >= cx(a) - 4 && b.right > a.left + 4);
+      if (sideways && !wrong) { problems.push({ dir, from: label(el), to: label(now), kind: dir === 'right' ? '→ went down' : '← went up' }); continue; }
       if (wrong || skipped) problems.push({ dir, from: label(el), to: label(now), there: that.length ? label(that[0].x) : '', kind: wrong ? 'wrong way' : 'left the row' });
     }
   }

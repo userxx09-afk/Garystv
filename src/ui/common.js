@@ -164,8 +164,7 @@ const Nav = {
       if (cur) this.focus(cur, { scroll: false });
     }
     if (!cur) { this.focus(items.find((el) => !el.closest('#topnav')) || items[0]); return true; }
-    // Like reading: ←→ along the row you're on (at its end, on to the next row's first item in
-    // the same group); ↑↓ to the nearest row above or below, in the same column when there's one.
+    // ←→ along the row you're on (or to whatever is beside it that way); ↑↓ to the nearest row above or below, in the same column when there's one.
     const a = cur.getBoundingClientRect();
     const others = items.filter((el) => el !== cur).map((el) => ({ el, b: el.getBoundingClientRect() }));
     const cx = (r) => r.left + r.width / 2;
@@ -189,14 +188,8 @@ const Nav = {
       const menu = best && best.el.closest('.menu');
       const on = menu && !menu.contains(cur) && menu.querySelector('.nav.on');
       if (on && items.includes(on)) best = { el: on };
-      if (!best) { // end of the row: the next row's first item (or the previous row's last) in this group
-        const group = (el) => el.closest('.modal, #topnav, .menu, .tabs, .g-bar, .actions, .row, .list, .menu-list, .posters, .cards, .tiles, .seasons, table, .box, .pad');
-        const g = group(cur);
-        const order = items.filter((el) => group(el) === g).map((el) => ({ el, b: el.getBoundingClientRect() }))
-          .sort((p, q) => (Math.abs(p.b.top - q.b.top) < Math.min(p.b.height, q.b.height) / 2 ? p.b.left - q.b.left : p.b.top - q.b.top));
-        const i = order.findIndex((o) => o.el === cur);
-        best = g && order[i + (right ? 1 : -1)];
-      }
+      // Nothing that way: stay put. (It used to carry on to the next row's first item, so at the
+      // end of a list → acted like ↓ and ← like ↑.)
     } else {
       const down = dir === 'down';
       const gap = ({ b }) => (down ? b.top - a.bottom : a.top - b.bottom);

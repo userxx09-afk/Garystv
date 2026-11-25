@@ -39,10 +39,18 @@ import kotlin.concurrent.thread
 class MainActivity : Activity() {
     private lateinit var web: WebView
 
-    // Fire TV remote buttons the WebView doesn't pass on (or passes as something
-    // else) -> the Samsung remote codes tv.js already maps.
+    // Remote buttons the WebView doesn't pass on (or passes as something else) -> the Samsung
+    // remote codes tv.js already maps. Covers the Fire TV remote and a TV's own remote working the
+    // Fire TV over HDMI-CEC (e.g. a Samsung remote: RETURN/EXIT, A B C D, ⏮ ⏭, GUIDE, INFO,
+    // PRE-CH, CH ▲▼ arrive as these), so both do the same thing with no setting to pick.
     private val remote = mapOf(
-        KeyEvent.KEYCODE_BACK to 10009,
+        KeyEvent.KEYCODE_BACK to 10009, // Fire TV Back, Samsung RETURN (and EXIT on most TVs)
+        KeyEvent.KEYCODE_ESCAPE to 10009, // EXIT on TVs that send it as Escape
+        KeyEvent.KEYCODE_MEDIA_RECORD to 403,
+        KeyEvent.KEYCODE_MEDIA_NEXT to 417, // ⏭ : like fast-forward
+        KeyEvent.KEYCODE_MEDIA_PREVIOUS to 412, // ⏮ : like rewind
+        KeyEvent.KEYCODE_TV_CONTENTS_MENU to 10001, // TOOLS / contents menu: the menu, like holding OK
+        KeyEvent.KEYCODE_TV_MEDIA_CONTEXT_MENU to 10001,
         KeyEvent.KEYCODE_MENU to 403, // ≡ : record (Fire TV remotes have no red button)
         KeyEvent.KEYCODE_PROG_RED to 403,
         KeyEvent.KEYCODE_PROG_GREEN to 404,
@@ -94,10 +102,12 @@ class MainActivity : Activity() {
     private val okHold = Runnable { okHeld = true; send(10001) }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        if (event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER || event.keyCode == KeyEvent.KEYCODE_ENTER) {
+        // OK arrives as DPAD_CENTER from the Fire TV remote, and as ENTER or NUMPAD_ENTER from some
+        // TV remotes over HDMI-CEC: all three are the same OK (quick press vs hold).
+        if (event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER || event.keyCode == KeyEvent.KEYCODE_ENTER || event.keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER) {
             if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
                 okHeld = false
-                okDown = KeyEvent(event)
+                okDown = asOk(event)
                 handler.postDelayed(okHold, 600)
             } else if (event.action == KeyEvent.ACTION_UP) {
                 handler.removeCallbacks(okHold)
@@ -105,7 +115,7 @@ class MainActivity : Activity() {
                 val down = okDown
                 if (!okHeld && down != null) {
                     super.dispatchKeyEvent(down)
-                    super.dispatchKeyEvent(event)
+                    super.dispatchKeyEvent(asOk(event))
                 }
                 okDown = null
             }
@@ -115,6 +125,11 @@ class MainActivity : Activity() {
         if (event.action == KeyEvent.ACTION_DOWN) send(code)
         return true
     }
+
+    // NUMPAD_ENTER (some TV remotes' OK over HDMI-CEC) handed on as ENTER, which the page knows;
+    // DPAD_CENTER and ENTER go on as they are (as before).
+    private fun asOk(e: KeyEvent) = if (e.keyCode != KeyEvent.KEYCODE_NUMPAD_ENTER) KeyEvent(e)
+        else KeyEvent(e.downTime, e.eventTime, e.action, KeyEvent.KEYCODE_ENTER, 0, e.metaState, e.deviceId, e.scanCode, e.flags, e.source)
 
     private fun send(code: Int) {
         // Back before the screens have loaded just leaves the app.

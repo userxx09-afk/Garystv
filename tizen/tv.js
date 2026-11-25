@@ -253,8 +253,13 @@
       if (typeof k === 'function') k = '';
       const f = this.fields();
       const typing = document.activeElement && document.activeElement.tagName === 'INPUT';
-      if (k === 'ArrowDown' || (k === 'ArrowRight' && !typing)) this.setFocus(this.focus + 1);
-      else if (k === 'ArrowUp' || (k === 'ArrowLeft' && !typing)) this.setFocus(this.focus - 1);
+      // ←→ only to a button level with this one (the address box's Connect), never on to the
+      // line below or above (→ used to act like ↓ here).
+      const level = (i) => { const a = f[this.focus].getBoundingClientRect(), b = f[i] && f[i].getBoundingClientRect(); return b && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 4; };
+      if (k === 'ArrowDown') this.setFocus(this.focus + 1);
+      else if (k === 'ArrowUp') this.setFocus(this.focus - 1);
+      else if (k === 'ArrowRight' && !typing) { if (level(this.focus + 1)) this.setFocus(this.focus + 1); }
+      else if (k === 'ArrowLeft' && !typing) { if (level(this.focus - 1)) this.setFocus(this.focus - 1); }
       else if (k === 'Enter') { if (f[this.focus].tagName === 'INPUT') this.tryAddress(f[this.focus].value); else f[this.focus].click(); }
       else if (k === 'Escape' && e.keyCode === 10009 && typing && document.activeElement.value) document.activeElement.value = document.activeElement.value.slice(0, -1); // remote Back deletes a character
       else if (k === 'Escape') window.GTV_EXIT();
