@@ -45,17 +45,18 @@ if (existing) fs.rmSync(path.join(srcDir, existing));
 fs.mkdirSync(srcDir, { recursive: true });
 fs.copyFileSync(path.join(__dirname, 'App.tsx'), path.join(srcDir, 'App.tsx'));
 
-// App icon (the template's own icon file is replaced, so the manifest's icon line still fits).
-const icon = path.join(ui, 'icon.png');
-for (const f of fs.readdirSync(path.join(app, 'assets'), { recursive: true })) {
-  if (/(^|\/)[^/]*icon[^/]*\.png$/i.test(f)) fs.copyFileSync(icon, path.join(app, 'assets', f));
-}
+// App icon: assets/image/ is what the manifest's "@image/..." names.
+fs.mkdirSync(path.join(app, 'assets', 'image'), { recursive: true });
+fs.copyFileSync(path.join(ui, 'icon.png'), path.join(app, 'assets', 'image', 'garystv_icon.png'));
 
 // ---------- manifest: name, version, plain-http to the home server, video/audio/keyboard ----------
 const version = process.env.GTV_VERSION || '0.2.0';
 let m = fs.readFileSync(path.join(app, 'manifest.toml'), 'utf8');
 m = m.replace(/^(\s*title\s*=\s*)".*"/m, '$1"GarysTV"');
 if (/^\s*version\s*=/m.test(m)) m = m.replace(/^(\s*version\s*=\s*)".*"/m, `$1"${version}"`);
+// Goes up every build, so a new one installs over the old.
+if (process.env.GTV_BUILD && /^\s*build-number\s*=/m.test(m)) m = m.replace(/^(\s*build-number\s*=\s*)\d+/m, `$1${+process.env.GTV_BUILD}`);
+if (!/^\s*icon\s*=/m.test(m)) m = m.replace(/^(\s*title\s*=.*)$/m, '$1\nicon = "@image/garystv_icon.png"');
 // GarysTV servers are on the home network or VPN and talk plain http.
 if (!m.includes('[network-traffic-policy.cleartext]')) m += '\n[network-traffic-policy.cleartext]\nallowed-domains = ["*"]\n';
 const wants = ['com.amazon.inputmethod.service', 'com.amazon.media.server', 'com.amazon.mediametrics.service',
