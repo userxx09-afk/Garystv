@@ -280,6 +280,16 @@ test('Linked GarysTVs: link with the password, then manage one through the other
     // Unlinking tells the other one.
     await fetch(`${home.base}/api/peers/${id}`, { method: 'DELETE' });
     assert.equal(work.core.peers.list.length, 0);
+    // No password needed when Work first allows Home's address (from its own home network), once.
+    work.core.auth.setPassword('');
+    r = await post(work.base, '/api/peers/allow', { address: '127.0.0.1' });
+    assert.equal(r.status, 200);
+    r = await post(home.base, '/api/peers', { url: work.base, share: false });
+    assert.deepEqual(await r.json(), { id: work.core.peers.me.id, name: 'Work' });
+    assert.equal(work.core.peers.list[0].share, false);
+    await fetch(`${home.base}/api/peers/${home.core.peers.list[0].id}`, { method: 'DELETE' });
+    r = await post(home.base, '/api/peers', { url: work.base, share: false }); // the allowance was used up
+    assert.match((await r.json()).error, /doesn't allow other locations/);
   } finally {
     for (const x of [home, work]) { x.srv.close(); x.core.timeshift.stopAll(); }
   }
