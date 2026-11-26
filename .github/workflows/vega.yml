@@ -37,15 +37,24 @@ jobs:
           CI: "true"
         run: |
           curl -fsSL https://sdk-installer.vega.labcollab.net/get_vvm.sh -o "$RUNNER_TEMP/get_vvm.sh"
-          bash "$RUNNER_TEMP/get_vvm.sh" < /dev/null
-          source ~/vega/env
+          # The installer asks questions (install folder...): Enter keeps each default.
+          yes '' | bash "$RUNNER_TEMP/get_vvm.sh" || echo "::warning::installer exited non-zero"
+          export PATH="$HOME/vega/bin:$PATH"
+          [ -f ~/vega/env ] && source ~/vega/env
+          vega --help || true
+          vega sdk --help || true
+          vega sdk list-installed || true
+          if ! vega sdk list-installed 2>/dev/null | grep -q '[0-9]'; then
+            vega sdk list-remote || true
+            yes '' | vega sdk install || yes y | vega sdk install
+          fi
           vega --version
           echo "$HOME/vega/bin" >> "$GITHUB_PATH"
           # Everything the SDK's env sets, for the later steps.
           bash -c 'source ~/vega/env && env' | grep -E '^(VEGA|KEPLER|PATH)' | grep -v '^PATH=' >> "$GITHUB_ENV" || true
       - name: Make the app
         run: |
-          source ~/vega/env
+          [ -f ~/vega/env ] && source ~/vega/env
           vega project list-templates || true
           vega project generate --template vegaWebview --name garystv --packageId com.garystv.tv --outputDir "$RUNNER_TEMP/garystv"
           echo "--- template files"; (cd "$RUNNER_TEMP/garystv" && find . -path ./node_modules -prune -o -type f -print | head -80)
@@ -55,7 +64,7 @@ jobs:
       - name: Build .vpkg
         working-directory: ${{ runner.temp }}/garystv
         run: |
-          source ~/vega/env
+          [ -f ~/vega/env ] && source ~/vega/env
           npm install
           npm run build:app
           find build -name '*.vpkg' -exec ls -la {} \;
