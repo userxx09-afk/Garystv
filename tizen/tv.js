@@ -9,11 +9,15 @@
   const SAVED = 'gtv.server';
   const isTizen = typeof tizen !== 'undefined';
   const isAndroid = typeof GTVAndroid !== 'undefined';
+  // Vega Fire TV (the newer Linux sticks): the page runs in the Vega app's WebView (vega/).
+  const isVega = !isAndroid && typeof window.ReactNativeWebView !== 'undefined';
+  const fireRemote = isAndroid || isVega; // the same Fire TV remote either way
   let resolveReady;
   window.GTV_READY = new Promise((r) => { resolveReady = r; });
   window.GTV_EXIT = () => {
     try {
       if (isAndroid) GTVAndroid.exit();
+      else if (isVega) window.ReactNativeWebView.postMessage('exit');
       else tizen.application.getCurrentApplication().exit();
     } catch (_) { /* not on a TV */ }
   };
@@ -53,6 +57,11 @@
     428: () => (watching() ? 'ChannelDown' : 'PageDown'), // CH ▼
     10221: 'Caption', // CC (Samsung); Fire TV / Android CAPTIONS is sent as this too
     10190: 'PreviousChannel', // PRE-CH (Samsung); Fire TV / Android LAST CHANNEL is sent as this too
+    // Vega Fire TV remote (its WebView's own codes)
+    27: 'Escape', // Back
+    179: ' ', // play/pause
+    228: () => (watching() ? 'ArrowRight' : ']'), // fast-forward
+    227: () => (watching() ? 'ArrowLeft' : '['), // rewind
   };
   for (let d = 0; d <= 9; d++) KEYS[48 + d] = String(d);
   // Fire TV: OK held down (the Android side tells a hold from a press): the menu for wherever you are.
@@ -107,7 +116,7 @@
   window.GTV_REMOTE = (keyCode) => onRemote({ keyCode, key: '', gtvRemote: true, preventDefault() {}, stopImmediatePropagation() {} });
 
   // Show remote buttons in the hint bar instead of keyboard keys.
-  const HINT = isAndroid
+  const HINT = fireRemote
     // Fire TV remotes: no colored or guide buttons (Home has My Recordings, Timers, Search and the Guide); ≡ records.
     ? { R: ['≡'], M: ['HOLD OK', '', 'Menu'], D: null, T: null, S: null, G: null, Esc: ['BACK'], 'PgUp/PgDn': ['CH ▲▼'], '[ ]': ['⏪ ⏩'], Tab: null, Del: null, Type: ['OK', '', 'Type'] }
     : { R: ['●', 'k-red'], D: ['●', 'k-green'], T: ['●', 'k-yellow'], S: ['●', 'k-blue'], G: ['GUIDE'], M: ['TOOLS'], Esc: ['BACK'],
@@ -321,7 +330,7 @@
 
   document.addEventListener('DOMContentLoaded', async () => {
     document.documentElement.classList.add('tv');
-    if (isAndroid) document.documentElement.classList.add('firetv');
+    if (fireRemote) document.documentElement.classList.add('firetv');
     const saved = store.get();
     if (saved && await ping(saved, 3000)) return start(saved);
     connect.show(saved ? `Can't reach GarysTV at ${saved.replace(/^https?:\/\//, '')}. Is it turned on?` : null);
