@@ -62,7 +62,9 @@ function decodeArgs(input, { live, seek = 0, copy = false, silent = false }) {
   else {
     if (seek > 0) args.push('-ss', String(seek));
     // Live: probe briefly instead of ffmpeg's default ~5s so channel changes feel quick.
-    if (live) args.push('-probesize', '1000000', '-analyzeduration', '1000000', '-fflags', '+nobuffer');
+    // HDHomeRun tuners send a clean local stream, so an even shorter probe is enough there.
+    const probe = HDHR_URL.test(input.url || '') ? '300000' : '1000000';
+    if (live) args.push('-probesize', probe, '-analyzeduration', probe, '-fflags', '+nobuffer');
     // Recordings: real-time pace, but send the first 6s at once. (-re made every jump wait ~5s after -ss.)
     else args.push('-readrate', '1', '-readrate_initial_burst', '6');
     if (input.hls) args.push(...HLS_INPUT);
@@ -88,9 +90,43 @@ function decodeArgs(input, { live, seek = 0, copy = false, silent = false }) {
 const codecsSeen = new Map(); // channel stream or recording file -> { video, audio }
 // ATSC 3.0 (NextGen TV) channels send AC-4 sound, which ffmpeg can't decode yet.
 const UNDECODABLE_AUDIO = new Set(['ac4']);
+// HDHomeRun channel stream, e.g. http://192.168.1.5:5004/auto/v7.1
+const HDHR_URL = /^http:\/\/([^/:]+):5004\/auto\/v([^/?#]+)/i;
+const HDHR_VIDEO = { MPEG2: 'mpeg2video', H264: 'h264', HEVC: 'hevc' };
+// The tuner's lineup.json already says each channel's picture and sound formats, which is much
+// quicker than ffprobe tuning in and reading the stream (seconds on an antenna channel).
+function tunerCodecs(url) {
+  const m = HDHR_URL.exec(url || '');
+  if (!m) return Promise.resolve(null);
+  const [, host, number] = m;
+  return new Promise((resolve) => {
+    const req = http.get(`http://${host}/lineup.json`, { timeout: 2000 }, (res) => {
+      if (res.statusCode !== 200) { res.resume(); return resolve(null); }
+      let data = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => { data += c; });
+      res.on('end', () => {
+        try {
+          const ch = JSON.parse(data).find((c) => String(c.GuideNumber) === decodeURIComponent(number));
+          const video = ch && HDHR_VIDEO[String(ch.VideoCodec || '').toUpperCase()];
+          if (!video) return resolve(null);
+          // HEVC is ATSC 3.0, whose sound is AC-4 even when the lineup leaves it out.
+          const audio = String(ch.AudioCodec || '').toLowerCase().replace(/-/g, '') || (video === 'hevc' ? 'ac4' : '');
+          resolve({ video, audio });
+        } catch { resolve(null); }
+      });
+      res.on('error', () => resolve(null));
+    });
+    req.on('timeout', () => req.destroy());
+    req.on('error', () => resolve(null));
+  });
+}
+
 async function probeCodecs(core, input, key) {
   if (input.lavfi || !input.url) return { video: '', audio: '' };
   if (codecsSeen.has(key)) return codecsSeen.get(key);
+  const fromTuner = await tunerCodecs(input.url);
+  if (fromTuner) { codecsSeen.set(key, fromTuner); return fromTuner; }
   const ffmpeg = findFfmpeg(core.settings);
   const probe = ffmpeg && path.join(path.dirname(ffmpeg), path.basename(ffmpeg).replace(/ffmpeg/i, 'ffprobe'));
   if (!probe || !fs.existsSync(probe)) return { video: '', audio: '' };
@@ -228,6 +264,8 @@ function sendFile(req, res, file) {
 
 function createServer(core) {
   const clients = new Set();
+  // Check for Quick Sync now, so the first antenna channel doesn't wait on it (skipped under tests).
+  if (!process.env.NODE_TEST_CONTEXT) { const ffmpeg = findFfmpeg(core.settings); if (ffmpeg) hasQuickSync(ffmpeg); }
   const tools = core.tools = new ToolInstaller(core);
   const auth = core.auth = new Auth(core);
   const peers = core.peers = new Peers(core, auth);
