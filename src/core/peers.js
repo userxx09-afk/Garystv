@@ -56,7 +56,7 @@ class Peers {
     return { ok: true, home: false, peer: p };
   }
 
-  // Link with another GarysTV: its address and its Other locations password.
+  // Link with another GarysTV: its address and its Other locations password (none when it allowed this one's address).
   async link(req, { url, password, share }) {
     const base = normalizeUrl(url);
     if (this.list.some((p) => p.url === base)) throw new Error('That GarysTV is already linked.');
@@ -75,9 +75,22 @@ class Peers {
     return { id: peer.id, name: peer.name };
   }
 
-  // The other side of link(): checked with this GarysTV's own Other locations password.
+  // Let one GarysTV link with this one without the password, from its address, for 10 minutes.
+  // Only from this computer or the home network (server.js), so no password ever has to be set or typed.
+  allowFrom(address, ms = 600000) {
+    const ip = String(address || '').trim().replace(/^https?:\/\//i, '').replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
+    if (!/^[0-9a-f.:]+$/i.test(ip)) throw new Error('Type the other GarysTV\'s address, like 100.64.0.5.');
+    this.allowed = { ip, until: Date.now() + ms };
+    this.core.note(`a GarysTV at ${ip} may link with this one for the next ${Math.round(ms / 60000)} minutes`);
+    return { ip, until: this.allowed.until };
+  }
+
+  // The other side of link(): checked with this GarysTV's own Other locations password,
+  // unless it comes from an address allowed above (used once).
   accept(req, { password, id, name, key, share, port }) {
-    this.auth.verify(req, password);
+    const a = this.allowed;
+    if (a && a.ip === remoteIp(req) && Date.now() < a.until) this.allowed = null;
+    else this.auth.verify(req, password);
     if (!/^[a-f0-9]{6,32}$/.test(String(id)) || !/^[a-f0-9]{32,64}$/.test(String(key))) throw new Error('Bad link request.');
     const ip = remoteIp(req);
     const url = `http://${ip.includes(':') ? `[${ip}]` : ip}:${+port || 5480}`;

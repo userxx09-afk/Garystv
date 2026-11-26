@@ -330,8 +330,9 @@ function createServer(core) {
       rules: core.rules, status: { ...core.status(), tools: tools.status(), platform: process.platform, version: VERSION }, favLists: core.favLists,
     })],
     // Linked GarysTVs at other locations (peers.js).
-    ['GET', '/api/peers', () => peers.overview()],
+    ['GET', '/api/peers', (q, b, p, req) => ({ ...peers.overview(), home: !!req.who.home })],
     ['POST', '/api/peers', async (q, b, p, req) => { const them = await peers.link(req, b); if (b.share) sharing.linked(); return them; }],
+    ['POST', '/api/peers/allow', (q, b, p, req) => { if (!req.who.home) throw new Error('Only from this GarysTV\'s own home network.'); return peers.allowFrom(b.address); }],
     ['DELETE', '/api/peers/:id', async (q, b, p) => { await peers.unlink(p.id); core.tuners.remote.delete(p.id); sharing.forget(p.id); }],
     ['DELETE', '/api/peer/self', (q, b, p, req) => { const peer = peerOnly(req); peers.dropped(peer); core.tuners.remote.delete(peer.id); sharing.forget(peer.id); }],
     // Home and work sharing (sharing.js): plans in use and timers, lists and channel choices.

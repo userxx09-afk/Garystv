@@ -939,19 +939,24 @@ const SettingsView = {
     box.innerHTML = `<h3>Your other GarysTVs</h3>
       <div class="s">This one is called <b>${esc(o.me.name)}</b>. Link another GarysTV (at work, at your parents') to manage it from here: its guide, channels, lists, timers and settings, as if you were there. Home and work can also share: then they never both use a one-stream plan, and each lists the other's recordings.</div>
       ${rows || '<div class="s" style="margin:.5rem 0">None linked yet.</div>'}
-      <div class="actions"><div class="btn nav" id="peAdd" data-key="pe-add">Link another GarysTV</div><div class="btn nav" id="peName" data-key="pe-name">Rename this one</div></div>
+      <div class="actions"><div class="btn nav" id="peAdd" data-key="pe-add">Link another GarysTV</div><div class="btn nav" id="peName" data-key="pe-name">Rename this one</div>${o.home ? '<div class="btn nav" id="peAllow" data-key="pe-allow">Let another GarysTV link (no password)</div>' : ''}</div>
       <div class="s">To link, the other GarysTV needs a password set under its own Other locations, and this one must reach it (both on your Tailscale / headscale network). Type its Tailscale address, like 100.64.0.5.</div>`;
     pane.append(box);
     $('#peAdd', box).onclick = async () => {
       const url = await Modal.prompt('Link another GarysTV', 'Its address (its Tailscale address, like 100.64.0.5)', '', 'Next');
       if (!url) return;
-      const password = await Modal.prompt('Link another GarysTV', 'Its password (from its Settings > Other locations)', '', 'Next');
-      if (!password) return;
+      const password = await Modal.prompt('Link another GarysTV', 'Its password (from its Settings > Other locations). Leave empty if it allowed this one\'s address.', '', 'Next');
+      if (password == null) return;
       const share = await Modal.menu('Share with it?', '<div class="s">Share when both places use the same IPTV plans (home and work): they take turns with each plan and list each other\'s recordings. Don\'t share with a GarysTV that has its own plans (your parents\'): you can still manage it.</div>',
         [{ label: 'Manage only', value: 'no' }, { label: 'Share plans and recordings', value: 'yes' }]);
       if (!share) return;
       toast('Linking...');
       try { const p = await api.post('/api/peers', { url, password, share: share === 'yes' }); toast(`Linked with ${p.name}.`, 5000); again(); } catch (e) { toast(e.message, 8000); }
+    };
+    if ($('#peAllow', box)) $('#peAllow', box).onclick = async () => {
+      const address = await Modal.prompt('Let another GarysTV link', 'Its Tailscale address, like 100.64.0.5. For the next 10 minutes it can link with this one without a password.', '', 'Allow');
+      if (!address) return;
+      try { await api.post('/api/peers/allow', { address }); toast('Allowed for 10 minutes. Now link from the other GarysTV and leave the password empty.', 8000); } catch (e) { toast(e.message, 8000); }
     };
     $('#peName', box).onclick = async () => {
       const name = await Modal.prompt('Rename this GarysTV', 'Name (for example, Home or Work)', o.me.name);
