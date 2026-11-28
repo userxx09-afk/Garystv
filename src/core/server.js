@@ -8,6 +8,7 @@ const zlib = require('zlib');
 const { spawn, execFile } = require('child_process');
 const { findFfmpeg, findVlc } = require('./tools');
 const { bestVariant, HLS_INPUT, RECONNECT } = require('./hls');
+const { findBackup } = require('./backup-feed');
 const { Timeshift } = require('./timeshift');
 const { Captions } = require('./captions');
 const { Diagnostics } = require('./diagnostics');
@@ -302,6 +303,12 @@ function createServer(core) {
       return ch && ch.streamUrl ? core.tuners.acquire(channelId, 'live', ch.name, onBump) : null;
     },
     unclaim: (lease) => core.tuners.release(lease.id),
+    // A feed that keeps failing: the same network's feed on a favorites list, showing the same thing now.
+    backup: (channelId, skip) => { const b = findBackup(core, channelId, skip); return b && b.channel; },
+    switched: (channelId, from, to) => {
+      const name = (id) => { const c = core.channels.find((x) => x.id === id); return c ? `${c.number} ${c.name}` : id; };
+      broadcast({ what: 'feed', channelId, from: name(from), to: name(to) }); // the TV says so (player.js)
+    },
     input: async (channelId, s) => {
       if (!findFfmpeg(core.settings)) throw new Error('ffmpeg is not installed, so the built-in player is unavailable.');
       const input = playerInput(core, 'live', s && s.lease ? s.lease.channel.id : channelId);

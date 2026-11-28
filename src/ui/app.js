@@ -566,6 +566,8 @@ function onEvent(e) {
   let what = '', msg = {};
   try { msg = JSON.parse(e.data); what = msg.what; } catch (_) { /* a plain ping */ }
   if (what === 'arlo') { if (msg.motion) MotionPopup.show(msg.motion); return; } // a camera saw motion (player.js)
+  // The engine moved a failing channel to a backup feed showing the same thing (core/backup-feed.js).
+  if (what === 'feed') { if (Player.kind === 'live' && Player.id === msg.channelId) toast(`Picture trouble, so switched to a backup: ${msg.to} (same show)`, 6000); return; }
   if (['channels', 'sources', 'guides'].includes(what)) { GuideView.loaded = [0, 0]; App.guideRows = []; }
   if (what === 'sources') for (const v of [MoviesView, ShowsView]) { v.cats = null; v.items = {}; }
   scheduleRefresh();
