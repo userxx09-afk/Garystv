@@ -7,25 +7,51 @@
 (function () {
   const PORT = 5480;
   const SAVED = 'gtv.server';
+  const SAVED_NAME = 'gtv.server.name'; // the server's computer name, to find it again if its address changes
   const isTizen = typeof tizen !== 'undefined';
   const isAndroid = typeof GTVAndroid !== 'undefined';
+  // Vega Fire TV (the newer Linux sticks): the page runs in the Vega app's WebView (vega/).
+  const isVega = !isAndroid && typeof window.ReactNativeWebView !== 'undefined';
+  const fireRemote = isAndroid || isVega; // the same Fire TV remote either way
   let resolveReady;
   window.GTV_READY = new Promise((r) => { resolveReady = r; });
   window.GTV_EXIT = () => {
     try {
       if (isAndroid) GTVAndroid.exit();
+      else if (isVega) window.ReactNativeWebView.postMessage('exit');
       else tizen.application.getCurrentApplication().exit();
     } catch (_) { /* not on a TV */ }
   };
 
+  // Vega: the app hands over what it kept (the last server) and the stick's IP (vega/App.tsx).
+  const vega = () => (isVega && window.GTV_VEGA) || {};
   const store = {
-    get() { try { return localStorage.getItem(SAVED); } catch (_) { return null; } },
-    set(v) { try { localStorage.setItem(SAVED, v); } catch (_) { /* private mode */ } },
+    get() {
+      let v = null;
+      try { v = localStorage.getItem(SAVED); } catch (_) { /* no page storage */ }
+      return v || vega().server || null;
+    },
+    set(v) {
+      try { localStorage.setItem(SAVED, v); } catch (_) { /* private mode */ }
+      // Vega: the page's storage may not last, so the app keeps it too.
+      if (isVega) { try { window.GTV_VEGA = { ...vega(), server: v }; window.ReactNativeWebView.postMessage(`save:${v}`); } catch (_) { /* old app */ } }
+    },
+    name() {
+      let v = null;
+      try { v = localStorage.getItem(SAVED_NAME); } catch (_) { /* no page storage */ }
+      return v || vega().name || null;
+    },
+    setName(v) {
+      try { localStorage.setItem(SAVED_NAME, v || ''); } catch (_) { /* private mode */ }
+      if (isVega) { try { window.GTV_VEGA = { ...vega(), name: v || '' }; window.ReactNativeWebView.postMessage(`savename:${v || ''}`); } catch (_) { /* old app */ } }
+    },
   };
+  const bare = (base) => String(base || '').replace(/^https?:\/\//, '').replace(`:${PORT}`, '');
+  const sameName = (a, b) => !!a && !!b && String(a).toLowerCase() === String(b).toLowerCase();
 
   // ---------- remote buttons ----------
   const REGISTER = ['ColorF0Red', 'ColorF1Green', 'ColorF2Yellow', 'ColorF3Blue', 'ChannelUp', 'ChannelDown',
-    'MediaPlayPause', 'MediaPlay', 'MediaPause', 'MediaStop', 'MediaFastForward', 'MediaRewind', 'Info', 'Guide', 'Tools',
+    'MediaPlayPause', 'MediaPlay', 'MediaPause', 'MediaStop', 'MediaFastForward', 'MediaRewind', 'Info', 'Guide', 'Tools', 'PreviousChannel', 'Caption',
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
   if (isTizen) {
     try { tizen.tvinputdevice.registerKeyBatch(REGISTER); } catch (_) {
@@ -51,6 +77,13 @@
     412: () => (watching() ? 'ArrowLeft' : '['), // rewind: back 10s, or previous day
     427: () => (watching() ? 'ChannelUp' : 'PageUp'), // CH ▲
     428: () => (watching() ? 'ChannelDown' : 'PageDown'), // CH ▼
+    10221: 'Caption', // CC (Samsung); Fire TV / Android CAPTIONS is sent as this too
+    10190: 'PreviousChannel', // PRE-CH (Samsung); Fire TV / Android LAST CHANNEL is sent as this too
+    // Vega Fire TV remote (its WebView's own codes)
+    27: 'Escape', // Back
+    179: ' ', // play/pause
+    228: () => (watching() ? 'ArrowRight' : ']'), // fast-forward
+    227: () => (watching() ? 'ArrowLeft' : '['), // rewind
   };
   for (let d = 0; d <= 9; d++) KEYS[48 + d] = String(d);
   // Fire TV: OK held down (the Android side tells a hold from a press): the menu for wherever you are.
@@ -105,7 +138,7 @@
   window.GTV_REMOTE = (keyCode) => onRemote({ keyCode, key: '', gtvRemote: true, preventDefault() {}, stopImmediatePropagation() {} });
 
   // Show remote buttons in the hint bar instead of keyboard keys.
-  const HINT = isAndroid
+  const HINT = fireRemote
     // Fire TV remotes: no colored or guide buttons (Home has My Recordings, Timers, Search and the Guide); ≡ records.
     ? { R: ['≡'], M: ['HOLD OK', '', 'Menu'], D: null, T: null, S: null, G: null, Esc: ['BACK'], 'PgUp/PgDn': ['CH ▲▼'], '[ ]': ['⏪ ⏩'], Tab: null, Del: null, Type: ['OK', '', 'Type'] }
     : { R: ['●', 'k-red'], D: ['●', 'k-green'], T: ['●', 'k-yellow'], S: ['●', 'k-blue'], G: ['GUIDE'], M: ['TOOLS'], Esc: ['BACK'],
@@ -126,7 +159,7 @@
     try {
       const res = await fetch(`${base}/api/ping`, { signal: ac.signal, cache: 'no-store' });
       const j = await res.json();
-      return j && j.app === 'GarysTV' ? { base, name: j.name, server: j.platform === 'linux' } : null;
+      return j && j.app === 'GarysTV' ? { base, name: j.name, server: j.platform === 'linux', addresses: j.addresses || [] } : null;
     } catch (_) {
       return null;
     } finally {
@@ -146,6 +179,12 @@
           const [ip, bits] = String(GTVAndroid.ipAddress() || '').split('/'); // "192.168.5.40/22"
           return resolve(ip ? { ip, bits: +bits || 24 } : null);
         } catch (_) { return resolve(null); }
+      }
+      if (isVega) {
+        // The app tells us the stick's address. If it couldn't, search next to the last server
+        // (same home network, e.g. after the server got a new address from the router).
+        const ip = vega().ip || (store.get() || '').replace(/^https?:\/\//, '').replace(/:\d+$/, '');
+        return resolve(/^\d+\.\d+\.\d+\.\d+$/.test(ip) && ip !== '0.0.0.0' ? { ip, bits: 24 } : null);
       }
       if (!isTizen) {
         // Testing in a normal browser: use the address this page came from.
@@ -197,6 +236,26 @@
     const rest = Array.from({ length: size }, (_, i) => start + i).filter((n) => inNet(n) && (n < near || n >= near + 256));
     const found = await probe(first.map(toIp), onFound);
     return found.length || !rest.length ? found : probe(rest.map(toIp), onFound);
+  }
+
+  // The saved server stopped answering (the router gave it a new address): find it again by its
+  // computer name. First by name (the router or the PC itself may answer for it), then by
+  // asking around the home network. -> the ping answer, with base set to its IP address, or null.
+  async function refind(name, { search = true } = {}) {
+    if (!name) return null;
+    const asked = [`http://${name}:${PORT}`];
+    if (!/\./.test(name)) asked.push(`http://${name.toLowerCase()}.local:${PORT}`);
+    const byName = (await Promise.all(asked.map((b) => ping(b, 3000)))).find((h) => h && sameName(h.name, name));
+    if (byName) {
+      // Keep its IP address (quicker next time); the name is the fallback.
+      for (const ip of byName.addresses) {
+        const hit = await ping(`http://${ip}:${PORT}`, 2000);
+        if (hit && sameName(hit.name, name)) return hit;
+      }
+      return byName;
+    }
+    if (!search) return null;
+    return (await scan(() => {})).find((h) => sameName(h.name, name)) || null;
   }
 
   function normalize(addr) {
@@ -251,8 +310,13 @@
       if (typeof k === 'function') k = '';
       const f = this.fields();
       const typing = document.activeElement && document.activeElement.tagName === 'INPUT';
-      if (k === 'ArrowDown' || (k === 'ArrowRight' && !typing)) this.setFocus(this.focus + 1);
-      else if (k === 'ArrowUp' || (k === 'ArrowLeft' && !typing)) this.setFocus(this.focus - 1);
+      // ←→ only to a button level with this one (the address box's Connect), never on to the
+      // line below or above (→ used to act like ↓ here).
+      const level = (i) => { const a = f[this.focus].getBoundingClientRect(), b = f[i] && f[i].getBoundingClientRect(); return b && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 4; };
+      if (k === 'ArrowDown') this.setFocus(this.focus + 1);
+      else if (k === 'ArrowUp') this.setFocus(this.focus - 1);
+      else if (k === 'ArrowRight' && !typing) { if (level(this.focus + 1)) this.setFocus(this.focus + 1); }
+      else if (k === 'ArrowLeft' && !typing) { if (level(this.focus - 1)) this.setFocus(this.focus - 1); }
       else if (k === 'Enter') { if (f[this.focus].tagName === 'INPUT') this.tryAddress(f[this.focus].value); else f[this.focus].click(); }
       else if (k === 'Escape' && e.keyCode === 10009 && typing && document.activeElement.value) document.activeElement.value = document.activeElement.value.slice(0, -1); // remote Back deletes a character
       else if (k === 'Escape') window.GTV_EXIT();
@@ -266,6 +330,8 @@
       msg.textContent = 'Looking for GarysTV on your home network...';
       list.innerHTML = '';
       this.found = [];
+      const want = store.name();
+      let picked = false;
       const found = await scan((hit) => {
         if (this.found.some((f) => f.base === hit.base)) return;
         this.found.push(hit);
@@ -275,9 +341,11 @@
         b.onclick = () => this.done(hit.base);
         if (hit.server) list.prepend(b); else list.appendChild(b); // the always-on server first
         if (this.found.length === 1) this.setFocus(0);
+        // The one this TV was on before, at its new address: no need to ask.
+        if (!picked && this.open && sameName(hit.name, want)) { picked = true; msg.textContent = `Found ${hit.name}. Connecting...`; this.done(hit.base, hit.name); }
       });
-      if (!this.open) return;
-      if (found.length === 1) { msg.textContent = `Found ${found[0].name}. Connecting...`; return this.done(found[0].base); } // the usual home: one PC, no question to ask
+      if (!this.open || picked) return;
+      if (found.length === 1) { msg.textContent = `Found ${found[0].name}. Connecting...`; return this.done(found[0].base, found[0].name); } // the usual home: one PC, no question to ask
       msg.textContent = found.length ? 'Pick your GarysTV:' : "GarysTV wasn't found. Type its address below, or check the steps at the bottom.";
       if (!found.length) this.setFocus(0);
     },
@@ -288,23 +356,26 @@
       const msg = this.el.querySelector('.cx-msg');
       msg.textContent = `Connecting to ${base.replace(/^https?:\/\//, '')}...`;
       const hit = await ping(base, 4000);
-      if (hit) this.done(hit.base);
+      if (hit) this.done(hit.base, hit.name);
       else msg.textContent = `Couldn't reach GarysTV at ${base.replace(/^https?:\/\//, '')}. Check the address and that GarysTV is running.`;
     },
 
-    done(base) {
+    done(base, name) {
       store.set(base);
+      if (name) store.setName(name);
       this.open = false;
       this.el.remove();
-      start(base);
+      start(base, name);
     },
   };
 
   // Forget this GarysTV and look again (a home with both the PC and the home server running).
-  window.GTV_SWITCH = () => { store.set(''); location.reload(); };
+  window.GTV_SWITCH = () => { store.set(''); store.setName(''); location.reload(); };
 
-  function start(base) {
+  function start(base, name) {
     window.GTV_SERVER = base;
+    window.GTV_SERVER_NAME = name || store.name() || '';
+    watch();
     if (typeof setHints === 'function') {
       const orig = setHints;
       setHints = (list) => orig(tvHints(list)); // eslint-disable-line no-global-assign
@@ -314,9 +385,36 @@
 
   document.addEventListener('DOMContentLoaded', async () => {
     document.documentElement.classList.add('tv');
-    if (isAndroid) document.documentElement.classList.add('firetv');
+    if (fireRemote) document.documentElement.classList.add('firetv');
     const saved = store.get();
-    if (saved && await ping(saved, 3000)) return start(saved);
-    connect.show(saved ? `Can't reach GarysTV at ${saved.replace(/^https?:\/\//, '')}. Is it turned on?` : null);
+    const name = store.name();
+    // The last server, if it answers. Twice: a TV just waking up may not be on Wi-Fi yet.
+    const hit = saved && (await ping(saved, 3000) || await ping(saved, 3000));
+    if (hit && (!name || sameName(hit.name, name))) { store.setName(hit.name); return start(saved, hit.name); }
+    // Not there, or a different GarysTV has that address now: look for this TV's one by name.
+    const again = name && await refind(name, { search: false });
+    if (again) { store.set(again.base); return start(again.base, again.name); }
+    if (hit) { store.setName(hit.name); return start(saved, hit.name); }
+    // The connect screen searches the network and connects by itself if it finds the same name.
+    connect.show(saved ? (name ? `Looking for ${name}. Its address may have changed (it was ${bare(saved)})...` : `Can't reach GarysTV at ${bare(saved)}. Is it turned on?`) : null);
   });
+
+  // While the app is open: if the server stops answering (it got a new address from the router),
+  // find it again by name and carry on there.
+  let watchOn = false;
+  function watch() {
+    if (watchOn) return;
+    watchOn = true;
+    let misses = 0, lastSearch = 0;
+    setInterval(async () => {
+      if (document.hidden || connect.open || !window.GTV_SERVER) return;
+      if (await ping(window.GTV_SERVER, 4000)) { misses = 0; return; }
+      if (++misses < 2) return;
+      const name = window.GTV_SERVER_NAME || store.name();
+      const search = Date.now() - lastSearch > 5 * 60000; // a whole-network search at most every 5 minutes
+      if (search) lastSearch = Date.now();
+      const hit = await refind(name, { search });
+      if (hit && hit.base !== window.GTV_SERVER) { store.set(hit.base); store.setName(hit.name); location.reload(); }
+    }, 60000);
+  }
 })();

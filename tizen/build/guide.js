@@ -27,6 +27,8 @@ const GuideView = {
   // Show one favorites list (or all channels with null). Watching from it, channel up/down stays in it.
   // keepId: stay on that channel if it's still shown.
   setList(id, keepId) {
+    const lists = (App.state && App.state.favLists) || [];
+    if (id === ALL_FAVS && lists.length === 1) id = lists[0].id; // "All favorites" with only one list is that list
     this.listId = id || null;
     if (!this.list) this.listId = null; // deleted meanwhile
     try { if (this.listId) localStorage.setItem('gtv.favlist', this.listId); else localStorage.removeItem('gtv.favlist'); } catch (_) { /* private mode */ }
@@ -39,7 +41,7 @@ const GuideView = {
   applyList() {
     const l = this.list, f = this.filter;
     this.rows = this.all.filter((r) => (!l || l.channelIds.includes(r.id)) && (!f || inFilter(r, f)));
-    App.guideRows = this.rows;
+    if (this.all.length) App.guideRows = this.rows; // not before the guide has loaded (at startup), so Live TV and channel up/down still work
   },
 
   // ---------- categories: Sports, News, Movies... and, inside each, the provider's own groups ----------
@@ -364,8 +366,10 @@ const GuideView = {
 
   open() {
     const r = this.rows[this.row], p = this.focused();
-    if (r && p && p.filler) { Player.play('live', r.id); return; } // no listing (e.g. free channels): OK just tunes in
-    if (r && p) App.programDialog(r, p).then(() => this.refresh());
+    const now = Date.now();
+    // On now (or no listing, e.g. free channels): OK tunes straight in. Hold OK for the menu.
+    if (r && p && (p.filler || (p.start <= now && now < p.end))) { Player.play('live', r.id); return; }
+    if (r && p) App.programDialog(r, p).then(() => this.refresh()); // still to come or over: record it, etc.
   },
 
   async refresh() {
@@ -389,7 +393,9 @@ const GuideView = {
     if (r) items.push({ label: `▶ Watch ${r.number} ${r.name}${xf ? ' on Xfinity' : ''}`, run: () => Player.play('live', r.id), cls: 'primary' });
     if (xf) items.push({ label: '▶ Watch in GarysTV instead', run: () => Player.play('live', r.id, { here: true }) });
     if (xfBackup) items.push({ label: '▶ Watch in Xfinity instead', run: () => Xfinity.tryChannel(rc, true) });
+    if (r && p && !p.filler) items.push({ label: `ⓘ ${p.title}: details, start over, record...`, run: () => App.programDialog(r, p).then(() => this.refresh()) });
     if (r) items.push(...App.numberItem(r, after));
+    if (r) items.push(...App.guideItem(r, after));
     items.push({ label: '🔢 Go to a channel number...', run: () => this.pad() });
     if (r) items.push(...App.recordItems(r, p).map((c) => ({ ...c, run: () => Promise.resolve(c.run()).then(() => this.refresh()) })));
     if (r) items.push(...App.channelFavItems(r, after));
@@ -456,6 +462,8 @@ const GuideView = {
   // Synchronous so the key handler knows right away whether the key was used.
   onKey(e) {
     const k = e.key;
+    // On the bar is where the highlight is, however it got there (a click, a redraw), not only by ↑.
+    if (Nav.current && Nav.current.closest('#gbar, #gwatch, #topnav') && document.body.contains(Nav.current)) this.inBar = true;
     if (this.inBar && Nav.current && Nav.current.closest('#topnav')) { // the buttons along the top
       if (k === 'ArrowDown') { const w = $('#gwatch .chip'); if (w) Nav.focus(w); else this.refocusBar(); return true; }
       return ['ArrowLeft', 'ArrowRight', 'Enter'].includes(k) && Nav.handle(e);

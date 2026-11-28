@@ -13,6 +13,17 @@ const ICONS = {
 };
 
 // ---------------- Home ----------------
+// Top right of Home on a TV, phone or tablet: which GarysTV this is, by its computer name (the
+// address can change; the TV apps find it again by name). Nothing on the GarysTV PC itself.
+function serverLabel() {
+  const st = App.state.status;
+  const remoteBrowser = !window.GTV_SERVER && !/^(localhost|127\.)/.test(location.hostname);
+  if (!window.GTV_SERVER && !remoteBrowser) return '';
+  const kind = st.platform === 'linux' ? 'the home server' : 'the Windows PC';
+  const name = window.GTV_SERVER_NAME || st.name || '';
+  const addr = window.GTV_SERVER ? window.GTV_SERVER.replace(/^https?:\/\//, '').replace(/:5480$/, '') : '';
+  return `<div class="on-pc">On <b>${esc(kind)}</b><br>${esc(name || addr)}</div>`;
+}
 const HomeView = {
   title: '',
   hints: [['←→↑↓', 'Move'], ['OK', 'Select'], ['M', 'Menu'], ['G', 'Guide'], ['D', 'My Recordings'], ['T', 'Timers'], ['S', 'Search']],
@@ -23,7 +34,7 @@ const HomeView = {
     const recent = App.recordings.filter((r) => r.status !== 'failed').slice(0, 6);
     root.innerHTML = `
       <div class="home">
-        <div class="home-head"><img class="logo" src="logo.jpg" alt=""><h1>${greet}. <b>What would you like to watch?</b></h1>${window.GTV_SERVER ? `<div class="on-pc">On <b>${esc(App.state.status.platform === 'linux' ? 'the home server' : 'the Windows PC')}</b><br>${esc(window.GTV_SERVER.replace(/^https?:\/\//, '').replace(/:5480$/, ''))}</div>` : ''}</div>
+        <div class="home-head"><img class="logo" src="logo.jpg" alt=""><h1>${greet}. <b>What would you like to watch?</b></h1>${serverLabel()}</div>
         <div class="tiles">
           ${[['guide', 'Guide', 'See what\'s on'], ['live', 'Live TV', 'Last channel'], ['movies', 'Movies', 'On demand'], ['shows', 'Shows', 'Every episode'], ['dvr', 'My Recordings', `${App.recordings.length} shows`],
             ['arlo', 'Cameras', 'Motion clips & pop-ups'], ['search', 'Search', 'Find a show'], ['settings', 'Settings', 'Antenna, guide, channels']]

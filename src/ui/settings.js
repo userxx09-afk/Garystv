@@ -57,7 +57,7 @@ const SettingsView = {
       <h3 style="margin:.6rem 0 .3rem">This GarysTV</h3>
       ${row('Name', esc(d.name))}${row('Version', `${esc(d.version)} on ${esc(d.platform)} (Node ${esc(d.node)})`)}${row('Running for', esc(up(d.uptimeS)))}
       ${row('Addresses', esc((d.addresses || []).join(', ') || 'none'))}
-      ${window.GTV_SERVER ? row('This screen talks to', esc(window.GTV_SERVER)) : ''}
+      ${window.GTV_SERVER ? row('This screen talks to', esc(`${window.GTV_SERVER_NAME ? `${window.GTV_SERVER_NAME} at ` : ''}${window.GTV_SERVER}`)) : ''}
       ${u ? row('Updates', esc(`${u.available && u.available !== u.current ? `${u.available} is out` : 'up to date'}${u.plan ? ` · installs ${u.plan.when === 'scheduled' ? `${u.plan.day || 'daily'} at ${u.plan.h}:${String(u.plan.m).padStart(2, '0')}` : u.plan.when}` : ''}${u.error ? ` · ${u.error}` : ''}`)) : ''}
       <h3 style="margin:.8rem 0 .3rem">Providers</h3>
       ${(d.sources || []).map((s) => row(s.name, esc(`${s.type}${s.enabled ? '' : ' (off)'}${s.family ? ' · family account' : ''} · ${s.channels} channels${s.firstNumber ? ` from ${s.firstNumber}` : ''}${s.streams ? ` · ${s.streams} at once` : ''}${s.info ? ` · ${s.info}` : ''}`))).join('') || '<div class="s">None yet.</div>'}
@@ -531,7 +531,7 @@ const SettingsView = {
       <div class="actions"><div class="btn nav primary" id="saveS">Save settings</div></div>`;
     api.get('/api/ping').then((p) => {
       const el = $('#pcAddr', pane);
-      if (el && p.addresses && p.addresses.length) el.innerHTML = `The TV app finds this PC by itself. If it can't, type this PC's address on the TV: <b>${p.addresses.map(esc).join('</b> or <b>')}</b>`;
+      if (el && p.addresses && p.addresses.length) el.innerHTML = `The TV app finds this PC by itself, and finds it again by its name (<b>${esc(p.name)}</b>) if the router gives it a new address. If it can't, type this PC's address on the TV: <b>${p.addresses.map(esc).join('</b> or <b>')}</b>. On an iPad or another computer, open <b>http://${esc(String(p.name).toLowerCase())}.local:5480</b> so it keeps working when the address changes.`;
     }).catch(() => {});
     this.storageWire(pane);
     $('#saveS', pane).onclick = async () => {

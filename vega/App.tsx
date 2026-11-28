@@ -21,15 +21,18 @@ function within<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
 export const App = () => {
   const [boot, setBoot] = useState<string | null>(null);
   const ipRef = useRef('');
+  const nameRef = useRef(''); // the server's computer name, to find it again if its address changes
   // What the page gets on every load (a reload too, e.g. after "switch server").
-  const bootFor = (server: string) => `window.GTV_VEGA = ${JSON.stringify({ server, ip: ipRef.current })}; true;`;
+  const bootFor = (server: string) => `window.GTV_VEGA = ${JSON.stringify({ server, ip: ipRef.current, name: nameRef.current })}; true;`;
 
   useEffect(() => {
     (async () => {
-      const [server, ip] = await Promise.all([
+      const [server, ip, name] = await Promise.all([
         within(AsyncStorage.getItem(SAVED), 1500, null),
         within(Network.getIpAddressAsync(), 1500, ''),
+        within(AsyncStorage.getItem(`${SAVED}.name`), 1500, null),
       ]);
+      nameRef.current = name || '';
       ipRef.current = ip && ip !== '0.0.0.0' ? ip : '';
       setBoot(bootFor(server || ''));
     })();
@@ -54,6 +57,11 @@ export const App = () => {
           else if (data.startsWith('save:')) {
             AsyncStorage.setItem(SAVED, data.slice(5)).catch(() => {});
             setBoot(bootFor(data.slice(5)));
+          }
+          // ...and the server's computer name, to find it again if its address changes.
+          else if (data.startsWith('savename:')) {
+            nameRef.current = data.slice(9);
+            AsyncStorage.setItem(`${SAVED}.name`, nameRef.current).catch(() => {});
           }
         }}
         style={styles.web}
