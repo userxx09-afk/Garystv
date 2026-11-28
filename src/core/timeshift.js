@@ -1,7 +1,8 @@
 // Live TV pause & rewind. While you watch a channel, the engine keeps the last
 // 30 minutes (Settings) of it on disk as an HLS playlist of 2-second pieces. The
 // player plays from that, so it can pause, rewind, fast-forward and jump to live.
-// If the stream drops, ffmpeg is restarted and the buffer carries on.
+// If the stream drops, ffmpeg is restarted and the buffer carries on. If it keeps dropping, or the
+// picture freezes, it carries on from a backup feed showing the same thing (backup-feed.js).
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
@@ -11,13 +12,19 @@ const MB_PER_MIN = 45; // about 6 Mbit/s: converted video is capped there, inter
 const SPARE_MB = 1500; // never fill the disk: leave this much free
 const GRACE_MS = 5000; // after the last viewer leaves (channel change, stop)
 const STALE_MS = 60000; // a viewer that stopped asking for the playlist is gone (closed app, TV off)
+// A real failure, not a brief stall: the stream dropped this many times in this long (ffmpeg has
+// already tried reconnecting by itself each time), or no new video for FROZEN_MS.
+const DROPS = 3;
+const DROPS_MS = 3 * 60000;
+const FROZEN_MS = 20000;
 
 class Timeshift {
   // ffmpeg(): path to ffmpeg; input(channelId, session): Promise<ffmpeg input + video options>; dir(): buffer folder; minutes(): wanted length
   // claim(channelId, onBump): a plan for the stream (tuners.js; throws when none is free); unclaim(lease)
   // health: playback health (diagnostics.js), told how well each channel's stream keeps up
-  constructor({ ffmpeg, input, dir, minutes, note = () => {}, claim = () => null, unclaim = () => {}, health = null }) {
-    Object.assign(this, { ffmpeg, input, dir, minutes, note, claim, unclaim, health });
+  // backup(channelId, skip): a feed showing the same thing as channelId now, or null; switched(channelId, from, to): told when it's used
+  constructor({ ffmpeg, input, dir, minutes, note = () => {}, claim = () => null, unclaim = () => {}, health = null, backup = () => null, switched = () => {} }) {
+    Object.assign(this, { ffmpeg, input, dir, minutes, note, claim, unclaim, health, backup, switched });
     this.sessions = new Map();
     this.timer = setInterval(() => this.reap(), GRACE_MS);
     try { fs.rmSync(this.dir(), { recursive: true, force: true }); } catch (_) { /* leftovers from a crash */ }
@@ -55,14 +62,18 @@ class Timeshift {
     const root = this.dir();
     const dir = path.join(root, `ch-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`);
     fs.mkdirSync(dir, { recursive: true });
-    const s = { channelId, dir, proc: null, viewers: new Map(), stopped: false, fails: 0, minutes: this.fitMinutes(root), startedAt: Date.now(), lease };
+    const s = { channelId, dir, proc: null, viewers: new Map(), stopped: false, fails: 0, minutes: this.fitMinutes(root), startedAt: Date.now(), lease,
+      drops: [], tried: new Set([channelId]) };
     this.sessions.set(channelId, s);
     s.ready = new Promise((resolve, reject) => {
-      const t0 = Date.now();
+      let t0 = Date.now();
       const check = () => {
         if (s.stopped) return reject(new Error(s.error || 'Stopped'));
         if (this.playlist(s).includes('#EXTINF')) return resolve();
-        if (Date.now() - t0 > 20000) { s.error = s.error || 'No video from this channel'; this.stop(channelId); return reject(new Error(s.error)); }
+        if (Date.now() - t0 > 20000) {
+          if (this.switchFeed(s, 'no video')) { t0 = Date.now(); return setTimeout(check, 200); } // a dead feed: try its backup
+          s.error = s.error || 'No video from this channel'; this.stop(channelId); return reject(new Error(s.error));
+        }
         setTimeout(check, 200);
       };
       check();
@@ -88,6 +99,16 @@ class Timeshift {
     s.proc = proc;
     let err = '';
     const began = Date.now();
+    s.lastVideo = began;
+    // Frozen: connected, but no new video (ffmpeg would wait for ever). Once it had been playing, a real failure.
+    const watch = setInterval(() => {
+      if (s.stopped || s.proc !== proc || Date.now() - s.lastVideo < FROZEN_MS) return;
+      clearInterval(watch);
+      if (!this.playlist(s).includes('#EXTINF')) return; // still starting: the 20s start check handles that
+      if (this.switchFeed(s, 'picture froze')) return;
+      s.lastVideo = Date.now();
+      proc.kill('SIGKILL'); // start this feed again
+    }, 2000);
     proc.stderr.on('data', (d) => { err = (err + d).slice(-1000); });
     let progress = '';
     proc.stdout.on('data', (d) => {
@@ -96,18 +117,54 @@ class Timeshift {
       progress = lines.pop();
       for (const l of lines) {
         const m = /^out_time_us=(\d+)/.exec(l);
+        if (m && +m[1] !== s.lastOut) { s.lastOut = +m[1]; s.lastVideo = Date.now(); }
         if (m && this.health && !s.stopped) this.health.progress(s.channelId, +m[1]);
       }
     });
     proc.on('close', () => {
+      clearInterval(watch);
       if (s.stopped) return;
+      if (s.proc !== proc) return; // replaced by a backup feed (switchFeed)
       if (this.health) this.health.bufferExited(s.channelId, err.trim().split('\n').pop());
+      // Dropped again and again: carry on from a backup feed, if one is showing the same thing.
+      const now = Date.now();
+      s.drops = [...s.drops.filter((t) => now - t < DROPS_MS), now];
+      if (s.drops.length >= DROPS && this.switchFeed(s, `dropped ${s.drops.length} times`)) return;
       // The source dropped: carry on in the same buffer. Give up only if it keeps failing straight away.
       s.fails = Date.now() - began > 30000 ? 0 : s.fails + 1;
       if (err) s.error = err.trim().split('\n').pop();
       if (s.fails > 8) { this.note(`live buffer: gave up on ${s.channelId}: ${s.error || 'stream ended'}`); return this.stop(s.channelId); }
       setTimeout(() => !s.stopped && this.run(s, this.playlist(s).includes('#EXTINF')), Math.min(s.fails, 5) * 1000);
     });
+  }
+
+  // Moves a buffer to a backup feed of its channel (same show, per the guide). -> whether it did.
+  // The viewer keeps watching "their" channel: the buffer carries on with a break in between.
+  switchFeed(s, why) {
+    if (s.stopped) return false;
+    const from = s.lease && s.lease.channel ? s.lease.channel.id : s.channelId;
+    const pick = this.backup(s.channelId, [...s.tried, from]);
+    if (!pick) return false;
+    s.tried.add(pick.id);
+    // A one-stream plan: let go of the failing feed before asking for the backup.
+    const old = s.lease;
+    if (old) this.unclaim(old);
+    let lease;
+    try { lease = this.claim(pick.id, () => this.stop(s.channelId)); } catch (e) {
+      try { s.lease = old ? this.claim(from, () => this.stop(s.channelId)) : null; } catch (_) { s.lease = null; }
+      this.note(`live buffer: no backup for ${s.channelId}: ${e.message}`);
+      return false;
+    }
+    s.lease = lease || { channel: pick };
+    s.feed = pick.id;
+    s.drops = []; s.fails = 0;
+    this.note(`live buffer: ${from} ${why}; switched to backup ${pick.id}`);
+    this.switched(s.channelId, from, pick.id);
+    const proc = s.proc;
+    s.proc = null; // its close event is ignored
+    if (proc) proc.kill('SIGKILL');
+    setTimeout(() => !s.stopped && this.run(s, this.playlist(s).includes('#EXTINF')), 500);
+    return true;
   }
 
   // As many minutes as asked for, but only as many as the disk has room for.
