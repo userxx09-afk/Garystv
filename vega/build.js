@@ -24,7 +24,17 @@ for (const f of fs.readdirSync(ui)) {
   fs.copyFileSync(path.join(ui, f), path.join(www, f));
 }
 fs.copyFileSync(require.resolve('mpegts.js/dist/mpegts.js', { paths: [root] }), path.join(www, 'lib', 'mpegts.js'));
-fs.copyFileSync(require.resolve('hls.js/dist/hls.min.js', { paths: [root] }), path.join(www, 'lib', 'hls.js'));
+// hls.js tells the decoder live TV sound is HE-AAC (AAC with SBR) on any browser that isn't Firefox or
+// Android, though GarysTV always sends plain AAC (LC). Chrome copes; the Vega WebView's decoder doesn't
+// and the sound comes out robotic. So in the Vega copy only, take hls.js's Android path (signal what
+// the stream really is). Patched in the file itself so it also holds inside hls.js's worker.
+{
+  let hlsJs = fs.readFileSync(require.resolve('hls.js/dist/hls.min.js', { paths: [root] }), 'utf8');
+  let n = 0;
+  hlsJs = hlsJs.replace(/-1!==([A-Za-z_$][\w$]*)\.indexOf\("android"\)/g, () => { n++; return '!0'; });
+  if (n !== 2) throw new Error(`hls.js changed shape (${n} Android checks, expected 2); update vega/build.js`);
+  fs.writeFileSync(path.join(www, 'lib', 'hls.js'), hlsJs);
+}
 for (const f of ['tv.js', 'tv.css']) fs.copyFileSync(path.join(tv, f), path.join(www, f));
 
 let html = fs.readFileSync(path.join(ui, 'index.html'), 'utf8');
