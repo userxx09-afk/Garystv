@@ -327,7 +327,7 @@ function createServer(core) {
       // Not the stream addresses: the screens play through /stream, and IPTV ones hold the login.
       channels: core.channels.map(({ streamUrl, catchupUrl, ...c }) => c), // both hold the IPTV login
       guideChannels: core.guideData.channels.map(({ id, names, number, providerName }) => ({ id, names, number, providerName })),
-      rules: core.rules, status: { ...core.status(), tools: tools.status(), platform: process.platform, version: VERSION }, favLists: core.favLists,
+      rules: core.rules, status: { ...core.status(), tools: tools.status(), platform: process.platform, version: VERSION, name: require('os').hostname() }, favLists: core.favLists,
     })],
     // Linked GarysTVs at other locations (peers.js).
     ['GET', '/api/peers', (q, b, p, req) => ({ ...peers.overview(), home: !!req.who.home })],

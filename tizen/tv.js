@@ -7,6 +7,7 @@
 (function () {
   const PORT = 5480;
   const SAVED = 'gtv.server';
+  const SAVED_NAME = 'gtv.server.name'; // the server's computer name, to find it again if its address changes
   const isTizen = typeof tizen !== 'undefined';
   const isAndroid = typeof GTVAndroid !== 'undefined';
   // Vega Fire TV (the newer Linux sticks): the page runs in the Vega app's WebView (vega/).
@@ -35,7 +36,18 @@
       // Vega: the page's storage may not last, so the app keeps it too.
       if (isVega) { try { window.GTV_VEGA = { ...vega(), server: v }; window.ReactNativeWebView.postMessage(`save:${v}`); } catch (_) { /* old app */ } }
     },
+    name() {
+      let v = null;
+      try { v = localStorage.getItem(SAVED_NAME); } catch (_) { /* no page storage */ }
+      return v || vega().name || null;
+    },
+    setName(v) {
+      try { localStorage.setItem(SAVED_NAME, v || ''); } catch (_) { /* private mode */ }
+      if (isVega) { try { window.GTV_VEGA = { ...vega(), name: v || '' }; window.ReactNativeWebView.postMessage(`savename:${v || ''}`); } catch (_) { /* old app */ } }
+    },
   };
+  const bare = (base) => String(base || '').replace(/^https?:\/\//, '').replace(`:${PORT}`, '');
+  const sameName = (a, b) => !!a && !!b && String(a).toLowerCase() === String(b).toLowerCase();
 
   // ---------- remote buttons ----------
   const REGISTER = ['ColorF0Red', 'ColorF1Green', 'ColorF2Yellow', 'ColorF3Blue', 'ChannelUp', 'ChannelDown',
@@ -147,7 +159,7 @@
     try {
       const res = await fetch(`${base}/api/ping`, { signal: ac.signal, cache: 'no-store' });
       const j = await res.json();
-      return j && j.app === 'GarysTV' ? { base, name: j.name, server: j.platform === 'linux' } : null;
+      return j && j.app === 'GarysTV' ? { base, name: j.name, server: j.platform === 'linux', addresses: j.addresses || [] } : null;
     } catch (_) {
       return null;
     } finally {
@@ -226,6 +238,26 @@
     return found.length || !rest.length ? found : probe(rest.map(toIp), onFound);
   }
 
+  // The saved server stopped answering (the router gave it a new address): find it again by its
+  // computer name. First by name (the router or the PC itself may answer for it), then by
+  // asking around the home network. -> the ping answer, with base set to its IP address, or null.
+  async function refind(name, { search = true } = {}) {
+    if (!name) return null;
+    const asked = [`http://${name}:${PORT}`];
+    if (!/\./.test(name)) asked.push(`http://${name.toLowerCase()}.local:${PORT}`);
+    const byName = (await Promise.all(asked.map((b) => ping(b, 3000)))).find((h) => h && sameName(h.name, name));
+    if (byName) {
+      // Keep its IP address (quicker next time); the name is the fallback.
+      for (const ip of byName.addresses) {
+        const hit = await ping(`http://${ip}:${PORT}`, 2000);
+        if (hit && sameName(hit.name, name)) return hit;
+      }
+      return byName;
+    }
+    if (!search) return null;
+    return (await scan(() => {})).find((h) => sameName(h.name, name)) || null;
+  }
+
   function normalize(addr) {
     let a = String(addr || '').trim().replace(/\/+$/, '');
     if (!a) return null;
@@ -298,6 +330,8 @@
       msg.textContent = 'Looking for GarysTV on your home network...';
       list.innerHTML = '';
       this.found = [];
+      const want = store.name();
+      let picked = false;
       const found = await scan((hit) => {
         if (this.found.some((f) => f.base === hit.base)) return;
         this.found.push(hit);
@@ -307,9 +341,11 @@
         b.onclick = () => this.done(hit.base);
         if (hit.server) list.prepend(b); else list.appendChild(b); // the always-on server first
         if (this.found.length === 1) this.setFocus(0);
+        // The one this TV was on before, at its new address: no need to ask.
+        if (!picked && this.open && sameName(hit.name, want)) { picked = true; msg.textContent = `Found ${hit.name}. Connecting...`; this.done(hit.base, hit.name); }
       });
-      if (!this.open) return;
-      if (found.length === 1) { msg.textContent = `Found ${found[0].name}. Connecting...`; return this.done(found[0].base); } // the usual home: one PC, no question to ask
+      if (!this.open || picked) return;
+      if (found.length === 1) { msg.textContent = `Found ${found[0].name}. Connecting...`; return this.done(found[0].base, found[0].name); } // the usual home: one PC, no question to ask
       msg.textContent = found.length ? 'Pick your GarysTV:' : "GarysTV wasn't found. Type its address below, or check the steps at the bottom.";
       if (!found.length) this.setFocus(0);
     },
@@ -320,23 +356,26 @@
       const msg = this.el.querySelector('.cx-msg');
       msg.textContent = `Connecting to ${base.replace(/^https?:\/\//, '')}...`;
       const hit = await ping(base, 4000);
-      if (hit) this.done(hit.base);
+      if (hit) this.done(hit.base, hit.name);
       else msg.textContent = `Couldn't reach GarysTV at ${base.replace(/^https?:\/\//, '')}. Check the address and that GarysTV is running.`;
     },
 
-    done(base) {
+    done(base, name) {
       store.set(base);
+      if (name) store.setName(name);
       this.open = false;
       this.el.remove();
-      start(base);
+      start(base, name);
     },
   };
 
   // Forget this GarysTV and look again (a home with both the PC and the home server running).
-  window.GTV_SWITCH = () => { store.set(''); location.reload(); };
+  window.GTV_SWITCH = () => { store.set(''); store.setName(''); location.reload(); };
 
-  function start(base) {
+  function start(base, name) {
     window.GTV_SERVER = base;
+    window.GTV_SERVER_NAME = name || store.name() || '';
+    watch();
     if (typeof setHints === 'function') {
       const orig = setHints;
       setHints = (list) => orig(tvHints(list)); // eslint-disable-line no-global-assign
@@ -348,8 +387,34 @@
     document.documentElement.classList.add('tv');
     if (fireRemote) document.documentElement.classList.add('firetv');
     const saved = store.get();
+    const name = store.name();
     // The last server, if it answers. Twice: a TV just waking up may not be on Wi-Fi yet.
-    if (saved && (await ping(saved, 3000) || await ping(saved, 3000))) return start(saved);
-    connect.show(saved ? `Can't reach GarysTV at ${saved.replace(/^https?:\/\//, '')}. Is it turned on?` : null);
+    const hit = saved && (await ping(saved, 3000) || await ping(saved, 3000));
+    if (hit && (!name || sameName(hit.name, name))) { store.setName(hit.name); return start(saved, hit.name); }
+    // Not there, or a different GarysTV has that address now: look for this TV's one by name.
+    const again = name && await refind(name, { search: false });
+    if (again) { store.set(again.base); return start(again.base, again.name); }
+    if (hit) { store.setName(hit.name); return start(saved, hit.name); }
+    // The connect screen searches the network and connects by itself if it finds the same name.
+    connect.show(saved ? (name ? `Looking for ${name}. Its address may have changed (it was ${bare(saved)})...` : `Can't reach GarysTV at ${bare(saved)}. Is it turned on?`) : null);
   });
+
+  // While the app is open: if the server stops answering (it got a new address from the router),
+  // find it again by name and carry on there.
+  let watchOn = false;
+  function watch() {
+    if (watchOn) return;
+    watchOn = true;
+    let misses = 0, lastSearch = 0;
+    setInterval(async () => {
+      if (document.hidden || connect.open || !window.GTV_SERVER) return;
+      if (await ping(window.GTV_SERVER, 4000)) { misses = 0; return; }
+      if (++misses < 2) return;
+      const name = window.GTV_SERVER_NAME || store.name();
+      const search = Date.now() - lastSearch > 5 * 60000; // a whole-network search at most every 5 minutes
+      if (search) lastSearch = Date.now();
+      const hit = await refind(name, { search });
+      if (hit && hit.base !== window.GTV_SERVER) { store.set(hit.base); store.setName(hit.name); location.reload(); }
+    }, 60000);
+  }
 })();

@@ -51,6 +51,8 @@ const Health = {
       this.endStall();
     });
     v.addEventListener('seeking', () => { if (this.s) { this.s.seekAt = Date.now(); this.s.stallAt = 0; } });
+    // A recording played to the end: ask whether to delete it, save it or keep it.
+    v.addEventListener('ended', () => { if (this.kind === 'rec' && this.rec) this.finished(); });
     v.addEventListener('waiting', () => {
       const s = this.s;
       // Not a stutter: still starting, paused, or jumping (rewind, back to live).
@@ -130,6 +132,8 @@ const Player = {
   mode: 'off', // off | full | pip
   kind: null, id: null, offset: 0, duration: 0, rec: null, channel: null, mp: null, hls: null,
   osdTimer: null, tickTimer: null, saveTimer: null, session: 0, retries: 0, passed: new Set(), prompted: null,
+  cc: (() => { try { return localStorage.getItem('gtv.cc') === '1'; } catch (_) { return false; } })(), // captions on, on this TV
+  ccTrack: null, // the track recordings' captions go in (one, reused: tracks can't be removed)
 
   // kind: live | rec (a recording) | vod (a movie or episode from the IPTV provider; item = { title,
   // subtitle, duration, poster, showId } from the Movies / Shows screens)
@@ -142,6 +146,7 @@ const Player = {
         if (this.mode !== 'off') this.stop();
         App.lastChannel = id;
         try { localStorage.setItem('gtv.lastChannel', id); } catch (_) { /* private mode */ }
+        App.noteRecent(id);
         return;
       }
     }
@@ -162,10 +167,12 @@ const Player = {
     this.channel = kind === 'live' ? App.state.channels.find((c) => c.id === id) : null;
     if (kind === 'rec' && this.rec) this.duration = ((this.rec.finishedAt || Date.now()) - this.rec.recordedAt) / 1000;
     if (kind === 'vod') this.duration = this.rec.duration || 0; // 0: the provider didn't say
-    if (this.channel) { App.lastChannel = id; try { localStorage.setItem('gtv.lastChannel', id); } catch (_) { /* private mode */ } }
+    if (this.channel) { App.lastChannel = id; try { localStorage.setItem('gtv.lastChannel', id); } catch (_) { /* private mode */ } App.noteRecent(id); }
     Health.begin(kind, id, this.channel ? [this.channel.number, this.channel.name].filter(Boolean).join(' ') : this.rec ? this.rec.title : id);
     if (kind === 'live') this.playLive(id);
     else this.playRec(kind, id, offset);
+    if (this.ccTrack) for (const c of [...(this.ccTrack.cues || [])]) this.ccTrack.removeCue(c);
+    if (kind === 'rec' && this.cc) this.loadRecCaptions(id, offset, this.session);
     this.setMode('full');
     this.showOsd();
     clearInterval(this.tickTimer);
@@ -222,12 +229,25 @@ const Player = {
   playRec(kind, id, offset) {
     const video = $('#video'), session = this.session;
     // Absolute URL: mpegts.js fetches from a worker, which can't resolve relative paths.
-    this.mp = mpegts.createPlayer({ type: 'mpegts', isLive: true, url: `${serverBase()}/stream/${kind}/${encodeURIComponent(id)}?t=${Math.floor(offset)}` },
+    this.mp = mpegts.createPlayer({ type: 'mpegts', isLive: true, url: `${serverBase()}/stream/${kind}/${encodeURIComponent(id)}?t=${Math.floor(offset)}&v=${VIEWER}` },
       { enableWorker: true, liveBufferLatencyChasing: false, lazyLoad: false });
+    // The whole recording has arrived: once the picture reaches the end of it, it has finished.
+    if (kind === 'rec') this.mp.on(mpegts.Events.LOADING_COMPLETE, () => { if (session === this.session) this.watchEnd(session); });
     this.mp.on(mpegts.Events.ERROR, () => { if (session === this.session) this.showOsd(kind === 'vod' ? 'Could not play this. The provider may be busy; try again in a moment.' : 'Could not play this recording.'); });
     this.mp.attachMediaElement(video);
     this.mp.load();
     video.play().catch(() => {});
+  },
+
+  watchEnd(session) {
+    const video = $('#video');
+    let still = 0;
+    const t = setInterval(() => {
+      if (session !== this.session || this.kind !== 'rec') return clearInterval(t);
+      const b = video.buffered, end = b.length ? b.end(b.length - 1) : 0;
+      still = !video.paused && end && video.currentTime >= end - 0.6 ? still + 1 : 0;
+      if (video.ended || still >= 3) { clearInterval(t); this.finished(); }
+    }, 500);
   },
 
   stopStream() {
@@ -251,6 +271,29 @@ const Player = {
     this.stopStream();
     this.setMode('off');
     this.kind = this.id = this.rec = this.channel = null;
+  },
+
+  async finished() {
+    const r = App.recordings.find((x) => x.id === this.rec.id) || this.rec;
+    if (r.status === 'recording' || this.endAsked === r.id) return; // still coming in: nothing to ask yet
+    this.endAsked = r.id;
+    this.stop();
+    App.render();
+    const label = `${r.title}${r.subtitle ? ` - ${r.subtitle}` : ''}`;
+    const choices = [{ label: '🗑  Delete it', value: 'delete', cls: 'danger' }];
+    if (!r.at && !r.saved) choices.push({ label: '★  Save it (never deleted automatically)', value: 'save' });
+    choices.push({ label: r.saved ? 'Keep it (saved ★)' : 'Keep it', value: 'keep', cls: 'primary' }, { label: '⟲  Watch again', value: 'again' });
+    const v = await Modal.menu('Finished', `<div class="s">${esc(label)}</div>`, choices);
+    this.endAsked = null;
+    try {
+      if (v === 'delete' && await Modal.confirm('Delete recording?', `${label} will be permanently deleted.`, 'Delete')) {
+        await api.del(`/api/recordings/${r.id}`);
+        toast('Recording deleted');
+      } else if (v === 'save') {
+        await api.put(`/api/recordings/${r.id}`, { saved: true });
+        toast('Saved: this recording won\'t be deleted automatically');
+      } else if (v === 'again') this.play('rec', r.id);
+    } catch (e) { toast(e.message); }
   },
 
   togglePause() {
@@ -277,8 +320,95 @@ const Player = {
     const to = Math.max(r.start + 1, Math.min(r.edge, v.currentTime + delta));
     if (delta > 0 && to >= r.edge - 1) { this.goLive(); return; }
     v.currentTime = to;
-    this.showOsd(delta < 0 && to <= r.start + 1 ? 'This is as far back as the live buffer goes.' : '');
+    this.showOsd(delta < 0 && to <= r.start + 1 ? `This is as far back as the live buffer goes.${this.startOverChoice() ? ' Hold OK > Start over for the beginning of the show.' : ''}` : '');
   },
+  // ⟲ Start over: the show on now (or the one being watched in the buffer), from its beginning.
+  // In order: the live buffer if it reaches back that far, a recording of it, the provider's
+  // archive (catch-up). ch, p: a channel and show from the guide instead of what's playing.
+  startOverChoice(ch = this.channel, p = null) {
+    if (!ch) return null;
+    ch = (App.state.channels || []).find((c) => c.id === ch.id) || ch; // a guide row: the channel itself has archiveDays
+    const watchingIt = this.channel && this.channel.id === ch.id && this.mode !== 'off';
+    p = p || (watchingIt ? this.currentProgram(Date.now() - this.behind() * 1000) : null);
+    const now = Date.now();
+    if (!p || p.filler || p.start > now - 30000) return null;
+    const r = watchingIt ? this.liveRange() : null;
+    if (r) {
+      const at = r.edge - (now - p.start) / 1000 + 6; // the player sits ~6s behind live
+      if (at >= r.start - 10) return { how: 'buffer', p, at: Math.max(r.start + 1, at) };
+    }
+    const rec = (App.recordings || []).find((x) => x.channelId === ch.id && x.start === p.start && ['recording', 'complete', 'partial'].includes(x.status));
+    if (rec) return { how: 'rec', p, rec };
+    if (ch.archiveDays && p.start > now - ch.archiveDays * 86400000) return { how: 'catchup', p, ch };
+    return null;
+  },
+
+  startOver(ch = this.channel, p = null) {
+    const c = this.startOverChoice(ch, p);
+    if (!c) {
+      const r = this.channel && this.liveRange();
+      this.showOsd(r ? 'Can\'t start over: this channel has no recording or catch-up of this show, and the live buffer starts after it began.' : 'Can\'t start over this show.');
+      return;
+    }
+    if (c.how === 'buffer') {
+      const v = $('#video');
+      v.currentTime = c.at;
+      v.play().catch(() => {});
+      if (this.mode === 'pip') this.full();
+      this.showOsd(`From the start: ${c.p.title}`);
+    } else if (c.how === 'rec') {
+      this.play('rec', c.rec.id, { offset: Math.max(0, (c.p.start - c.rec.recordedAt) / 1000) });
+    } else {
+      const key = c.ch.id.slice(c.ch.sourceId.length + 1);
+      const end = c.p.end;
+      this.play('vod', `c~${c.ch.sourceId}~${key}~${c.p.start}-${end}`, {
+        item: { title: c.p.title, subtitle: `${c.ch.number} ${c.ch.name} · from the start`, duration: (Math.min(end, Date.now()) - c.p.start) / 1000, liveChannelId: c.ch.id, catchup: true },
+      });
+    }
+  },
+
+  // ---------- closed captions ----------
+  // Live TV: the captions come inside the video and hls.js makes a text track of them.
+  // Recordings: the engine reads them out into WebVTT (core/captions.js), added as cues here.
+  captionTracks() { return [...$('#video').textTracks].filter((t) => t.kind === 'captions' || t.kind === 'subtitles'); },
+  applyCaptions() {
+    const tracks = this.captionTracks();
+    // Only one showing: the first that has captions (CC1), or the recording's own.
+    const pick = this.kind === 'live' ? tracks.find((t) => t !== this.ccTrack) : this.ccTrack;
+    for (const t of tracks) {
+      const want = this.cc && t === pick ? 'showing' : 'disabled';
+      if (t.mode !== want) t.mode = want;
+    }
+  },
+  toggleCaptions() {
+    this.cc = !this.cc;
+    try { localStorage.setItem('gtv.cc', this.cc ? '1' : '0'); } catch (_) { /* private mode */ }
+    if (this.cc && this.kind === 'rec' && this.rec) this.loadRecCaptions(this.rec.id, this.offset, this.session);
+    this.applyCaptions();
+    const none = this.cc && this.kind === 'live' && !this.captionTracks().some((t) => t !== this.ccTrack);
+    this.showOsd(!this.cc ? 'Captions off' : none ? 'Captions on. This channel hasn\'t sent any yet (not every channel has them).' : 'Captions on');
+  },
+  async loadRecCaptions(id, offset, session) {
+    const v = $('#video');
+    if (!this.ccTrack) this.ccTrack = v.addTextTrack('captions', 'English', 'en');
+    const track = this.ccTrack;
+    for (const c of [...(track.cues || [])]) track.removeCue(c);
+    if (String(id).startsWith('~')) return; // a recording at the other place: none here
+    try {
+      const res = await fetch(server(`/captions/rec/${encodeURIComponent(id)}`));
+      if (session !== this.session) return;
+      if (res.status === 202) { if (this.cc) this.showOsd('Captions for this recording are still being read from it. Try again in a few minutes.'); return; }
+      const cues = parseVtt(await res.text());
+      if (session !== this.session) return;
+      if (!cues.length && this.cc) this.showOsd('This recording has no captions.');
+      for (const c of cues) {
+        const start = c.start - offset, end = c.end - offset;
+        if (end > 0) try { track.addCue(new VTTCue(Math.max(0, start), end, c.text)); } catch (_) { /* odd cue */ }
+      }
+      this.applyCaptions();
+    } catch (_) { /* no captions this time */ }
+  },
+
   goLive() {
     const r = this.liveRange(), v = $('#video');
     if (!r) return;
@@ -295,6 +425,7 @@ const Player = {
     const pos = this.position();
     if (this.kind === 'vod') {
       const r = this.rec;
+      if (r.catchup) return; // Start over from the provider's archive: not a movie to resume
       api.put(`/api/vod/progress/${encodeURIComponent(r.id)}`, { position: pos, duration: this.duration, title: r.title, subtitle: r.subtitle, poster: r.poster, showId: r.showId }).catch(() => {});
       return;
     }
@@ -321,6 +452,7 @@ const Player = {
   tick() {
     if (this.mode === 'off') return;
     const v = $('#video');
+    this.applyCaptions();
     if (this.kind === 'live') {
       const r = this.liveRange();
       if (r && v.currentTime < r.start + 0.5 && r.edge - r.start > 5) v.currentTime = r.start + 3; // paused so long the oldest part was dropped
@@ -386,9 +518,11 @@ const Player = {
       sub = `${this.channel.number} ${this.channel.name}${p && p.subtitle ? `  ·  ${p.subtitle}` : ''}`;
     }
     const keys = this.rec ? '← back 10s · → skip 30s · Space pause · Esc stop' : (window.GTV_SERVER ? '← back 10s · → ahead 30s · ↑↓ channel · OK channel # · hold OK for options · BACK stop' : '← back 10s · → ahead 30s · L live · ↑↓ channel · G guide · R record · Esc stop');
+    // With a mouse or touch the picture covers the top bar, so these are the way out too.
+    const out = [['guide', this.rec ? '‹ My Recordings' : '▦ Guide'], ['menu', '☰ Menu'], ['stop', '■ Stop']];
     const btns = this.rec
-      ? [['back', '⏪ 10s'], ['pause', '⏯'], ['fwd', '30s ⏩'], ...(this.breakNow() ? [['skip', 'Skip commercial ⏭']] : [])]
-      : [['back', '⏪ 10s'], ['pause', '⏯'], ['fwd', '30s ⏩'], ['live', 'Go Live ⏭'], ['pad', '🔢 Channel #']];
+      ? [['back', '⏪ 10s'], ['pause', '⏯'], ['fwd', '30s ⏩'], ...(this.breakNow() ? [['skip', 'Skip commercial ⏭']] : []), ...out]
+      : [['back', '⏪ 10s'], ['pause', '⏯'], ['fwd', '30s ⏩'], ['live', 'Go Live ⏭'], ['pad', '🔢 Channel #'], ...out];
     const rec = this.recording() ? '<span class="rec-badge">● REC</span>' : '';
     osd.innerHTML = `<div class="t">${rec}<span id="osdTag"></span>${esc(title)}</div><div class="s">${esc(sub)}</div>
       <div class="bar" id="osdBar"></div><div class="row"><span id="osdL"></span><span>${keys}</span><span id="osdR"></span></div>
@@ -433,6 +567,9 @@ const Player = {
     else if (a === 'live') this.goLive();
     else if (a === 'pad') this.pad();
     else if (a === 'skip') { const b = this.breakNow(); if (b) this.skipBreak(b); }
+    else if (a === 'guide') { if (this.channel && !this.rec) this.toGuide(); else { this.stop(); App.go('dvr'); } }
+    else if (a === 'menu') App.menu();
+    else if (a === 'stop') { this.stop(); App.render(); }
   },
 
   // This channel's recording in progress, if any.
@@ -445,6 +582,8 @@ const Player = {
     const ch = this.channel, p = this.currentProgram(), now = Date.now();
     const active = this.recording();
     const choices = [];
+    const prev = App.previousChannel();
+    if (prev) choices.push({ label: `↩ Previous channel: ${prev.number} ${prev.name}`, value: 'prev', cls: 'primary' });
     if (active) choices.push({ label: `■ Stop recording "${active.title}"`, value: 'stop', cls: 'danger' });
     if (p && !p.filler && !(active && active.title === p.title)) choices.push({ label: `● This show: ${p.title} (until ${fmt.time(p.end)})`, value: 'show' });
     for (const [min, label] of [[30, '30 minutes'], [60, '1 hour'], [120, '2 hours'], [180, '3 hours']]) choices.push({ label: `● Record now for ${label}`, value: min });
@@ -480,16 +619,25 @@ const Player = {
   async optionsMenu() {
     const ch = this.channel, p = this.currentProgram(), active = this.recording();
     const choices = [];
+    const prev = App.previousChannel();
+    if (prev) choices.push({ label: `↩ Previous channel: ${prev.number} ${prev.name}`, value: 'prev', cls: 'primary' });
     if (active) choices.push({ label: `■ Stop recording "${active.title}"`, value: 'stop', cls: 'danger' });
     else choices.push({ label: p && !p.filler ? `● Record now: ${p.title} (until ${fmt.time(p.end)})` : '● Record now (until I stop it)', value: 'record' });
     choices.push({ label: '● More ways to record...', value: 'recordMenu' });
     if (this.behind() >= LIVE_S) choices.push({ label: '⏩ Back to live', value: 'live' });
+    const over = this.startOverChoice();
+    if (over) choices.push({ label: `⟲ Start over: ${over.p.title}`, value: 'over' });
     choices.push({ label: $('#video').paused ? '▶ Play' : '❚❚ Pause', value: 'pause' });
     const favs = App.channelFavItems(ch);
     favs.forEach((f, i) => choices.push({ label: f.label, value: `fav${i}` }));
     const num = App.numberItem(ch, async (n) => { ch.number = n; await App.loadAll(); this.showOsd(`${n} ${ch.name}`); });
     if (num.length) choices.push({ label: num[0].label, value: 'num' });
+    const gl = App.guideItem(ch);
+    if (gl.length) choices.push({ label: gl[0].label, value: 'guideListing' });
+    choices.push({ label: this.cc ? '㏄ Captions: on (turn off)' : '㏄ Captions: off (turn on)', value: 'cc' });
+    choices.push({ label: '▦ Multiview: watch up to 4 channels', value: 'multi' });
     choices.push({ label: '🔢 Go to a channel number', value: 'pad' });
+    if (App.recentChannelList().length > 1) choices.push({ label: '🕘 Recent channels...', value: 'recent' });
     choices.push({ label: '▦ Guide', value: 'guide' });
     choices.push({ label: '■ Stop watching', value: 'stopWatching' });
     if (this.canVlc()) choices.push({ label: '▶ Play in VLC instead', value: 'vlc' });
@@ -506,15 +654,21 @@ const Player = {
           await App.loadAll();
           this.showOsd('Recording until you stop it. Hold OK to stop.');
         }
-      } else if (v === 'stop') await this.stopRecording(active);
+      } else if (v === 'prev') this.previousChannel();
+      else if (v === 'recent') await this.recentMenu();
+      else if (v === 'stop') await this.stopRecording(active);
       else if (v === 'recordMenu') this.recordMenu();
       else if (v === 'live') this.goLive();
+      else if (v === 'over') this.startOver();
+      else if (v === 'multi') Multiview.start(ch.id);
+      else if (v === 'cc') this.toggleCaptions();
       else if (v === 'pause') this.togglePause();
       else if (v === 'guide') this.toGuide();
       else if (v === 'stopWatching') { this.stop(); App.render(); }
       else if (v === 'home') App.home();
       else if (v === 'pad') this.pad();
       else if (v === 'num') await num[0].run();
+      else if (v === 'guideListing') await gl[0].run();
       else if (typeof v === 'string' && v.startsWith('fav')) await favs[+v.slice(3)].run();
       else if (v === 'vlc') this.openVlc('live', ch.id);
       else if (v === 'xfinity' && await Xfinity.tryChannel(ch, true)) { this.stop(); App.render(); }
@@ -550,17 +704,36 @@ const Player = {
   async playbackMenu() {
     const r = this.rec || {};
     const choices = [{ label: $('#video').paused ? '▶ Play' : '❚❚ Pause', value: 'pause', cls: 'primary' }];
+    const liveCh = r.liveChannelId || (this.kind === 'rec' && r.status === 'recording' ? r.channelId : null);
+    if (liveCh) choices.push({ label: '⏩ Back to live TV', value: 'backLive' });
     if (this.position() > 30) choices.push({ label: '⟲ Start over', value: 'over' });
     choices.push({ label: '↺ Back 5 minutes', value: 'back5' });
+    if (this.kind === 'rec') choices.push({ label: this.cc ? '㏄ Captions: on (turn off)' : '㏄ Captions: off (turn on)', value: 'cc' });
     if (this.canVlc()) choices.push({ label: '▶ Play in VLC instead', value: 'vlc' });
     choices.push({ label: '■ Stop watching', value: 'stop' }, { label: '⌂ Home', value: 'home' }, { label: 'Cancel', value: null });
     const v = await Modal.menu(r.title || 'Playing', r.subtitle ? `<div class="s">${esc(r.subtitle)}</div>` : '', choices);
     if (v === 'pause') this.togglePause();
-    if (v === 'over') this.seekTo(0);
+    if (v === 'over') this.seekTo(this.kind === 'rec' && r.start && r.recordedAt < r.start ? (r.start - r.recordedAt) / 1000 : 0);
+    if (v === 'backLive') this.play('live', liveCh);
     if (v === 'back5') this.seek(-300);
+    if (v === 'cc') this.toggleCaptions();
     if (v === 'stop') { this.stop(); App.render(); }
     if (v === 'home') App.home();
     if (v === 'vlc') this.openVlc(this.kind, this.id, this.rec);
+  },
+
+  // The channel watched before this one (the remote's PREV CH / LAST button, or hold OK).
+  previousChannel() {
+    const prev = App.previousChannel();
+    if (!prev) { this.showOsd('No previous channel yet'); return; }
+    this.play('live', prev.id);
+  },
+
+  async recentMenu() {
+    const list = App.recentChannelList().filter((c) => !this.channel || c.id !== this.channel.id);
+    if (!list.length) { this.showOsd('No recent channels yet'); return; }
+    const v = await Modal.menu('Recent channels', '', [...list.map((c) => ({ label: `${c.number} ${c.name}`, value: c.id })), { label: 'Cancel', value: null }]);
+    if (v) this.play('live', v);
   },
 
   surf(delta) {
@@ -576,6 +749,7 @@ const Player = {
     if (this.mode !== 'full' || Modal.top()) return false; // a menu over the video gets the keys
     const k = e.key;
     if (this.channel && (k === 'Escape' || k === 'Backspace' || k === 'Enter')) { this.toGuide(); return true; }
+    if ((k === 'Escape' || k === 'Backspace') && this.rec && this.rec.liveChannelId) { this.play('live', this.rec.liveChannelId); return true; } // Start over: Back is live again
     if (k === 'Escape' || k === 'Backspace') { this.stop(); App.render(); return true; }
     if (k === ' ' || k === 'MediaPlayPause') { this.togglePause(); return true; }
     if (k === 'ArrowLeft') { this.act('back'); return true; }
@@ -584,7 +758,11 @@ const Player = {
     if (this.rec && k === 'Enter' && this.breakNow()) { this.act('skip'); return true; }
     if (this.channel && k === 'ArrowUp') { this.surf(-1); return true; }
     if (this.channel && k === 'ArrowDown') { this.surf(1); return true; }
+    if (this.channel && k === 'ChannelUp') { this.surf(1); return true; }
+    if (this.channel && k === 'ChannelDown') { this.surf(-1); return true; }
+    if (k === 'PreviousChannel' || (this.channel && (k === 'p' || k === 'P'))) { this.previousChannel(); return true; }
     if (this.channel && (/^[0-9.]$/.test(k) || k === '#')) { this.pad(k === '#' ? '' : k); return true; }
+    if (k === 'c' || k === 'C' || k === 'Caption') { this.toggleCaptions(); return true; }
     if (this.channel && (k === 'g' || k === 'G')) { this.toGuide(); return true; }
     if (this.channel && (k === 'r' || k === 'R')) { this.recordMenu(); return true; }
     if (k === 'ContextMenu' || k === 'm' || k === 'M') { if (this.channel) this.optionsMenu(); else this.playbackMenu(); return true; }
@@ -641,4 +819,19 @@ document.addEventListener('DOMContentLoaded', () => $('#screen').addEventListene
   if (Player.mode === 'full' && $('#osd').classList.contains('hide')) Player.showOsd();
 }));
 // Clicking the picture in the guide's corner: full screen again.
-document.addEventListener('DOMContentLoaded', () => $('#screen').addEventListener('click', () => { if (Player.mode === 'pip') Player.full(); }));
+document.addEventListener('DOMContentLoaded', () => $('#screen').addEventListener('click', () => { if (Player.mode === 'pip') Player.full(); else if (Player.mode === 'full') Player.showOsd(); }));
+
+// WebVTT text -> [{ start, end, text }] in seconds (just what the captions files hold).
+function parseVtt(text) {
+  const t = (h) => { const p = h.split(':').map(Number); return p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2] : p[0] * 60 + p[1]; };
+  const out = [];
+  for (const block of String(text || '').replace(/\r/g, '').split(/\n\n+/)) {
+    const lines = block.split('\n');
+    const i = lines.findIndex((l) => l.includes('-->'));
+    if (i < 0) continue;
+    const m = /([\d:.]+)\s*-->\s*([\d:.]+)/.exec(lines[i]);
+    const body = lines.slice(i + 1).join('\n').trim();
+    if (m && body) out.push({ start: t(m[1]), end: t(m[2]), text: body });
+  }
+  return out;
+}

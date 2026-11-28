@@ -139,6 +139,10 @@ const Nav = {
   },
   focus(el, { scroll = true } = {}) {
     if (this.current) this.current.classList.remove('focus');
+    // The highlight moving off a text box (arrows, the mouse) takes the typing with it, or the
+    // box kept every key press after it.
+    const typing = document.activeElement;
+    if (typing && typing !== el && ['INPUT', 'SELECT', 'TEXTAREA'].includes(typing.tagName) && !(el && el.contains(typing))) typing.blur();
     this.current = el || null;
     if (!el) return;
     el.classList.add('focus');
@@ -160,8 +164,7 @@ const Nav = {
       if (cur) this.focus(cur, { scroll: false });
     }
     if (!cur) { this.focus(items.find((el) => !el.closest('#topnav')) || items[0]); return true; }
-    // Like reading: ←→ along the row you're on (at its end, on to the next row's first item in
-    // the same group); ↑↓ to the nearest row above or below, in the same column when there's one.
+    // ←→ along the row you're on (or to whatever is beside it that way); ↑↓ to the nearest row above or below, in the same column when there's one.
     const a = cur.getBoundingClientRect();
     const others = items.filter((el) => el !== cur).map((el) => ({ el, b: el.getBoundingClientRect() }));
     const cx = (r) => r.left + r.width / 2;
@@ -185,14 +188,8 @@ const Nav = {
       const menu = best && best.el.closest('.menu');
       const on = menu && !menu.contains(cur) && menu.querySelector('.nav.on');
       if (on && items.includes(on)) best = { el: on };
-      if (!best) { // end of the row: the next row's first item (or the previous row's last) in this group
-        const group = (el) => el.closest('.modal, #topnav, .menu, .tabs, .g-bar, .actions, .row, .list, .menu-list, .posters, .cards, .tiles, .seasons, table, .box, .pad');
-        const g = group(cur);
-        const order = items.filter((el) => group(el) === g).map((el) => ({ el, b: el.getBoundingClientRect() }))
-          .sort((p, q) => (Math.abs(p.b.top - q.b.top) < Math.min(p.b.height, q.b.height) / 2 ? p.b.left - q.b.left : p.b.top - q.b.top));
-        const i = order.findIndex((o) => o.el === cur);
-        best = g && order[i + (right ? 1 : -1)];
-      }
+      // Nothing that way: stay put. (It used to carry on to the next row's first item, so at the
+      // end of a list → acted like ↓ and ← like ↑.)
     } else {
       const down = dir === 'down';
       const gap = ({ b }) => (down ? b.top - a.bottom : a.top - b.bottom);
@@ -343,6 +340,10 @@ function sideScroll(row) {
 }
 
 // An option row that cycles values with Left/Right (like a TV menu).
+// Start early / End late choices for timers (null = the default in Settings › Recording).
+const PAD_EARLY = [{ label: 'Default', value: null }, { label: 'On time', value: 0 }, { label: '1 min', value: 1 }, { label: '2 min', value: 2 }, { label: '5 min', value: 5 }, { label: '10 min', value: 10 }];
+const PAD_LATE = [{ label: 'Default', value: null }, { label: 'On time', value: 0 }, { label: '2 min', value: 2 }, { label: '5 min', value: 5 }, { label: '15 min', value: 15 }, { label: '30 min', value: 30 }, { label: '1 hour', value: 60 }, { label: '2 hours', value: 120 }];
+
 function optionRow(label, values, index, onChange) {
   const el = document.createElement('div');
   el.className = 'opt nav';
