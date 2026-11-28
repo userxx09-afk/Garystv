@@ -5,7 +5,9 @@ Android, so they can't install `GarysTV.apk`. They get their own app, `GarysTV-V
 
 It shows the same screens as the other TV apps (live TV, Guide, recordings...), and finds the
 GarysTV server on the home network the same way: if it doesn't find it, type the server's address
-(GarysTV > Settings > Recording on the PC).
+(GarysTV > Settings > Recording on the PC). It remembers the last server it connected to and goes
+straight to it next time if it answers; if it doesn't, it searches the network again (the app
+passes the stick's own address to the page so it knows where to look) and shows the address box.
 
 ## How it's built
 

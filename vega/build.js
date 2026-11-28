@@ -43,7 +43,28 @@ const srcDir = path.join(app, 'src');
 const existing = fs.existsSync(srcDir) ? fs.readdirSync(srcDir).find((f) => /^App\.(tsx|jsx|ts|js)$/.test(f)) : null;
 if (existing) fs.rmSync(path.join(srcDir, existing));
 fs.mkdirSync(srcDir, { recursive: true });
-fs.copyFileSync(path.join(__dirname, 'App.tsx'), path.join(srcDir, 'App.tsx'));
+// App.tsx keeps the last server and reads the stick's IP (two Amazon packages). If those won't
+// build, CI runs this again with GTV_VEGA_PLAIN=1 for the plain app (page storage only).
+const plain = process.env.GTV_VEGA_PLAIN === '1';
+fs.copyFileSync(path.join(__dirname, plain ? 'App.plain.tsx' : 'App.tsx'), path.join(srcDir, 'App.tsx'));
+{
+  const pj = path.join(app, 'package.json');
+  const pkg = JSON.parse(fs.readFileSync(pj, 'utf8'));
+  if (plain) { // take back what an earlier run added
+    for (const k of ['@react-native-async-storage/async-storage', '@amazon-devices/expo-network']) {
+      if (pkg.dependencies) delete pkg.dependencies[k];
+      if (pkg.overrides) delete pkg.overrides[k];
+    }
+  } else {
+    const rn = String((pkg.dependencies || {})['react-native'] || (pkg.devDependencies || {})['react-native'] || '');
+    const old = /0\.72/.test(rn); // Vega's React Native 0.72 apps take the older versions
+    const storage = `npm:@amazon-devices/react-native-async-storage__async-storage@${old ? '~2.0.0' : '~2.1.0'}`;
+    pkg.dependencies = { ...pkg.dependencies, '@react-native-async-storage/async-storage': storage, '@amazon-devices/expo-network': old ? '~2.0.0' : '~3.0.0' };
+    pkg.overrides = { ...pkg.overrides, '@react-native-async-storage/async-storage': storage };
+    console.log(`React Native ${rn || '?'}: added AsyncStorage + expo-network`);
+  }
+  fs.writeFileSync(pj, `${JSON.stringify(pkg, null, 2)}\n`);
+}
 
 // App icon: assets/image/ is what the manifest's "@image/..." names.
 fs.mkdirSync(path.join(app, 'assets', 'image'), { recursive: true });
@@ -59,7 +80,7 @@ if (process.env.GTV_BUILD && /^\s*build-number\s*=/m.test(m)) m = m.replace(/^(\
 if (!/^\s*icon\s*=/m.test(m)) m = m.replace(/^(\s*title\s*=.*)$/m, '$1\nicon = "@image/garystv_icon.png"');
 // GarysTV servers are on the home network or VPN and talk plain http.
 if (!m.includes('[network-traffic-policy.cleartext]')) m += '\n[network-traffic-policy.cleartext]\nallowed-domains = ["*"]\n';
-const wants = ['com.amazon.inputmethod.service', 'com.amazon.media.server', 'com.amazon.mediametrics.service',
+const wants = ['com.amazon.network.service', 'com.amazon.inputmethod.service', 'com.amazon.media.server', 'com.amazon.mediametrics.service',
   'com.amazon.mediabuffer.service', 'com.amazon.mediatransform.service', 'com.amazon.audio.stream', 'com.amazon.audio.control'];
 const missing = wants.filter((id) => !m.includes(`"${id}"`));
 if (missing.length) {
