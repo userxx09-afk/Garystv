@@ -22,9 +22,19 @@
     } catch (_) { /* not on a TV */ }
   };
 
+  // Vega: the app hands over what it kept (the last server) and the stick's IP (vega/App.tsx).
+  const vega = () => (isVega && window.GTV_VEGA) || {};
   const store = {
-    get() { try { return localStorage.getItem(SAVED); } catch (_) { return null; } },
-    set(v) { try { localStorage.setItem(SAVED, v); } catch (_) { /* private mode */ } },
+    get() {
+      let v = null;
+      try { v = localStorage.getItem(SAVED); } catch (_) { /* no page storage */ }
+      return v || vega().server || null;
+    },
+    set(v) {
+      try { localStorage.setItem(SAVED, v); } catch (_) { /* private mode */ }
+      // Vega: the page's storage may not last, so the app keeps it too.
+      if (isVega) { try { window.GTV_VEGA = { ...vega(), server: v }; window.ReactNativeWebView.postMessage(`save:${v}`); } catch (_) { /* old app */ } }
+    },
   };
 
   // ---------- remote buttons ----------
@@ -157,6 +167,12 @@
           const [ip, bits] = String(GTVAndroid.ipAddress() || '').split('/'); // "192.168.5.40/22"
           return resolve(ip ? { ip, bits: +bits || 24 } : null);
         } catch (_) { return resolve(null); }
+      }
+      if (isVega) {
+        // The app tells us the stick's address. If it couldn't, search next to the last server
+        // (same home network, e.g. after the server got a new address from the router).
+        const ip = vega().ip || (store.get() || '').replace(/^https?:\/\//, '').replace(/:\d+$/, '');
+        return resolve(/^\d+\.\d+\.\d+\.\d+$/.test(ip) && ip !== '0.0.0.0' ? { ip, bits: 24 } : null);
       }
       if (!isTizen) {
         // Testing in a normal browser: use the address this page came from.
@@ -332,7 +348,8 @@
     document.documentElement.classList.add('tv');
     if (fireRemote) document.documentElement.classList.add('firetv');
     const saved = store.get();
-    if (saved && await ping(saved, 3000)) return start(saved);
+    // The last server, if it answers. Twice: a TV just waking up may not be on Wi-Fi yet.
+    if (saved && (await ping(saved, 3000) || await ping(saved, 3000))) return start(saved);
     connect.show(saved ? `Can't reach GarysTV at ${saved.replace(/^https?:\/\//, '')}. Is it turned on?` : null);
   });
 })();

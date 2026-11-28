@@ -162,8 +162,12 @@ jobs:
         working-directory: ${{ runner.temp }}/garystv
         run: |
           [ -f ~/vega/env ] && source ~/vega/env
-          npm install
-          npm run build:app
+          # The app with saved-server + network packages; if those won't build, the plain one.
+          if ! (npm install && npm run build:app); then
+            echo "::warning::Vega app with saved server didn't build; building the plain one."
+            GTV_VEGA_PLAIN=1 GTV_BUILD=${{ github.run_number }} node "$GITHUB_WORKSPACE/vega/build.js" "$PWD"
+            npm install && npm run build:app
+          fi
           find build -name '*.vpkg' -exec ls -la {} \;
           mkdir -p "$GITHUB_WORKSPACE/out"
           for f in $(find build -name '*.vpkg'); do cp "$f" "$GITHUB_WORKSPACE/out/"; done
